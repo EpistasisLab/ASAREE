@@ -18,9 +18,9 @@ export function ResultsScorecard({ label, help, value, note, icon: Icon }: { lab
 }
 
 /** One panel structure for both modes; data-specific content occupies these slots. */
-export function ResultsPanel({ experimentId, experimentName, scope, controls, metadata, summary, scorecards, notice, comparison, cells, details }: {
+export function ResultsPanel({ experimentId, experimentName, scope, progress, controls, metadata, summary, scorecards, notice, comparison, cells, details }: {
   experimentId: string; experimentName: string; scope: ResultsScope
-  controls?: ReactNode; metadata?: ReactNode; summary: ReactNode | ((actions: ReactNode) => ReactNode); scorecards?: ReactNode; notice?: ReactNode
+  progress?: ReactNode; controls?: ReactNode; metadata?: ReactNode; summary: ReactNode | ((actions: ReactNode) => ReactNode); scorecards?: ReactNode; notice?: ReactNode
   comparison?: ReactNode; cells: ReactNode; details?: ReactNode
 }) {
   const [maximized, setMaximized] = useState(false)
@@ -52,6 +52,7 @@ export function ResultsPanel({ experimentId, experimentName, scope, controls, me
     <Button variant="outline" size="xs" disabled={downloading} onClick={() => createExport.mutate()}>{downloading ? 'Preparing…' : <><Download className="size-3" /> Download CSV</>}</Button>
   </div>
   return <div className={maximized ? '@container fixed inset-0 z-50 space-y-4 overflow-auto bg-background p-4' : '@container space-y-4 p-3'}>
+    {progress}
     <section className="space-y-2">
       {controls}
       {metadata}

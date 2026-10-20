@@ -41,6 +41,7 @@ from asaree.services.factorial_cells import summarize_cells
 from asaree.services.result_reads import (
     ResultScope,
     cell_predicates,
+    cell_attempt_usage_query,
     decode_cursor,
     encode_cursor,
     page_size,
@@ -95,6 +96,51 @@ def test_rollup_query_uses_compact_data_and_database_aggregates():
     assert "protocol_runs.result_summary" in sql
     assert "protocol_runs.attempt_result" not in sql
     assert "protocol_runs.conversation" not in sql
+
+
+def test_cell_attempt_usage_is_bounded_and_scoped():
+    sql = str(cell_attempt_usage_query(scope(), [uuid.UUID(int=5)]).compile(
+        dialect=postgresql.dialect(), compile_kwargs={"literal_binds": True},
+    ))
+    assert "sum(" in sql
+    assert "GROUP BY factorial_cells.id" in sql
+    assert "factorial_cells.id IN ('00000000-0000-0000-0000-000000000005')" in sql
+    assert "factorial_cells.experiment_id =" in sql
+    assert "factorial_cells.design_revision_id =" in sql
+    assert "protocol_runs.protocol_revision_id =" in sql
+    assert "protocol_runs.design_revision_id =" in sql
+    assert "protocol_runs.is_test_run IS false" in sql
+    assert "protocol_runs.target_node_id IS NULL" in sql
+    assert "protocol_runs.row_result_id IS NULL" in sql
+    assert "protocol_runs.attempt_result" not in sql
+    assert "protocol_runs.node_runs" not in sql
+
+
+async def test_cell_attempt_usage_counts_retries_and_excludes_other_scopes(results_db):
+    db, selected, cell, user = results_db
+    parent = FactorialReplicateResult(cell_id=cell.id, replicate_number=1, replicate_label="replicate")
+    db.add(parent)
+    await db.flush()
+    base = dict(protocol_id=selected.protocol_id, owner_id=user.id,
+                protocol_revision_id=selected.protocol_revision_id, design_revision_id=selected.design_revision_id,
+                replicate_result_id=parent.id, replicate_label=parent.replicate_label, node_runs={})
+    for tokens, overrides in [
+        (100, {"status": "failed"}), (200, {"status": "completed"}),
+        (1000, {"status": "completed", "is_test_run": True}),
+        (1000, {"status": "completed", "target_node_id": "preview"}),
+        (1000, {"status": "completed", "protocol_revision_id": None}),
+        (1000, {"status": "completed", "design_revision_id": None}),
+    ]:
+        db.add(ProtocolRun(**(base | overrides), usage_summary={"total_tokens": tokens, "cost_usd": tokens / 10000, "duration_seconds": tokens / 10}))
+    await db.flush()
+    await rebuild_result_summary(db, selected, 1)
+    latest = await read_cells(db, selected)
+    assert "all_attempt_usage" not in latest["items"][0]
+    result = await read_cells(db, selected, include_all_attempt_usage=True)
+    usage = result["items"][0]["all_attempt_usage"]
+    assert usage["total_tokens"] == 300
+    assert usage["cost_usd"] == pytest.approx(0.03)
+    assert usage["duration_seconds"] == 30
 
 
 def test_publication_cohort_compiles_without_materializing_factor_combinations():

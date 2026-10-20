@@ -14,6 +14,7 @@ import type { ExecutionCell, ExecutionFilters, ExecutionSlot, ExecutionSummary }
 import type { Experiment } from '@/types/experiments'
 import type { ResultsSelection } from './ResultsTab'
 import { ResultsPanel } from './ResultsPanel'
+import { ResultsProgress } from './ResultsProgress'
 import { ResultsContext, ResultsMetadata } from './ResultsContext'
 import { CellCard, ReplicateRow, ReplicateStatus } from './CellPresentation'
 import { CellResultStatusBadge } from './CellResultStatus'
@@ -119,9 +120,11 @@ export function ExecutionBrowser({ experimentId, scope, experiment, mode, onSele
   const summary = useExecutionSummary(experimentId, scope)
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set())
   const [filters, setFilters] = useState<ExecutionFilters>(emptyExecutionFilters)
+  const [attemptScope, setAttemptScope] = useState<'latest' | 'all'>('latest')
   const pager = useCursor()
   const params = { cursor: pager.cursor, limit: EXECUTION_PAGE_SIZE, ...filterParams(filters),
-    ...(filters.resultStatus ? { result_status: filters.resultStatus } : {}) }
+    ...(filters.resultStatus ? { result_status: filters.resultStatus } : {}),
+    ...(mode === 'results' && attemptScope === 'all' ? { include_all_attempt_usage: 'true' } : {}) }
   const changeFilters = (next: ExecutionFilters) => { pager.reset(); setFilters(next) }
   const cells = useQuery({
     queryKey: [...executionKeys.root(experimentId), 'cells', scope, params],
@@ -186,7 +189,17 @@ export function ExecutionBrowser({ experimentId, scope, experiment, mode, onSele
   </div>
   const metadata = mode === 'results' && summary.data?.ready ? <ResultsMetadata summary={summary.data} /> : null
   return mode === 'results' && experiment
-    ? <ResultsPanel experimentId={experimentId} experimentName={experiment.name} scope={scope} metadata={metadata} summary={overview} cells={cellBody} />
+    ? <ResultsPanel experimentId={experimentId} experimentName={experiment.name} scope={scope}
+      progress={summary.data?.ready && <ResultsProgress summary={summary.data} cells={cells.data?.items ?? []}
+        cellsLoading={cells.isPending} cellsError={cells.error?.message} attemptScope={attemptScope} onAttemptScopeChange={setAttemptScope}
+        chartPagination={!!cells.data?.items.length && <div className="flex flex-wrap items-center justify-end gap-2">
+          <span className="font-mono text-[11px] text-muted-foreground">Cells {(pager.pageIndex * EXECUTION_PAGE_SIZE + 1).toLocaleString()}–{(pager.pageIndex * EXECUTION_PAGE_SIZE + cells.data.items.length).toLocaleString()}{cells.data.total !== undefined && ` of ${cells.data.total.toLocaleString()}`}</span>
+          {(pager.back || cells.data.next_cursor) && <>
+            <Button size="xs" variant="outline" disabled={!pager.back || cells.isFetching} onClick={pager.previous}>Previous cells</Button>
+            <Button size="xs" variant="outline" disabled={!cells.data.next_cursor || cells.isFetching} onClick={() => cells.data?.next_cursor && pager.next(cells.data.next_cursor)}>Next cells</Button>
+          </>}
+        </div>} />}
+      metadata={metadata} summary={overview} cells={cellBody} />
     : <div className="@container space-y-3 p-3">
       {metadata}
       {batchControls && <div className="flex flex-wrap items-center justify-end gap-2">{batchControls}</div>}

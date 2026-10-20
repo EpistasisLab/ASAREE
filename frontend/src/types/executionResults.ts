@@ -65,6 +65,7 @@ export interface ExecutionCell {
   result_issues?: Partial<Record<'failed' | 'cancelled' | 'limit_reached' | 'measurement_failed' | 'no_measurements' | 'measurements_missing', number>>
   replicate_count?: number; total?: number; counts?: Record<string, number>; truncated?: number
   usage?: UsageSummary; metric_values?: Record<string, number>; metric_counts?: Record<string, number>
+  all_attempt_usage?: UsageSummary | null
 }
 export interface ExecutionSlot {
   slot_id: string; cell_id: string; cell_label: string; factor_values: Record<string, unknown>

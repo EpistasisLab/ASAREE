@@ -52,6 +52,29 @@ beforeEach(() => {
 afterEach(() => { vi.clearAllMocks(); vi.useRealTimers() })
 
 describe('bounded Results reads', () => {
+  it('switches totals and cell bars between latest and all attempts', async () => {
+    const latest = { cost_usd: 0.02, total_tokens: 200, duration_seconds: 60, input_tokens: null, output_tokens: null, agent_run_count: null }
+    const all = { ...latest, total_tokens: 500, cost_usd: 0.05, duration_seconds: 120 }
+    vi.mocked(experimentsApi.getExecutionSummary).mockResolvedValue({ ...summary, usage: latest, all_attempt_usage: all })
+    vi.mocked(experimentsApi.listExecutionCells).mockImplementation(async (_id, _scope, params) => ({
+      items: [{ ...cell, cell_number: 1, usage: latest, ...(params?.include_all_attempt_usage ? { all_attempt_usage: all } : {}) }],
+      next_cursor: null, total: 1,
+    }))
+    mount(<ResultsTab experimentId="experiment" experimentName="Measurements" experiment={experiment} onSelectResult={vi.fn()} />)
+    const latestButton = await screen.findByRole('button', { name: 'Latest attempts' })
+    expect(latestButton).toHaveAttribute('aria-pressed', 'true')
+    expect(within(screen.getByRole('button', { name: 'Show total tokens by cell' })).getByText('200')).toBeInTheDocument()
+    expect(await screen.findByRole('img', { name: 'Cell 1: 200' })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'All attempts' }))
+    expect(await screen.findByRole('img', { name: 'Cell 1: 500' })).toBeInTheDocument()
+    expect(within(screen.getByRole('button', { name: 'Show total tokens by cell' })).getByText('500')).toBeInTheDocument()
+    expect(screen.getByText('Includes previous attempts and retries.')).toBeInTheDocument()
+    expect(screen.getByText('Cells 1–1 of 1')).toBeInTheDocument()
+    fireEvent.click(latestButton)
+    expect(await screen.findByRole('img', { name: 'Cell 1: 200' })).toBeInTheDocument()
+    expect(within(screen.getByRole('button', { name: 'Show total tokens by cell' })).getByText('200')).toBeInTheDocument()
+  })
+
   it.each(['runs', 'results'] as const)('expands a %s cell and opens the inspector only in Results', async mode => {
     const select = vi.fn()
     mount(<ExecutionBrowser experimentId="experiment" scope={{ protocol_revision_id: 'v1' }} mode={mode} onSelect={select} />)

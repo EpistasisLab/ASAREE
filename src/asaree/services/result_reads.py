@@ -600,6 +600,40 @@ def cell_numbers_query(scope: ResultScope):
             FactorialCell.design_revision_id == scope.design_revision_id, *cell_predicates(scope)).subquery("cell_numbers")
 
 
+def cell_attempt_usage_query(scope: ResultScope, cell_ids: list[uuid.UUID]) -> Any:
+    """Sum compact attempt usage for a bounded page of cells in one query."""
+    cell, parent, run = FactorialCell, FactorialReplicateResult, ProtocolRun
+    match = or_(
+        run.replicate_result_id == parent.id,
+        and_(
+            run.replicate_result_id.is_(None), legacy_flag(scope),
+            run.replicate_label == parent.replicate_label,
+            run.factor_values == cell.factor_values,
+        ),
+    )
+    keys = ("cost_usd", "input_tokens", "output_tokens", "total_tokens", "duration_seconds", "agent_run_count")
+    return (
+        select(cell.id.label("cell_id"), *[
+            func.sum(run.usage_summary[key].as_float()).label(key) for key in keys
+        ])
+        .select_from(cell)
+        .join(parent, parent.cell_id == cell.id)
+        .join(run, match)
+        .where(
+            cell.id.in_(cell_ids), cell.experiment_id == scope.experiment_id,
+            cell.design_revision_id == scope.design_revision_id,
+            *cell_predicates(scope), *parent_predicates(scope),
+            run.protocol_id == scope.protocol_id,
+            run.protocol_revision_id == scope.protocol_revision_id,
+            or_(run.design_revision_id == scope.design_revision_id,
+                and_(legacy_flag(scope), run.design_revision_id.is_(None))),
+            run.row_result_id.is_not(None) if scope.unit == "row" else run.row_result_id.is_(None),
+            run.is_test_run.is_(False), run.target_node_id.is_(None),
+        )
+        .group_by(cell.id)
+    )
+
+
 async def read_cells(
     db: AsyncSession,
     scope: ResultScope,
@@ -610,6 +644,7 @@ async def read_cells(
     status: str | None = None,
     result_status: str | None = None,
     factors: dict[str, Any] | None = None,
+    include_all_attempt_usage: bool = False,
 ) -> dict[str, Any]:
     filters = {"search": search, "status": status, "result_status": result_status, "factors": factors or {}}
     position = decode_cursor(cursor, scope, "cells", filters)
@@ -654,6 +689,14 @@ async def read_cells(
         item.pop("primary_rank", None)
         item["cell_number"] = row["cell_number"]
         items.append(item)
+    if include_all_attempt_usage and items:
+        usage_rows = (await db.execute(cell_attempt_usage_query(
+            scope, [uuid.UUID(item["cell_id"]) for item in items],
+        ))).mappings().all()
+        by_cell = {str(row["cell_id"]): {key: value for key, value in row.items() if key != "cell_id"}
+                   for row in usage_rows}
+        for item in items:
+            item["all_attempt_usage"] = by_cell.get(item["cell_id"])
     return {
         "items": items,
         "total": total,

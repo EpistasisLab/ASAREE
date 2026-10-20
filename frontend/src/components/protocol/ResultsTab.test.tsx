@@ -108,38 +108,9 @@ describe('bounded Results reads', () => {
     expect(within(cellToggle).queryByRole('button')).not.toBeInTheDocument()
     fireEvent.click(cellToggle)
     expect(experimentsApi.listExecutions).not.toHaveBeenCalled()
-    expect(screen.getByRole('button', { name: 'Filter cells by Total cells' })).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.queryByRole('button', { name: 'Filter cells by Total cells' })).not.toBeInTheDocument()
     expect(experimentsApi.listExecutionCells).toHaveBeenLastCalledWith('experiment', {},
       { cursor: undefined, limit: 10, search: undefined, status: undefined }, expect.any(AbortSignal))
-  })
-
-  it.each([
-    ['ready', 'Ready to review'], ['needs_attention', 'Needs attention'], ['awaiting_results', 'Awaiting results'],
-  ] as const)('filters Results cells by %s across pages and combines with search', async (status, label) => {
-    vi.mocked(experimentsApi.getExecutionSummary).mockResolvedValue({ ...summary, cell_count: 24,
-      cell_result_counts: { ready: 12, needs_attention: 5, awaiting_results: 7 } })
-    vi.mocked(experimentsApi.listExecutionCells).mockImplementation(async (_id, _scope, params) => ({
-      items: [cell], total: 12, next_cursor: params?.cursor ? null : 'page-2',
-    }))
-    mount(<ExecutionBrowser experimentId="experiment" scope={{}} mode="results" onSelect={vi.fn()} />)
-    fireEvent.change(await screen.findByRole('searchbox'), { target: { value: 'model' } })
-    fireEvent.click(await screen.findByRole('button', { name: `Filter cells by ${label}` }))
-    await waitFor(() => expect(experimentsApi.listExecutionCells).toHaveBeenLastCalledWith('experiment', {},
-      { cursor: undefined, limit: 10, search: 'model', status: undefined, result_status: status }, expect.any(AbortSignal)))
-    expect(screen.getByRole('button', { name: `Filter cells by ${label}` })).toHaveAttribute('aria-pressed', 'true')
-    fireEvent.click(screen.getByRole('button', { name: 'Next' }))
-    await waitFor(() => expect(experimentsApi.listExecutionCells).toHaveBeenLastCalledWith('experiment', {},
-      expect.objectContaining({ cursor: 'page-2', result_status: status }), expect.any(AbortSignal)))
-    fireEvent.click(await screen.findByRole('button', { name: /model: a/ }))
-    expect(experimentsApi.listExecutions).not.toHaveBeenCalled()
-    fireEvent.click(screen.getByRole('button', { name: 'Filter cells by Total cells' }))
-    await waitFor(() => expect(experimentsApi.listExecutionCells).toHaveBeenLastCalledWith('experiment', {},
-      { cursor: undefined, limit: 10, search: 'model', status: undefined }, expect.any(AbortSignal)))
-    expect(screen.getByRole('button', { name: 'Filter cells by Total cells' })).toHaveAttribute('aria-pressed', 'true')
-    fireEvent.click(screen.getByRole('button', { name: `Filter cells by ${label}` }))
-    fireEvent.click(screen.getByRole('button', { name: 'Clear filters' }))
-    expect(screen.getByRole('searchbox')).toHaveValue('')
-    expect(screen.getByRole('button', { name: 'Filter cells by Total cells' })).toHaveAttribute('aria-pressed', 'true')
   })
 
   it('shows cell measurements as dashboard cards with friendly labels and formatted values', async () => {
@@ -187,27 +158,11 @@ describe('bounded Results reads', () => {
     expect(select).toHaveBeenCalledWith({ type: 'execution', slotId: 'slot-1', scope: {} })
   })
 
-  it('compares current-result and all-attempt cost, tokens and duration', async () => {
-    const usage = { cost_usd: 0, total_tokens: 0, duration_seconds: 0, input_tokens: null, output_tokens: null, agent_run_count: null }
-    vi.mocked(experimentsApi.getExecutionSummary).mockResolvedValue({ ...summary, usage,
-      all_attempt_usage: { ...usage, cost_usd: 0.12, total_tokens: 1200, duration_seconds: 65 }, usage_complete_count: 29, total: 576 })
-    mount(<ExecutionBrowser experimentId="experiment" scope={{}} mode="results" onSelect={vi.fn()} />)
-    const table = within(await screen.findByRole('table', { name: 'Usage by attempt scope' }))
-    const current = within(table.getByRole('row', { name: /Current results/ }))
-    expect(current.getByText('$0.00')).toBeInTheDocument()
-    expect(current.getByText('0')).toBeInTheDocument()
-    expect(current.getByText('0 s')).toBeInTheDocument()
-    const all = within(table.getByRole('row', { name: /All attempts/ }))
-    expect(all.getByText('$0.12')).toBeInTheDocument()
-    expect(all.getByText('1,200')).toBeInTheDocument()
-    expect(all.getByText('65 s')).toBeInTheDocument()
-    expect(screen.getByText('Usage available for 29 of 576 replicates.')).toBeInTheDocument()
-    expect(screen.queryByText(/spend/i)).not.toBeInTheDocument()
-  })
-
   it('keeps Results search, usage, status badges and export without execution tiles', async () => {
     mount(<ResultsTab experimentId="experiment" experimentName="Measurements" experiment={experiment} onSelectResult={vi.fn()} />)
-    await screen.findByText(/Usage available for/)
+    await screen.findByRole('button', { name: /model: a/ })
+    expect(screen.queryByRole('heading', { name: 'Current results' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('table', { name: 'Usage by attempt scope' })).not.toBeInTheDocument()
     expect(screen.queryByRole('list', { name: 'Run status counts' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Filter by All' })).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Download CSV' })).toBeInTheDocument()
@@ -291,7 +246,7 @@ describe('bounded Results reads', () => {
 
   it('uses fixed ordering without primary-metric controls and preserves maximize/export', async () => {
     mount(<ResultsTab experimentId="experiment" experimentName="Measurements" experiment={experiment} onSelectResult={vi.fn()} />)
-    const header = within(screen.getByRole('heading', { name: 'Current results' }).parentElement!)
+    const header = within(screen.getByRole('group', { name: 'Results actions' }))
     expect(header.getByRole('button', { name: 'Maximize Results' })).toBeInTheDocument()
     expect(header.getByRole('button', { name: 'Download CSV' })).toBeInTheDocument()
     fireEvent.click(await screen.findByRole('button', { name: 'Maximize Results' }))

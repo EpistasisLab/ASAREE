@@ -9,6 +9,7 @@ import { ExperimentVersionDesign, ExperimentVersionRuns } from './ExperimentVers
 import type { ProtocolCanvasHandle } from './ProtocolCanvas'
 import { RunsTab } from './RunsTab'
 import { ResultsTab, type ResultsSelection } from './ResultsTab'
+import { ResultsStatusBadge } from './ResultsStatusBadge'
 import type { Experiment } from '@/types/experiments'
 import type { Protocol, ProtocolRevision } from '@/types/protocols'
 
@@ -241,7 +242,10 @@ export function ExperimentSidePanel({
         )}>
           <div className="flex h-11 shrink-0 items-center justify-between border-b px-3">
             <span className="text-sm font-medium">{activeTab === 'design' ? 'Design' : activeTab === 'runs' ? 'Runs' : 'Results'}</span>
-            <div className="flex items-center gap-1">
+            <div className="flex items-center gap-2">
+              {activeTab === 'results' && experiment && !isLoading && !(viewingHistory && !version) && <ResultsStatusBadge
+                experimentId={experiment.id} scope={{ protocol_id: protocol?.id,
+                  protocol_revision_id: version?.id ?? protocol?.published_revision_id ?? undefined }} />}
               <button
                 type="button"
                 aria-label="Collapse experiment panel"

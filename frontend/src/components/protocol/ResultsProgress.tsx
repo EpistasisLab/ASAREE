@@ -1,12 +1,11 @@
 import { CircleDollarSign, Clock3, Coins } from 'lucide-react'
 import { useState, type ReactNode } from 'react'
-import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import type { ExecutionCell, ExecutionSummary } from '@/types/executionResults'
 import { formatTokens } from '@/lib/tokenFormatting'
 import { CellUsageChart } from './CellUsageChart'
-import { usageMetricLabels, type UsageMetric } from '@/lib/resultUsage'
+import { experimentResultStatus, usageMetricLabels, type UsageMetric } from '@/lib/resultUsage'
 
 export function ResultsProgress({ summary, cells, cellsLoading, cellsError, attemptScope = 'latest', onAttemptScopeChange, chartPagination }: {
   summary: ExecutionSummary; cells: ExecutionCell[]; cellsLoading: boolean; cellsError?: string
@@ -15,15 +14,7 @@ export function ResultsProgress({ summary, cells, cellsLoading, cellsError, atte
   const [metric, setMetric] = useState<UsageMetric>('total_tokens')
   const completed = summary.counts?.completed ?? 0
   const total = summary.expected ?? summary.total ?? 0
-  const active = summary.has_active || ['pending', 'queued', 'running', 'finalizing'].some(status => (summary.counts?.[status] ?? 0) > 0)
-  const status = active ? 'In progress'
-    : total > 0 && completed >= total ? 'Completed'
-      : (summary.counts?.failed ?? 0) + (summary.counts?.limit_reached ?? 0) > 0 ? 'Needs attention'
-        : (summary.counts?.cancelled ?? 0) > 0 ? 'Cancelled'
-          : completed > 0 ? 'In progress' : 'Not started'
-  const accent = status === 'Completed' ? 'text-[color:var(--chart-3)]'
-    : status === 'In progress' ? 'text-primary'
-      : status === 'Needs attention' ? 'text-[color:var(--chart-4)]' : 'text-muted-foreground'
+  const status = experimentResultStatus(summary)
   const label = summary.unit === 'row' ? 'Rows completed' : 'Replicates completed'
   const usage = attemptScope === 'all' ? summary.all_attempt_usage : summary.usage
   const completedExperiment = status === 'Completed'
@@ -35,7 +26,6 @@ export function ResultsProgress({ summary, cells, cellsLoading, cellsError, atte
     : duration < 3600 ? `${(duration / 60).toFixed(1)} min` : `${(duration / 3600).toFixed(1)} hr`
 
   return <section aria-label="Experiment progress" className="space-y-3">
-    <div className="flex justify-end"><Badge variant="outline" className={`border-current ${accent}`}>{status}</Badge></div>
     <div className="space-y-2">
       <div className="flex items-center justify-between gap-3 text-xs">
         <span id="results-progress-label">{label}</span>
@@ -66,11 +56,11 @@ export function ResultsProgress({ summary, cells, cellsLoading, cellsError, atte
       ] as const).map(([key, title, value, Icon, help]) => <Card key={title} size="sm" className="min-w-0 gap-0 p-0">
         <Button variant="ghost" aria-label={`Show ${title.toLowerCase()} by cell`} aria-pressed={metric === key}
           onClick={() => setMetric(key)} title={help}
-          className="h-full w-full min-w-0 flex-col items-stretch gap-1 whitespace-normal p-2 text-left aria-pressed:border-primary aria-pressed:bg-primary/10 @min-[450px]:p-3">
-          <span className="flex flex-wrap items-center gap-1 text-[11px] text-muted-foreground @min-[450px]:text-xs">
-            <Icon className="size-3 shrink-0" aria-hidden="true" /><span>{title}</span>
+          className="h-full w-full min-w-0 flex-col items-stretch justify-start gap-1 whitespace-normal p-2 text-left aria-pressed:border-primary aria-pressed:bg-primary/10 @min-[450px]:p-3">
+          <span className="flex items-start gap-1 text-[11px] text-muted-foreground @min-[450px]:text-xs">
+            <Icon className="mt-0.5 size-3 shrink-0" aria-hidden="true" /><span className="min-w-0">{title}</span>
           </span>
-          <span className="truncate text-center font-mono text-sm font-medium tabular-nums @min-[450px]:text-lg" title={key === 'total_tokens' ? `${number(usage?.total_tokens)} tokens` : value}>{value}</span>
+          <span className="mt-auto truncate text-center font-mono text-sm font-medium tabular-nums @min-[450px]:text-lg" title={key === 'total_tokens' ? `${number(usage?.total_tokens)} tokens` : value}>{value}</span>
         </Button>
       </Card>)}
     </div>

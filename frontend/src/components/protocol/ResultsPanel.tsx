@@ -20,7 +20,7 @@ export function ResultsScorecard({ label, help, value, note, icon: Icon }: { lab
 /** One panel structure for both modes; data-specific content occupies these slots. */
 export function ResultsPanel({ experimentId, experimentName, scope, progress, controls, metadata, summary, scorecards, notice, comparison, cells, details }: {
   experimentId: string; experimentName: string; scope: ResultsScope
-  progress?: ReactNode; controls?: ReactNode; metadata?: ReactNode; summary: ReactNode | ((actions: ReactNode) => ReactNode); scorecards?: ReactNode; notice?: ReactNode
+  progress?: ReactNode; controls?: ReactNode; metadata?: ReactNode; summary?: ReactNode; scorecards?: ReactNode; notice?: ReactNode
   comparison?: ReactNode; cells: ReactNode; details?: ReactNode
 }) {
   const [maximized, setMaximized] = useState(false)
@@ -47,18 +47,19 @@ export function ResultsPanel({ experimentId, experimentName, scope, progress, co
     document.addEventListener('keydown', close)
     return () => { document.body.style.overflow = previous; document.removeEventListener('keydown', close) }
   }, [maximized])
-  const summaryActions = <div className="flex shrink-0 flex-wrap justify-end gap-1.5">
+  const panelActions = <div role="group" aria-label="Results actions" className="flex shrink-0 flex-wrap justify-end gap-1.5">
     <Button variant="outline" size="xs" onClick={() => setMaximized(value => !value)}>{maximized ? <Minimize2 className="size-3" /> : <Maximize2 className="size-3" />}{maximized ? 'Restore Results' : 'Maximize Results'}</Button>
     <Button variant="outline" size="xs" disabled={downloading} onClick={() => createExport.mutate()}>{downloading ? 'Preparing…' : <><Download className="size-3" /> Download CSV</>}</Button>
   </div>
   return <div className={maximized ? '@container fixed inset-0 z-50 space-y-4 overflow-auto bg-background p-4' : '@container space-y-4 p-3'}>
+    {panelActions}
+    {metadata}
     {progress}
     <section className="space-y-2">
       {controls}
-      {metadata}
-      <Card size="sm" className="flex-row flex-wrap items-start justify-between gap-3 p-3">
-        {typeof summary === 'function' ? summary(summaryActions) : <>{summary}{summaryActions}</>}
-      </Card>
+      {summary && <Card size="sm" className="flex-row flex-wrap items-start justify-between gap-3 p-3">
+        {summary}
+      </Card>}
       {scorecards && <div className="mt-2 grid grid-cols-2 gap-2">{scorecards}</div>}
       {notice}
       {error && <p role="alert" className="text-xs text-destructive">{error}</p>}

@@ -1,4 +1,5 @@
 import { Card } from '@/components/ui/card'
+import { Badge } from '@/components/ui/badge'
 import type { ReactNode } from 'react'
 import type { ExecutionCell, UsageSummary } from '@/types/executionResults'
 import { formatTokens } from '@/lib/tokenFormatting'
@@ -34,6 +35,7 @@ export function CellUsageChart({ cells, metric, loading, error, attemptScope = '
   completed?: boolean
 }) {
   const labels = usageMetricLabels(completed)
+  const chartTitle = `${labels[metric].replace(' so far', '')} by cell`
   const valueFor = (usage: UsageSummary | undefined) => {
     const value = usage?.[metric]
     return value != null && Number.isFinite(value) && value >= 0 ? value : null
@@ -49,9 +51,12 @@ export function CellUsageChart({ cells, metric, loading, error, attemptScope = '
   const formatTick = (value: number) => metric === 'total_tokens'
     ? (value / tokenScale.divisor).toLocaleString('en-US', { maximumFractionDigits: tokenScale.divisor === 1 ? 0 : 2 })
     : format(value)
-  return <Card size="sm" className="gap-3 p-3" role="region" aria-label={`${labels[metric]} by cell`}>
+  return <Card size="sm" className="gap-3 p-3" role="region" aria-label={chartTitle}>
     <div>
-      <h3 className="text-xs font-medium">{labels[metric]} by cell</h3>
+      <div className="flex items-start justify-between gap-2">
+        <h3 className="text-xs font-medium">{chartTitle}</h3>
+        {!completed && <Badge variant="outline" className="shrink-0 border-[color:var(--chart-4)]/40 text-[color:var(--chart-4)]">Partial data</Badge>}
+      </div>
       {metric === 'total_tokens' && <p className="mt-1 text-[11px] text-muted-foreground">{tokenScale.label}</p>}
       {metric === 'duration_seconds' && <p className="mt-1 text-[11px] text-muted-foreground">Execution time ({durationUnit})</p>}
     </div>

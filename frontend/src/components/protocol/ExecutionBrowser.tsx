@@ -5,7 +5,6 @@ import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Card } from '@/components/ui/card'
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { cardAccent } from '@/lib/utils'
 import { executionKeys, useExecutionSummary } from '@/lib/executionQueries'
 import { EXECUTION_PAGE_SIZE, useCursor } from '@/lib/executionPagination'
@@ -15,7 +14,7 @@ import type { Experiment } from '@/types/experiments'
 import type { ResultsSelection } from './ResultsTab'
 import { ResultsPanel } from './ResultsPanel'
 import { ResultsProgress } from './ResultsProgress'
-import { ResultsContext, ResultsMetadata } from './ResultsContext'
+import { ResultsMetadata } from './ResultsContext'
 import { CellCard, ReplicateRow, ReplicateStatus } from './CellPresentation'
 import { CellResultStatusBadge } from './CellResultStatus'
 import { executionStatusColor, executionStatusCount, executionStatusPillColor, STATUS_PILL_SIZE } from '@/lib/executionStatus'
@@ -46,31 +45,6 @@ function Usage({ usage }: { usage: ExecutionSummary['usage'] }) {
     {usage.cost_usd != null && `${new Intl.NumberFormat(undefined, { style: 'currency', currency: 'USD' }).format(usage.cost_usd)} · `}
     {usage.total_tokens != null && `${usage.total_tokens.toLocaleString()} tokens`}
   </span>
-}
-
-function ResultsUsageSummary({ summary }: { summary: ExecutionSummary }) {
-  const units = summary.unit === 'row' ? 'rows' : 'replicates'
-  return <section aria-label="Results usage summary" className="space-y-2 pt-4">
-    <Table aria-label="Usage by attempt scope" className="text-xs">
-      <TableHeader><TableRow>
-        <TableHead className="h-7">Scope</TableHead>
-        <TableHead className="h-7 text-right">Cost</TableHead>
-        <TableHead className="h-7 text-right">Tokens</TableHead>
-        <TableHead className="h-7 text-right" title="Sum of run attempt durations">Duration</TableHead>
-      </TableRow></TableHeader>
-      <TableBody>{([
-        ['Current results', summary.usage, `Latest run attempt for each ${summary.unit === 'row' ? 'row' : 'replicate'}`],
-        ['All attempts', summary.all_attempt_usage, 'Includes earlier attempts and re-runs'],
-      ] as const).map(([label, usage, description]) => <TableRow key={label}>
-        <TableHead scope="row" className="h-auto py-1.5 text-xs whitespace-normal" title={description}>{label}</TableHead>
-        <TableCell className="py-1.5 text-right font-mono tabular-nums">{usage?.cost_usd == null ? '—' : new Intl.NumberFormat(undefined, { style: 'currency', currency: 'USD' }).format(usage.cost_usd)}</TableCell>
-        <TableCell className="py-1.5 text-right font-mono tabular-nums">{usage?.total_tokens == null ? '—' : usage.total_tokens.toLocaleString()}</TableCell>
-        <TableCell className="py-1.5 text-right font-mono tabular-nums">{usage?.duration_seconds == null ? '—' : `${usage.duration_seconds.toLocaleString(undefined, { maximumFractionDigits: 1 })} s`}</TableCell>
-      </TableRow>)}</TableBody>
-    </Table>
-    <p className="text-xs text-muted-foreground">Usage available for {summary.usage_complete_count ?? 0} of {summary.total ?? 0} {units}.{summary.refreshing && ' Updating summary…'}</p>
-    {!!summary.usage_pending_count && <p role="status" className="text-xs text-muted-foreground">Preparing usage for {summary.usage_pending_count} {units}.</p>}
-  </section>
 }
 
 export function ExecutionRows({ experimentId, scope, cellId, generation, summary, onSelect, actions, filters = emptyExecutionFilters, mode = 'results' }: {
@@ -167,7 +141,7 @@ export function ExecutionBrowser({ experimentId, scope, experiment, mode, onSele
       {cells.error && cells.data && <p role="alert" className="text-xs text-destructive">Refresh failed; showing the last loaded cells.</p>}
     </>}
   </div>
-  const overview = (headerActions?: React.ReactNode) => <div className="w-full min-w-0 space-y-2"><div className="flex flex-wrap items-center gap-2"><h2 className="text-sm font-medium">{mode === 'runs' ? `${summary.data?.unit === 'row' ? 'Row' : 'Replicate'} overview` : 'Current results'}</h2>{(summary.isError || cells.isError) && <Button variant="outline" size="xs" disabled={summary.isFetching || cells.isFetching} onClick={refresh}>Refresh</Button>}{(controls || headerActions) && <div className="ml-auto flex flex-wrap items-center justify-end gap-2">{controls}{headerActions}</div>}</div>
+  const overview = () => <div className="w-full min-w-0 space-y-2"><div className="flex flex-wrap items-center gap-2"><h2 className="text-sm font-medium">{summary.data?.unit === 'row' ? 'Row' : 'Replicate'} overview</h2>{(summary.isError || cells.isError) && <Button variant="outline" size="xs" disabled={summary.isFetching || cells.isFetching} onClick={refresh}>Refresh</Button>}{controls && <div className="ml-auto flex flex-wrap items-center justify-end gap-2">{controls}</div>}</div>
     {summary.isPending ? <p className="text-xs text-muted-foreground">Loading progress…</p> : summary.error && !summary.data ? <p role="alert" className="text-xs text-destructive">Progress unavailable. Records remain available below.</p> : !summary.data?.ready ? <p role="status" className="text-xs text-muted-foreground">Preparing the version summary. Records remain available below.</p> : <>
       {mode === 'runs' && <ul aria-label="Run status counts" className="grid grid-cols-[repeat(auto-fill,minmax(8rem,1fr))] gap-1.5">
         {summaryStatuses.map(status => <li key={status}>
@@ -182,11 +156,10 @@ export function ExecutionBrowser({ experimentId, scope, experiment, mode, onSele
           </Card>
         </li>)}
       </ul>}
-      {mode === 'results' && <><ResultsContext summary={summary.data} selectedStatus={filters.resultStatus}
-        onStatusChange={resultStatus => changeFilters({ ...filters, resultStatus })} /><ResultsUsageSummary summary={summary.data} /></>}
     </>}
     {summary.error && summary.data && <p role="alert" className="text-xs text-destructive">Progress refresh failed; showing the last summary.</p>}
   </div>
+  const resultsNotice = <>{summary.isPending ? <p className="text-xs text-muted-foreground">Loading progress…</p> : summary.error && !summary.data ? <p role="alert" className="text-xs text-destructive">Progress unavailable. Records remain available below.</p> : !summary.data?.ready ? <p role="status" className="text-xs text-muted-foreground">Preparing the version summary. Records remain available below.</p> : null}{summary.error && summary.data && <p role="alert" className="text-xs text-destructive">Progress refresh failed; showing the last summary.</p>}{summary.isError && <Button variant="outline" size="xs" disabled={summary.isFetching} onClick={refresh}>Refresh</Button>}</>
   const metadata = mode === 'results' && summary.data?.ready ? <ResultsMetadata summary={summary.data} /> : null
   return mode === 'results' && experiment
     ? <ResultsPanel experimentId={experimentId} experimentName={experiment.name} scope={scope}
@@ -199,9 +172,9 @@ export function ExecutionBrowser({ experimentId, scope, experiment, mode, onSele
             <Button size="xs" variant="outline" disabled={!cells.data.next_cursor || cells.isFetching} onClick={() => cells.data?.next_cursor && pager.next(cells.data.next_cursor)}>Next cells</Button>
           </>}
         </div>} />}
-      metadata={metadata} summary={overview} cells={cellBody} />
+      metadata={metadata} controls={controls} notice={resultsNotice} cells={cellBody} />
     : <div className="@container space-y-3 p-3">
       {metadata}
       {batchControls && <div className="flex flex-wrap items-center justify-end gap-2">{batchControls}</div>}
-      <Card className="p-3">{overview()}</Card>{cellBody}</div>
+      {mode === 'runs' ? <Card className="p-3">{overview()}</Card> : resultsNotice}{cellBody}</div>
 }

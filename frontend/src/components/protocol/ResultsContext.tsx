@@ -45,7 +45,7 @@ export function ResultsMetadata({ summary }: { summary: ExecutionSummary }) {
   const updated = timestamp ? new Date(timestamp) : null
   const hasTimestamp = updated !== null && Number.isFinite(updated.getTime())
   return <dl aria-label="Results metadata" className="grid grid-cols-1 gap-x-4 gap-y-2 px-1 py-2 text-xs @min-[400px]:grid-cols-2">
-      <div><dt className="text-muted-foreground">Run mode</dt><dd>{summary.unit === 'row' ? 'Per dataset row' : summary.datasets?.length ? 'Whole dataset per replicate' : 'Per replicate'}{summary.unit === 'row' && summary.source_row_count != null && ` · ${summary.source_row_count.toLocaleString()} source rows`}</dd></div>
+      <div><dt className="text-muted-foreground">Execution unit</dt><dd>{summary.unit === 'row' ? 'Each dataset row per replicate' : summary.datasets?.length ? 'Whole dataset per replicate' : 'Per replicate'}{summary.unit === 'row' && summary.source_row_count != null && ` · ${summary.source_row_count.toLocaleString()} source rows`}</dd></div>
       <div><dt className="text-muted-foreground">Last updated</dt><dd>{hasTimestamp ? <time dateTime={updated.toISOString()}>{updated.toLocaleString()}</time> : 'Not available'}</dd></div>
   </dl>
 }

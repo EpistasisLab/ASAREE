@@ -30,13 +30,14 @@ describe('Results context', () => {
     expect(screen.queryByText('Results scope')).not.toBeInTheDocument()
     expect(screen.queryByText('Classification dataset')).not.toBeInTheDocument()
     expect(screen.getByText('Whole dataset per replicate')).toBeInTheDocument()
+    expect(screen.getByText('Execution unit')).toBeInTheDocument()
     expect(document.querySelector('time')).toHaveAttribute('datetime', '2026-10-15T18:30:00.000Z')
   })
 
   it('keeps counts at cell level for per-row runs and preserves zero counts', () => {
     renderContext({ ...summary, unit: 'row', source_row_count: 240,
       cell_result_counts: { ready: 0, needs_attention: 0, awaiting_results: 24 } })
-    expect(screen.getByText('Per dataset row · 240 source rows')).toBeInTheDocument()
+    expect(screen.getByText('Each dataset row per replicate · 240 source rows')).toBeInTheDocument()
     expect(within(screen.getByRole('region', { name: 'Cell results overview' })).getAllByText('0')).toHaveLength(2)
   })
 

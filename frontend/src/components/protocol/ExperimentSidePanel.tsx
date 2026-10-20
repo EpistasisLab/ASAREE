@@ -243,7 +243,7 @@ export function ExperimentSidePanel({
           showDesignAttentionBorder && 'border border-[color:var(--chart-4)]/60',
         )}>
           <div className="flex h-11 shrink-0 items-center justify-between border-b px-3">
-            <span className="text-sm font-medium">{activeTab === 'design' ? 'Design' : activeTab === 'runs' ? 'Runs' : 'Results'}</span>
+            <span className="text-sm font-medium">{activeTab === 'design' ? 'Design' : activeTab === 'runs' ? 'Runs' : 'Experiment Results'}</span>
             <div className="flex items-center gap-2">
               {activeTab === 'results' && experiment && !isLoading && !(viewingHistory && !version) && <ResultsStatusBadge
                 experimentId={experiment.id} scope={{ protocol_id: protocol?.id,

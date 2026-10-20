@@ -15,6 +15,7 @@ import { CursorControls, useGenerationRefresh } from './ExecutionBrowser'
 import { CellResultStatus } from './CellResultStatus'
 import { useCursor } from '@/lib/executionPagination'
 import { ExecutionRows } from './ExecutionBrowser'
+import { ResultsInspectorSplit } from './ResultsInspectorSplit'
 
 function attemptAsReplicate(slot: ExecutionSlot, detail: AttemptDetail): ResultReplicate {
   const usage = detail.usage
@@ -55,9 +56,10 @@ function ConversationPage({ experimentId, runId, scope }: { experimentId: string
   </section>
 }
 
-function SlotInspector({ experimentId, slotId, scope, onClose, onBackToCell, onSelectSlot }: {
+function SlotInspector({ experimentId, slotId, scope, onClose, onBackToCell, onSelectSlot, embedded = false }: {
   experimentId: string; slotId: string; scope: ResultsScope; onClose: () => void
   onBackToCell?: () => void; onSelectSlot?: (slotId: string) => void
+  embedded?: boolean
 }) {
   const [selected, setSelected] = useState<string>()
   const [conversationOpen, setConversationOpen] = useState(false)
@@ -78,10 +80,10 @@ function SlotInspector({ experimentId, slotId, scope, onClose, onBackToCell, onS
     enabled: !!slot?.cell_id })
   const cellLabel = slot ? Object.entries(slot.factor_values).map(([name, value]) =>
     displayFactorCondition(name, value, summary.data?.design_spec, slot.cell_label)).join(' · ') || slot.cell_label : ''
-  return <aside className="absolute inset-0 z-20 flex flex-col overflow-y-auto border-l bg-card p-3" aria-label="Result details">
+  return <aside className={`${embedded ? 'relative h-full min-h-0 min-w-0' : 'absolute inset-0 z-20'} @container flex flex-col overflow-y-auto border-l bg-card p-3`} aria-label="Result details">
     <div className="mb-3 flex items-center justify-between gap-2">
-      {onBackToCell && <Button variant="outline" size="xs" onClick={onBackToCell}>Back to cell</Button>}
-      <Button variant="ghost" size="xs" className="ml-auto" onClick={onClose}>Close</Button>
+      {onBackToCell && <Button variant="outline" size="xs" className={embedded ? '@min-[800px]/inspectors:hidden' : undefined} onClick={onBackToCell}>Back to cell</Button>}
+      <Button variant="ghost" size="xs" className="ml-auto" onClick={onClose}>{embedded ? 'Close replicate' : 'Close'}</Button>
     </div>
     <div className="-mx-3 mb-4 shrink-0 border-b bg-muted/20 px-3 pb-4 pt-2">
       <div className={onSelectSlot ? 'grid grid-cols-[2rem_minmax(0,1fr)_2rem] items-stretch gap-2' : ''}>
@@ -172,7 +174,9 @@ function CellInspectorContent({ experimentId, selection, scope, onClose, onSelec
   useEffect(() => { if (!slot && listPanel.current) listPanel.current.scrollTop = savedScroll.current }, [slot])
   const cellLabel = cell.data ? Object.entries(cell.data.factor_values).map(([name, value]) =>
     displayFactorCondition(name, value, summary.data?.design_spec, cell.data!.cell_label)).join(' · ') || cell.data.cell_label : ''
-  return <><aside ref={listPanel} hidden={!!slot} className="@container absolute inset-0 z-20 overflow-y-auto border-l bg-card p-3" aria-label="Cell result details"><div className="mb-3 flex justify-end"><Button size="xs" variant="ghost" onClick={onClose}>Close</Button></div>
+  return <ResultsInspectorSplit replicate={slot ? <SlotInspector key={slot} embedded experimentId={experimentId} slotId={slot} scope={scope} onClose={() => setSlot(undefined)}
+    onBackToCell={() => setSlot(undefined)} onSelectSlot={setSlot} /> : undefined}>
+    <aside ref={listPanel} className={`@container min-h-0 min-w-0 overflow-y-auto border-l bg-card p-3 ${slot ? 'hidden @min-[800px]/inspectors:block' : ''}`} aria-label="Cell result details"><div className="mb-3 flex items-center justify-between gap-2"><p className="text-xs text-muted-foreground">Results / Cell</p><Button size="xs" variant="ghost" onClick={onClose}>Close</Button></div>
     {cell.isPending && <Skeleton className="h-24" />}
     {cell.data && <>
       <div className="-mx-3 mb-4 grid grid-cols-[2rem_minmax(0,1fr)_2rem] items-stretch gap-2 border-b bg-muted/20 px-3 pb-4 pt-2">
@@ -213,12 +217,10 @@ function CellInspectorContent({ experimentId, selection, scope, onClose, onSelec
         </dl> : <p className="text-xs text-muted-foreground">No aggregated measurements available yet.</p>}
       </section>
       <h3 className="mb-2 text-sm font-medium">Replicates</h3>
-      <ExecutionRows key={`${summary.data?.scope_key}:${summary.data?.source_row_count}`} experimentId={experimentId} scope={scope} cellId={cell.data.cell_id} generation={summary.data?.generation} summary={summary.data} onSelect={item => {
+      <ExecutionRows key={`${summary.data?.scope_key}:${summary.data?.source_row_count}`} experimentId={experimentId} scope={scope} cellId={cell.data.cell_id} selectedSlotId={slot} generation={summary.data?.generation} summary={summary.data} onSelect={item => {
         if (item.type === 'execution') { savedScroll.current = listPanel.current?.scrollTop ?? 0; setSlot(item.slotId) }
       }} />
     </>}{cell.error && <p role="alert">{cell.error.message}</p>}
   </aside>
-    {slot && <SlotInspector key={slot} experimentId={experimentId} slotId={slot} scope={scope} onClose={onClose}
-      onBackToCell={() => setSlot(undefined)} onSelectSlot={setSlot} />}
-  </>
+  </ResultsInspectorSplit>
 }

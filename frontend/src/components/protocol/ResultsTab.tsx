@@ -222,7 +222,10 @@ export function ReplicateResultDetail({ replicate, metricKeys, metricTypes, exec
 
 
 export type ResultsSelection =
-  | { type: 'cell'; cellLabel: string; cellId?: string; scope?: ResultsScope }
+  | ({ type: 'cell'; scope?: ResultsScope } & (
+    | { cellId: string; cellLabel?: string }
+    | { cellId?: string; cellLabel: string }
+  ))
   | { type: 'replicate'; replicateLabel: string; scope?: ResultsScope }
   | { type: 'row'; rowResultId: string; scope: ResultsScope }
   | { type: 'execution'; slotId: string; scope: ResultsScope }

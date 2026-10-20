@@ -47,9 +47,10 @@ function Usage({ usage }: { usage: ExecutionSummary['usage'] }) {
   </span>
 }
 
-export function ExecutionRows({ experimentId, scope, cellId, generation, summary, onSelect, actions, filters = emptyExecutionFilters, mode = 'results' }: {
+export function ExecutionRows({ experimentId, scope, cellId, selectedSlotId, generation, summary, onSelect, actions, filters = emptyExecutionFilters, mode = 'results' }: {
   experimentId: string; scope: ResultsScope; cellId?: string; generation?: number; summary?: ExecutionSummary; filters?: ExecutionFilters
   onSelect: (selection: ResultsSelection) => void; actions?: (row: ExecutionSlot) => React.ReactNode; mode?: 'runs' | 'results'
+  selectedSlotId?: string
 }) {
   const pager = useCursor()
   const params = { cell_id: cellId, cursor: pager.cursor, limit: EXECUTION_PAGE_SIZE, ...filterParams(filters) }
@@ -64,7 +65,7 @@ export function ExecutionRows({ experimentId, scope, cellId, generation, summary
     {query.isPending ? <Skeleton className="h-16" /> : query.error && !query.data ? <p role="alert" className="text-xs text-destructive">{query.error.message}</p> : <>
       <CursorControls next={query.data?.next_cursor} back={pager.back} onNext={pager.next} onBack={pager.previous} busy={query.isFetching} pageIndex={pager.pageIndex} count={query.data?.items.length} total={query.data?.total} recordLabel={summary?.unit === 'row' ? 'rows' : 'replicates'} />
       {!query.data?.items.length && <p className="text-xs text-muted-foreground">No {summary?.unit === 'row' ? 'rows' : 'replicates'} planned in this version.</p>}
-      <ul className="space-y-1.5">{query.data?.items.map(row => <ReplicateRow key={row.slot_id} number={row.replicate_number} results={mode === 'results' && !actions}
+      <ul className="space-y-1.5">{query.data?.items.map(row => <ReplicateRow key={row.slot_id} number={row.replicate_number} results={mode === 'results' && !actions} selected={row.slot_id === selectedSlotId}
         onView={mode === 'results' && !actions && (row.run_id || row.status === 'completed') ? () => onSelect({ type: 'execution', slotId: row.slot_id, scope }) : undefined}
         detail={row.row_index !== null ? <span className="font-mono">Source row {row.row_index + 1}</span> : undefined}
         status={<><ReplicateStatus status={row.status} filter={filters.status} />{row.result.truncated && row.status !== 'limit_reached' && <ReplicateStatus status="limit_reached" filter={filters.status} />}{row.result.evaluation_state === 'failed' && <ReplicateStatus status="scoring_failed" filter={filters.status} />}</>}

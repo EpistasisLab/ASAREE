@@ -1,5 +1,6 @@
 import { Card } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
 import type { ReactNode } from 'react'
 import type { ExecutionCell, UsageSummary } from '@/types/executionResults'
 import { formatTokens } from '@/lib/tokenFormatting'
@@ -29,12 +30,15 @@ function exactDuration(seconds: number): string {
     remainder > 0 || rounded === 0 ? `${remainder.toLocaleString()} sec` : ''].filter(Boolean).join(' ')
 }
 
-export function CellUsageChart({ cells, metric, loading, error, attemptScope = 'latest', pagination, completed = false }: {
+export function CellUsageChart({ cells, metric, loading, error, attemptScope = 'latest', pagination, completed = false, onSelectCell, selectedCellId }: {
   cells: ExecutionCell[]; metric: UsageMetric; loading: boolean; error?: string
   attemptScope?: 'latest' | 'all'; pagination?: ReactNode
   completed?: boolean
+  onSelectCell?: (cell: ExecutionCell) => void
+  selectedCellId?: string
 }) {
   const labels = usageMetricLabels(completed)
+  const hasSelection = cells.some(cell => cell.cell_id === selectedCellId)
   const chartTitle = `${labels[metric].replace(' so far', '')} by cell`
   const valueFor = (usage: UsageSummary | undefined) => {
     const value = usage?.[metric]
@@ -74,6 +78,7 @@ export function CellUsageChart({ cells, metric, loading, error, attemptScope = '
                 </div>
                 <ul aria-label="Cell usage values" className="relative flex">
                   {cells.map((cell, index) => {
+                    const selected = cell.cell_id === selectedCellId
                     const value = valueFor(cellUsage(cell))
                     const label = `Cell ${cell.cell_number ?? index + 1}`
                     const formatted = value === null ? 'Not reported' : format(value)
@@ -81,14 +86,16 @@ export function CellUsageChart({ cells, metric, loading, error, attemptScope = '
                     const tooltipValue = value !== null && metric === 'duration_seconds' ? exactDuration(value) : exactValue
                     return <li key={cell.cell_id} className="min-w-16 flex-1 px-1 text-center">
                       <div className="flex h-44 flex-col justify-end">
-                        <div tabIndex={0} role="img" aria-label={`${label}: ${exactValue}`}
+                        <Button variant="ghost" aria-label={`Open ${label} details`} aria-pressed={selected} disabled={!onSelectCell} onClick={() => onSelectCell?.(cell)}
                           title={`${label} · ${cell.cell_label}\n${labels[metric]}: ${tooltipValue}`}
-                          className="relative mx-auto w-full max-w-12 rounded-t-sm bg-primary/70 outline-none transition-[height,background-color] hover:bg-primary focus-visible:ring-2 focus-visible:ring-ring"
+                          className={`relative mx-auto w-full max-w-12 rounded-t-sm rounded-b-none p-0 transition-[height,background-color] hover:bg-primary/80 dark:hover:bg-primary/80 ${selected ? 'bg-primary/90' : hasSelection ? 'bg-primary/25' : 'bg-primary/50'}`}
                           style={{ height: value === null ? '2px' : `${Math.max(1, value / scale * 100)}%` }}>
-                          <span className="absolute inset-x-0 bottom-full pb-1 font-mono text-[10px] text-foreground">{value === null ? '—' : formatted}</span>
-                        </div>
+                          <span role="img" aria-label={`${label}: ${exactValue}`} title={`${label} · ${cell.cell_label}\n${labels[metric]}: ${tooltipValue}`} className="absolute inset-0">
+                            <span className="absolute inset-x-0 bottom-full pb-1 font-mono text-[10px] text-foreground">{value === null ? '—' : formatted}</span>
+                          </span>
+                        </Button>
                       </div>
-                      <p className="mt-2 font-mono text-[10px] text-muted-foreground">{label}</p>
+                      <p className={`mt-2 font-mono text-[10px] ${selected ? 'font-semibold text-primary' : 'text-muted-foreground'}`}>{label}</p>
                     </li>
                   })}
                 </ul>

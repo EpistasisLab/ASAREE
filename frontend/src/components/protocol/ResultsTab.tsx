@@ -218,11 +218,12 @@ export function ResultsInspectorPanel(props: {
   experimentId: string; experiment: Experiment; selection: ResultsSelection | null; onClose: () => void
 }) { return <ExecutionInspector {...props} /> }
 
-export function ResultsTab({ protocolId, experimentId, experiment, onSelectResult, versionId }: {
+export function ResultsTab({ protocolId, experimentId, experiment, onSelectResult, versionId, selectedCellId }: {
   protocolId?: string; experimentId: string; experimentName: string; experiment: Experiment
   onSelectResult: (selection: ResultsSelection) => void; versionId?: string
+  selectedCellId?: string | null
 }) {
   const scope = { protocol_id: protocolId, protocol_revision_id: versionId }
   return <ExecutionBrowser key={JSON.stringify(scope)} experimentId={experimentId} scope={scope}
-    experiment={experiment} mode="results" onSelect={onSelectResult} />
+    experiment={experiment} mode="results" onSelect={onSelectResult} selectedCellId={selectedCellId} />
 }

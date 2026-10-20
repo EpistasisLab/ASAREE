@@ -1,11 +1,12 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { useState } from 'react'
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { experimentsApi } from '@/api/client'
 import { executionKeys } from '@/lib/executionQueries'
-import type { AttemptDetail, ExecutionCell, ExecutionSlot, ExecutionSummary } from '@/types/executionResults'
+import type { AttemptDetail, AttemptPage, ExecutionCell, ExecutionSlot, ExecutionSummary } from '@/types/executionResults'
 import type { Experiment, MetricObservation } from '@/types/experiments'
-import { ResultsInspectorPanel, ResultsTab } from './ResultsTab'
+import { ResultsInspectorPanel, ResultsTab, type ResultsSelection } from './ResultsTab'
 import { ExecutionBrowser, ExecutionRows } from './ExecutionBrowser'
 
 vi.mock('@/api/client', async importOriginal => {
@@ -54,6 +55,25 @@ beforeEach(() => {
 afterEach(() => { vi.clearAllMocks(); vi.useRealTimers() })
 
 describe('bounded Results reads', () => {
+  it('clears the selected chart bar when the cell inspector closes', async () => {
+    function ResultsWithInspector() {
+      const [selection, setSelection] = useState<ResultsSelection | null>(null)
+      return <>
+        <ResultsTab experimentId="experiment" experimentName="Measurements" experiment={experiment}
+          onSelectResult={setSelection} selectedCellId={selection?.type === 'cell' ? selection.cellId ?? null : null} />
+        <ResultsInspectorPanel experimentId="experiment" experiment={experiment} selection={selection} onClose={() => setSelection(null)} />
+      </>
+    }
+    mount(<ResultsWithInspector />)
+    const bar = await screen.findByRole('button', { name: 'Open Cell 1 details' })
+    fireEvent.click(bar)
+    const inspector = await screen.findByRole('complementary', { name: 'Cell result details' })
+    expect(bar).toHaveAttribute('aria-pressed', 'true')
+    fireEvent.click(within(inspector).getByRole('button', { name: 'Close' }))
+    expect(screen.queryByRole('complementary', { name: 'Cell result details' })).not.toBeInTheDocument()
+    expect(bar).toHaveAttribute('aria-pressed', 'false')
+  })
+
   it.each(['completed', 'running'] as const)('aligns %s usage observations by producer output and preserves reported values', async status => {
     const observations: MetricObservation[] = [
       { id: 'price', name: 'Provider price', value: 0.1234 },
@@ -425,6 +445,25 @@ describe('bounded Results reads', () => {
     expect(await screen.findByText('Showing 1–10 of 12 cells')).toBeInTheDocument()
   })
 
+  it('keeps the current cell visible while previous/next loads its replacement', async () => {
+    let resolveNext!: (value: ExecutionCell) => void
+    const pendingCell = new Promise<ExecutionCell>(resolve => { resolveNext = resolve })
+    vi.mocked(experimentsApi.getExecutionCell).mockImplementation(async (_id, _scope, selection) =>
+      selection.cell_id === 'cell-2' ? pendingCell : { ...cell, next_cell_id: 'cell-2' })
+    mount(<ResultsInspectorPanel experimentId="experiment" experiment={experiment}
+      selection={{ type: 'cell', cellId: 'cell-1', scope: {} }} onClose={vi.fn()} />)
+    await screen.findByText('Cell 1')
+    const panel = screen.getByRole('complementary', { name: 'Cell result details' })
+    const next = screen.getByRole('button', { name: 'Next cell' })
+    await waitFor(() => expect(next).toBeEnabled())
+    fireEvent.click(next)
+    expect(panel).toBeInTheDocument()
+    expect(within(panel).getByText('Cell 1')).toBeInTheDocument()
+    expect(next).toBeDisabled()
+    await act(async () => resolveNext({ ...cell, cell_id: 'cell-2', cell_number: 2, previous_cell_id: 'cell-1' }))
+    await screen.findByText('Cell 2')
+  })
+
   it('navigates cell details with icon buttons and resets the replicate list for each cell', async () => {
     vi.mocked(experimentsApi.getExecutionCell).mockImplementation(async (_id, _scope, selection) =>
       selection.cell_id === 'cell-2'
@@ -445,6 +484,28 @@ describe('bounded Results reads', () => {
       { protocol_revision_id: 'v1' }, expect.objectContaining({ cell_id: 'cell-2', cursor: undefined }), expect.any(AbortSignal)))
     fireEvent.click(screen.getByRole('button', { name: 'Previous cell' }))
     expect(await screen.findByText('Cell 1')).toBeInTheDocument()
+  })
+
+  it('keeps replicate details visible while the next replicate loads', async () => {
+    let resolveNext!: (value: AttemptPage) => void
+    const pendingAttempt = new Promise<AttemptPage>(resolve => { resolveNext = resolve })
+    vi.mocked(experimentsApi.listExecutionAttempts).mockImplementation(async (_id, slotId) =>
+      slotId === 'slot-2' ? pendingAttempt : { slot, items: [], next_cursor: null })
+    vi.mocked(experimentsApi.getExecutionNeighbors).mockResolvedValue({ previous_slot_id: null, next_slot_id: 'slot-2' })
+    mount(<ResultsInspectorPanel experimentId="experiment" experiment={experiment}
+      selection={{ type: 'cell', cellId: 'cell-1', scope: {} }} onClose={vi.fn()} />)
+    fireEvent.click((await screen.findByText('Replicate 1')).closest('button')!)
+    await screen.findByRole('heading', { name: 'Replicate 1 details' })
+    const inspector = screen.getByRole('complementary', { name: 'Result details' })
+    const next = screen.getByRole('button', { name: 'Next replicate' })
+    await waitFor(() => expect(next).toBeEnabled())
+    fireEvent.click(next)
+    expect(inspector).toBeInTheDocument()
+    expect(within(inspector).getByRole('heading', { name: 'Replicate 1 details' })).toBeInTheDocument()
+    expect(next).toBeDisabled()
+    await act(async () => resolveNext({ slot: { ...slot, slot_id: 'slot-2', replicate_number: 2, run_id: 'run-2' },
+      items: [], next_cursor: null }))
+    await screen.findByRole('heading', { name: 'Replicate 2 details' })
   })
 
   it('steps between replicate details across pages and returns to the same list position', async () => {

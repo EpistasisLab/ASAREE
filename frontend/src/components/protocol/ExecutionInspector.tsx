@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { ChevronLeft, ChevronRight, Coins, CircleDollarSign, Clock3 } from 'lucide-react'
 import { experimentsApi, type ResultsScope } from '@/api/client'
 import { Button } from '@/components/ui/button'
@@ -8,7 +8,7 @@ import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
 import { displayFactorCondition, formatMetricLabel, formatMetricValue } from '@/lib/experiment'
 import { metricCatalogEntry } from '@/lib/metricCatalog'
-import { executionKeys, useExecutionSummary } from '@/lib/executionQueries'
+import { executionKeys, preloadExecutionCell, preloadExecutionSlot, useExecutionSummary } from '@/lib/executionQueries'
 import type { AttemptDetail, ExecutionSlot, ExecutionUsageOptions, UsageRange } from '@/types/executionResults'
 import type { Experiment, ResultReplicate, ResultNodeRun } from '@/types/experiments'
 import { ReplicateResultDetail, type ResultsSelection } from './ResultsTab'
@@ -68,6 +68,23 @@ function SlotInspector({ experimentId, slotId, scope, onClose, onBackToCell, onS
   embedded?: boolean
   usageMetricKeys: Record<string, UsageMetric>
 }) {
+  const client = useQueryClient()
+  const [navigating, setNavigating] = useState(false)
+  const [navigationError, setNavigationError] = useState<string>()
+  const mounted = useRef(true)
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false } }, [])
+  async function navigate(slotId: string) {
+    setNavigating(true)
+    setNavigationError(undefined)
+    try {
+      await preloadExecutionSlot(client, experimentId, scope, slotId)
+      if (mounted.current) onSelectSlot?.(slotId)
+    } catch {
+      if (mounted.current) setNavigationError('Could not load that replicate. Try again.')
+    } finally {
+      if (mounted.current) setNavigating(false)
+    }
+  }
   const [selected, setSelected] = useState<string>()
   const [conversationOpen, setConversationOpen] = useState(false)
   const [evidenceOpen, setEvidenceOpen] = useState(false)
@@ -76,10 +93,10 @@ function SlotInspector({ experimentId, slotId, scope, onClose, onBackToCell, onS
   const neighbors = useQuery({ queryKey: [...executionKeys.root(experimentId), 'neighbors', scope, slotId],
     queryFn: ({ signal }) => experimentsApi.getExecutionNeighbors(experimentId, slotId, scope, signal), enabled: !!onSelectSlot })
   const history = useQuery({ queryKey: [...executionKeys.root(experimentId), 'attempts', scope, slotId, pager.cursor],
-    queryFn: ({ signal }) => experimentsApi.listExecutionAttempts(experimentId, slotId, scope, pager.cursor, signal) })
+    queryFn: ({ signal }) => experimentsApi.listExecutionAttempts(experimentId, slotId, scope, pager.cursor, signal), staleTime: 5000 })
   const runId = selected ?? history.data?.slot.run_id ?? history.data?.items[0]?.run_id
   const detail = useQuery({ queryKey: [...executionKeys.root(experimentId), 'attempt', scope, runId],
-    queryFn: ({ signal }) => experimentsApi.getExecutionAttempt(experimentId, runId!, scope, signal), enabled: !!runId,
+    queryFn: ({ signal }) => experimentsApi.getExecutionAttempt(experimentId, runId!, scope, signal), enabled: !!runId, staleTime: 5000,
     refetchInterval: query => query.state.data && ['pending','running','finalizing'].includes(query.state.data.status) ? 5000 : false })
   const slot = history.data?.slot
   const cell = useQuery({ queryKey: [...executionKeys.root(experimentId), 'cell', scope, slot?.cell_id],
@@ -96,8 +113,8 @@ function SlotInspector({ experimentId, slotId, scope, onClose, onBackToCell, onS
       <div className={onSelectSlot ? `grid grid-cols-[2rem_minmax(0,1fr)_2rem] items-stretch gap-2 ${embedded ? '@min-[800px]/inspectors:grid-cols-1' : ''}` : ''}>
         {onSelectSlot && <Button variant="outline" size="icon" className={`h-auto w-full ${embedded ? '@min-[800px]/inspectors:hidden' : ''}`}
           aria-label={summary.data?.unit === 'row' ? 'Previous row' : 'Previous replicate'} title={summary.data?.unit === 'row' ? 'Previous row' : 'Previous replicate'}
-          disabled={neighbors.isFetching || neighbors.isError || !neighbors.data?.previous_slot_id}
-          onClick={() => neighbors.data?.previous_slot_id && onSelectSlot(neighbors.data.previous_slot_id)}>
+          disabled={navigating || neighbors.isFetching || neighbors.isError || !neighbors.data?.previous_slot_id}
+          onClick={() => neighbors.data?.previous_slot_id && void navigate(neighbors.data.previous_slot_id)}>
           <ChevronLeft aria-hidden="true" />
         </Button>}
     <Card className="min-w-0 gap-1 p-2">
@@ -109,12 +126,14 @@ function SlotInspector({ experimentId, slotId, scope, onClose, onBackToCell, onS
     </Card>
         {onSelectSlot && <Button variant="outline" size="icon" className={`h-auto w-full ${embedded ? '@min-[800px]/inspectors:hidden' : ''}`}
           aria-label={summary.data?.unit === 'row' ? 'Next row' : 'Next replicate'} title={summary.data?.unit === 'row' ? 'Next row' : 'Next replicate'}
-          disabled={neighbors.isFetching || neighbors.isError || !neighbors.data?.next_slot_id}
-          onClick={() => neighbors.data?.next_slot_id && onSelectSlot(neighbors.data.next_slot_id)}>
+          disabled={navigating || neighbors.isFetching || neighbors.isError || !neighbors.data?.next_slot_id}
+          onClick={() => neighbors.data?.next_slot_id && void navigate(neighbors.data.next_slot_id)}>
           <ChevronRight aria-hidden="true" />
         </Button>}
       </div>
       {neighbors.error && <p role="alert" className={`mt-2 text-xs text-destructive ${embedded ? '@min-[800px]/inspectors:hidden' : ''}`}>Navigation unavailable. <Button variant="ghost" size="xs" disabled={neighbors.isFetching} onClick={() => void neighbors.refetch()}>Refresh</Button></p>}
+      {navigating && <p role="status" className="mt-2 text-xs text-muted-foreground">Loading replicate…</p>}
+      {navigationError && <p role="alert" className="mt-2 text-xs text-destructive">{navigationError}</p>}
     </div>
     <div className="mt-2 space-y-2"><h3 className="text-xs font-medium">Attempts</h3>{history.data?.items.map(attempt => <Button key={attempt.run_id} size="xs" variant={runId === attempt.run_id ? 'default' : 'outline'} className="mr-1 mb-1" onClick={() => { setSelected(attempt.run_id); setConversationOpen(false) }}>{new Date(attempt.created_at).toLocaleString()} · {attempt.status}{attempt.current ? ' · current' : ' · prior'}</Button>)}
       <CursorControls next={history.data?.next_cursor} back={pager.back} onNext={pager.next} onBack={pager.previous} busy={history.isFetching} />
@@ -162,16 +181,34 @@ export function ExecutionInspector({ experimentId, experiment, selection, onClos
 }
 
 function CellInspector({ experimentId, selection, scope, onClose, usageMetricKeys }: { experimentId: string; selection: Extract<ResultsSelection, { type: 'cell' }>; scope: ResultsScope; onClose: () => void; usageMetricKeys: Record<string, UsageMetric> }) {
+  const client = useQueryClient()
+  const [navigating, setNavigating] = useState(false)
+  const [navigationError, setNavigationError] = useState<string>()
+  const mounted = useRef(true)
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false } }, [])
   const [navigation, setNavigation] = useState({ origin: selection, current: selection })
   const current = navigation.origin === selection ? navigation.current : selection
+  async function navigate(cellId: string) {
+    setNavigating(true)
+    setNavigationError(undefined)
+    try {
+      await preloadExecutionCell(client, experimentId, scope, cellId)
+      if (mounted.current) setNavigation({ origin: selection, current: { type: 'cell', cellId, scope } })
+    } catch {
+      if (mounted.current) setNavigationError('Could not load that cell. Try again.')
+    } finally {
+      if (mounted.current) setNavigating(false)
+    }
+  }
   return <CellInspectorContent key={current.cellId ?? current.cellLabel} experimentId={experimentId} selection={current}
-    scope={scope} onClose={onClose} usageMetricKeys={usageMetricKeys} onSelectCell={cellId => setNavigation({ origin: selection, current: { type: 'cell', cellId, scope } })} />
+    scope={scope} onClose={onClose} usageMetricKeys={usageMetricKeys} navigating={navigating} navigationError={navigationError} onSelectCell={cellId => void navigate(cellId)} />
 }
 
-function CellInspectorContent({ experimentId, selection, scope, onClose, onSelectCell, usageMetricKeys }: {
+function CellInspectorContent({ experimentId, selection, scope, onClose, onSelectCell, usageMetricKeys, navigating, navigationError }: {
   experimentId: string; selection: Extract<ResultsSelection, { type: 'cell' }>; scope: ResultsScope
   onClose: () => void; onSelectCell: (cellId: string) => void
   usageMetricKeys: Record<string, UsageMetric>
+  navigating: boolean; navigationError?: string
 }) {
   const [slot, setSlot] = useState<string>()
   const [range, setRange] = useState<UsageRange | null>(null)
@@ -185,7 +222,7 @@ function CellInspectorContent({ experimentId, selection, scope, onClose, onSelec
   const listPanel = useRef<HTMLElement>(null)
   const savedScroll = useRef(0)
   const cell = useQuery({ queryKey: [...executionKeys.root(experimentId), 'cell', scope, selection.cellId ?? selection.cellLabel],
-    queryFn: ({ signal }) => experimentsApi.getExecutionCell(experimentId, scope, { cell_id: selection.cellId, cell_label: selection.cellLabel }, signal) })
+    queryFn: ({ signal }) => experimentsApi.getExecutionCell(experimentId, scope, { cell_id: selection.cellId, cell_label: selection.cellLabel }, signal), staleTime: 5000 })
   const summary = useExecutionSummary(experimentId, scope)
   useGenerationRefresh(cell.refetch, summary.data?.generation)
   useEffect(() => { if (!slot && listPanel.current) listPanel.current.scrollTop = savedScroll.current }, [slot])
@@ -199,7 +236,7 @@ function CellInspectorContent({ experimentId, selection, scope, onClose, onSelec
     {cell.data && <>
       <div className="-mx-3 mb-4 grid grid-cols-[2rem_minmax(0,1fr)_2rem] items-stretch gap-2 border-b bg-muted/20 px-3 pb-4 pt-2">
         <Button variant="outline" size="icon" className="h-auto w-full" aria-label="Previous cell" title="Previous cell"
-          disabled={cell.isFetching || !cell.data.previous_cell_id} onClick={() => cell.data?.previous_cell_id && onSelectCell(cell.data.previous_cell_id)}>
+          disabled={navigating || cell.isFetching || !cell.data.previous_cell_id} onClick={() => cell.data?.previous_cell_id && onSelectCell(cell.data.previous_cell_id)}>
           <ChevronLeft aria-hidden="true" />
         </Button>
         <Card className="min-w-0 gap-1 p-2">
@@ -210,10 +247,12 @@ function CellInspectorContent({ experimentId, selection, scope, onClose, onSelec
           <p className="truncate text-sm font-medium" title={cellLabel}>{cellLabel}</p>
         </Card>
         <Button variant="outline" size="icon" className="h-auto w-full" aria-label="Next cell" title="Next cell"
-          disabled={cell.isFetching || !cell.data.next_cell_id} onClick={() => cell.data?.next_cell_id && onSelectCell(cell.data.next_cell_id)}>
+          disabled={navigating || cell.isFetching || !cell.data.next_cell_id} onClick={() => cell.data?.next_cell_id && onSelectCell(cell.data.next_cell_id)}>
           <ChevronRight aria-hidden="true" />
         </Button>
       </div>
+      {navigating && <p role="status" className="mb-2 text-xs text-muted-foreground">Loading cell…</p>}
+      {navigationError && <p role="alert" className="mb-2 text-xs text-destructive">{navigationError}</p>}
       <CellResultStatus cell={cell.data} unit={summary.data?.unit} />
       <section aria-label="Cell measurements" className="my-4 space-y-2">
         <h3 className="text-sm font-medium">Measurements</h3>

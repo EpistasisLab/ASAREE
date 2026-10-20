@@ -331,6 +331,7 @@ export function ProtocolCanvasPage() {
             regenerationRequired={impactQuery.data?.regeneration_required ?? false}
             unboundFactors={unboundFactors}
             onResultSelection={setResultSelection}
+            selectedResultCellId={resultSelection?.type === 'cell' ? resultSelection.cellId ?? null : null}
           />
 
           {protocolQuery.isLoading ? (

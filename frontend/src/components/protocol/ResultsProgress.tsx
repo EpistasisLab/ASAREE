@@ -6,10 +6,12 @@ import type { ExecutionCell, ExecutionSummary } from '@/types/executionResults'
 import { CellUsageChart } from './CellUsageChart'
 import { experimentResultStatus, formatUsageValue, usageMetricLabels, type UsageMetric } from '@/lib/resultUsage'
 
-export function ResultsProgress({ summary, cells, cellsLoading, cellsError, attemptScope = 'latest', onAttemptScopeChange, chartPagination, selectedMetric, onMetricChange }: {
+export function ResultsProgress({ summary, cells, cellsLoading, cellsError, attemptScope = 'latest', onAttemptScopeChange, chartPagination, selectedMetric, onMetricChange, onSelectCell, selectedCellId }: {
   summary: ExecutionSummary; cells: ExecutionCell[]; cellsLoading: boolean; cellsError?: string
   attemptScope?: 'latest' | 'all'; onAttemptScopeChange?: (scope: 'latest' | 'all') => void; chartPagination?: ReactNode
   selectedMetric?: UsageMetric; onMetricChange?: (metric: UsageMetric) => void
+  onSelectCell?: (cell: ExecutionCell) => void
+  selectedCellId?: string
 }) {
   const [internalMetric, setInternalMetric] = useState<UsageMetric>('total_tokens')
   const metric = selectedMetric ?? internalMetric
@@ -62,6 +64,6 @@ export function ResultsProgress({ summary, cells, cellsLoading, cellsError, atte
         </Button>
       </Card>)}
     </div>
-    <CellUsageChart cells={cells} metric={metric} loading={cellsLoading} error={cellsError} attemptScope={attemptScope} pagination={chartPagination} completed={completedExperiment} />
+    <CellUsageChart cells={cells} metric={metric} loading={cellsLoading} error={cellsError} attemptScope={attemptScope} pagination={chartPagination} completed={completedExperiment} onSelectCell={onSelectCell} selectedCellId={selectedCellId} />
   </section>
 }

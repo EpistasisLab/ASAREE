@@ -89,18 +89,21 @@ export function useGenerationRefresh(refetch: () => unknown, generation?: number
   }, [generation, refetch])
 }
 
-export function ExecutionBrowser({ experimentId, scope, experiment, mode, onSelect, controls, batchControls, actions, cellActions }: {
+export function ExecutionBrowser({ experimentId, scope, experiment, mode, onSelect, controls, batchControls, actions, cellActions, selectedCellId: controlledSelectedCellId }: {
   experimentId: string; scope: ResultsScope; experiment?: Experiment; mode: 'runs' | 'results'
   onSelect: (selection: ResultsSelection) => void; controls?: React.ReactNode
   batchControls?: React.ReactNode
   actions?: (row: ExecutionSlot) => React.ReactNode
   cellActions?: (cell: ExecutionCell) => React.ReactNode
+  selectedCellId?: string | null
 }) {
   const summary = useExecutionSummary(experimentId, scope)
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set())
   const [filters, setFilters] = useState<ExecutionFilters>(emptyExecutionFilters)
   const [attemptScope, setAttemptScope] = useState<'latest' | 'all'>('latest')
   const [metric, setMetric] = useState<UsageMetric>('total_tokens')
+  const [internalSelectedCellId, setSelectedCellId] = useState<string>()
+  const selectedCellId = controlledSelectedCellId === undefined ? internalSelectedCellId : controlledSelectedCellId ?? undefined
   const pager = useCursor()
   const params = { cursor: pager.cursor, limit: EXECUTION_PAGE_SIZE, ...filterParams(filters),
     ...(filters.resultStatus ? { result_status: filters.resultStatus } : {}),
@@ -113,6 +116,10 @@ export function ExecutionBrowser({ experimentId, scope, experiment, mode, onSele
   // A summary refresh does not change the stable label/replicate order.
   useGenerationRefresh(cells.refetch, summary.data?.generation)
   const refresh = () => { void summary.refetch(); void cells.refetch() }
+  const selectCell = (cell: ExecutionCell) => {
+    setSelectedCellId(cell.cell_id)
+    onSelect({ type: 'cell', cellId: cell.cell_id, cellLabel: cell.cell_label, scope })
+  }
   const cellBody = <div className="space-y-2">
     {summary.data?.unit === 'row' && <p className="text-xs text-muted-foreground">Per-row outcomes are reported individually. Aggregation, ranking and factorial analysis are unavailable.</p>}
     <RunBrowserControls filters={filters} onChange={changeFilters} />
@@ -122,7 +129,7 @@ export function ExecutionBrowser({ experimentId, scope, experiment, mode, onSele
       {mode === 'results' ? !!cells.data?.items.length && <ResultsCellsTable cells={cells.data.items} metric={metric}
         designSpec={summary.data?.design_spec ?? experiment?.design_spec}
         attemptScope={attemptScope} unit={summary.data?.unit ?? 'replicate'} startIndex={pager.pageIndex * EXECUTION_PAGE_SIZE}
-        onSelect={cell => onSelect({ type: 'cell', cellId: cell.cell_id, cellLabel: cell.cell_label, scope })} />
+        onSelect={selectCell} />
         : cells.data?.items.map(cell => <CellCard key={cell.cell_id} label={cell.cell_label}
         cellNumber={cell.cell_number}
         conditions={Object.entries(cell.factor_values).map(([name, value]) => displayFactorCondition(name, value, summary.data?.design_spec ?? experiment?.design_spec, cell.cell_label))}
@@ -169,7 +176,7 @@ export function ExecutionBrowser({ experimentId, scope, experiment, mode, onSele
   return mode === 'results' && experiment
     ? <ResultsPanel experimentId={experimentId} experimentName={experiment.name} scope={scope}
       progress={summary.data?.ready && <ResultsProgress summary={summary.data} cells={cells.data?.items ?? []}
-        selectedMetric={metric} onMetricChange={setMetric}
+        selectedMetric={metric} onMetricChange={setMetric} onSelectCell={selectCell} selectedCellId={selectedCellId}
         cellsLoading={cells.isPending} cellsError={cells.error?.message} attemptScope={attemptScope} onAttemptScopeChange={setAttemptScope}
         chartPagination={!!cells.data?.items.length && <div className="flex flex-wrap items-center justify-end gap-2">
           <span className="font-mono text-[11px] text-muted-foreground">Cells {(pager.pageIndex * EXECUTION_PAGE_SIZE + 1).toLocaleString()}–{(pager.pageIndex * EXECUTION_PAGE_SIZE + cells.data.items.length).toLocaleString()}{cells.data.total !== undefined && ` of ${cells.data.total.toLocaleString()}`}</span>

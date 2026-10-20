@@ -73,6 +73,7 @@ export function ExperimentSidePanel({
   regenerationRequired,
   unboundFactors,
   onResultSelection,
+  selectedResultCellId,
   version,
   viewingHistory = false,
   onDraftBusyChange,
@@ -88,6 +89,7 @@ export function ExperimentSidePanel({
   regenerationRequired: boolean
   unboundFactors: string[]
   onResultSelection: (selection: ResultsSelection | null) => void
+  selectedResultCellId?: string | null
   version?: ProtocolRevision
   viewingHistory?: boolean
   onDraftBusyChange?: (busy: boolean) => void
@@ -287,6 +289,7 @@ export function ExperimentSidePanel({
                 />
               ) : activeTab === 'results' ? (
                 <ResultsTab
+                  selectedCellId={selectedResultCellId ?? null}
                   versionId={version?.id ?? protocol?.published_revision_id ?? undefined}
                   protocolId={protocol?.id}
                   experimentId={experiment.id}

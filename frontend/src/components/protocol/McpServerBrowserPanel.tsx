@@ -2,6 +2,9 @@ import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { ArrowLeft, Plug, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { Card } from '@/components/ui/card'
+import { nodeAccent } from '@/lib/nodeAccent'
+import { cardAccent } from '@/lib/utils'
 import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
 import { mcpServersApi } from '@/api/client'
@@ -72,19 +75,21 @@ export function McpServerBrowserPanel({
       {/* Outside the loading/error/empty branches below on purpose: connecting
           a server is exactly what you want to do when the list failed to load
           or has nothing in it. */}
-      <button
-        type="button"
-        onClick={() => setConnectOpen(true)}
-        className="flex shrink-0 cursor-pointer items-start gap-2.5 rounded-lg border border-primary/40 bg-primary/5 px-3 py-2.5 text-left text-sm shadow-[0_0_16px_-6px_var(--primary)] ring-1 ring-primary/30 transition-colors hover:bg-primary/10"
-      >
-        <Plug className="mt-0.5 size-4 shrink-0 text-primary" />
-        <div className="min-w-0 flex-1">
-          <p className="font-medium">MCP Client Tool</p>
-          <p className="text-xs text-muted-foreground">
-            Connect your own server -- a local stdio command, or a remote streamable HTTP endpoint
-          </p>
-        </div>
-      </button>
+      <Card style={cardAccent(nodeAccent('mcp_client_tool'))} className="shrink-0 gap-0 p-0">
+        <button
+          type="button"
+          onClick={() => setConnectOpen(true)}
+          className="flex w-full cursor-pointer items-start gap-2.5 rounded-lg px-3 py-2.5 text-left text-sm transition-colors hover:bg-muted"
+        >
+          <Plug className="mt-0.5 size-4 shrink-0 text-[color:var(--card-accent,var(--primary))]" />
+          <div className="min-w-0 flex-1">
+            <p className="font-medium">MCP Client Tool</p>
+            <p className="text-xs text-muted-foreground">
+              Connect your own server -- a local stdio command, or a remote streamable HTTP endpoint
+            </p>
+          </div>
+        </button>
+      </Card>
 
       <ConnectMcpServerDialog
         open={connectOpen}
@@ -112,26 +117,27 @@ export function McpServerBrowserPanel({
             const preset = presetForServer(server)
             const toolCount = server.capabilities?.tools?.length ?? 0
             return (
-              <button
-                key={server.id}
-                type="button"
-                onClick={() => onPick(server)}
-                className="flex w-full min-w-0 cursor-pointer items-start gap-2.5 rounded-lg border bg-background px-3 py-2.5 text-left text-sm shadow-[0_0_16px_-6px_var(--primary)] ring-1 ring-primary/20 transition-colors hover:bg-muted"
-              >
-                <preset.icon className="mt-0.5 size-4 shrink-0 text-primary" />
-                <div className="min-w-0 flex-1">
-                  <p className="truncate font-medium" title={preset.label}>{preset.label}</p>
-                  <p className="truncate text-xs text-muted-foreground" title={descriptionForServer(server)}>
-                    {descriptionForServer(server)}
-                  </p>
-                  {/* The registered id and tool count, monospaced -- the
-                      precise, technical identity behind the friendly label,
-                      so it's unambiguous which process is being wired in. */}
-                  <p className="truncate font-mono text-[11px] text-muted-foreground/70">
-                    {server.name} · {toolCount} {toolCount === 1 ? 'tool' : 'tools'}
-                  </p>
-                </div>
-              </button>
+              <Card key={server.id} style={cardAccent(nodeAccent('mcp_tool'))} className="gap-0 p-0">
+                <button
+                  type="button"
+                  onClick={() => onPick(server)}
+                  className="flex w-full min-w-0 cursor-pointer items-start gap-2.5 rounded-lg px-3 py-2.5 text-left text-sm transition-colors hover:bg-muted"
+                >
+                  <preset.icon className="mt-0.5 size-4 shrink-0 text-[color:var(--card-accent,var(--primary))]" />
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate font-medium" title={preset.label}>{preset.label}</p>
+                    <p className="truncate text-xs text-muted-foreground" title={descriptionForServer(server)}>
+                      {descriptionForServer(server)}
+                    </p>
+                    {/* The registered id and tool count, monospaced -- the
+                        precise, technical identity behind the friendly label,
+                        so it's unambiguous which process is being wired in. */}
+                    <p className="truncate font-mono text-[11px] text-muted-foreground/70">
+                      {server.name} · {toolCount} {toolCount === 1 ? 'tool' : 'tools'}
+                    </p>
+                  </div>
+                </button>
+              </Card>
             )
           })}
         </div>

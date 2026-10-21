@@ -108,7 +108,6 @@ async def test_create_experiment_returns_a_persisted_recommended_measurement_pla
             "valueType": "number",
             "direction": "minimize",
             "aggregation": "sum",
-            "primary": False,
             "unit": "USD",
         },
         {
@@ -120,7 +119,6 @@ async def test_create_experiment_returns_a_persisted_recommended_measurement_pla
             "valueType": "number",
             "direction": "minimize",
             "aggregation": "sum",
-            "primary": False,
             "unit": "seconds",
         },
         {
@@ -132,7 +130,6 @@ async def test_create_experiment_returns_a_persisted_recommended_measurement_pla
             "valueType": "number",
             "direction": "minimize",
             "aggregation": "sum",
-            "primary": False,
             "unit": "tokens",
         },
     ]
@@ -144,7 +141,6 @@ async def test_create_experiment_returns_a_persisted_recommended_measurement_pla
                 "value_type": "number",
                 "direction": "minimize",
                 "aggregation": "sum",
-                "primary": False,
                 "description": "Estimated provider cost for the run.",
                 "unit": "USD",
             },
@@ -154,7 +150,6 @@ async def test_create_experiment_returns_a_persisted_recommended_measurement_pla
                 "value_type": "number",
                 "direction": "minimize",
                 "aggregation": "sum",
-                "primary": False,
                 "description": "Wall-clock duration of the run.",
                 "unit": "seconds",
             },
@@ -164,7 +159,6 @@ async def test_create_experiment_returns_a_persisted_recommended_measurement_pla
                 "value_type": "number",
                 "direction": "minimize",
                 "aggregation": "sum",
-                "primary": False,
                 "description": "Combined input and output tokens for the run.",
                 "unit": "tokens",
             },
@@ -286,7 +280,6 @@ async def test_create_experiment_preserves_a_caller_supplied_measurement_plan(ow
                     "valueType": "number",
                     "direction": "minimize",
                     "aggregation": "sum",
-                    "primary": False,
                     "unit": "seconds",
                 }
             ]

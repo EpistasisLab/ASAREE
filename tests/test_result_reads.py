@@ -312,10 +312,11 @@ async def test_row_cell_progress_counts_complete_replicates(results_db):
                                design_revision_id=selected.design_revision_id,
                                replicate_result_id=parent.id, row_result_id=row.id,
                                status="running" if (number, index) == (2, 1) else "completed"))
-    db.add(ResultRefresh(scope_key=selected.key, protocol_id=selected.protocol_id,
-                         protocol_revision_id=selected.protocol_revision_id,
-                         design_revision_id=selected.design_revision_id,
-                         summary={"source_row_count": 2}))
+    await db.flush()
+    # Result-change triggers already create this scope's refresh row.
+    refresh = await db.get(ResultRefresh, selected.key)
+    assert refresh is not None
+    refresh.summary = {"source_row_count": 2}
     await db.flush()
     result = await read_cells(db, selected)
     assert result["items"][0]["completed_replicate_count"] == 1
@@ -768,10 +769,11 @@ async def test_cell_result_readiness_requires_all_planned_replicates_and_applica
                 db.add(ProtocolRun(protocol_id=selected.protocol_id, owner_id=user.id,
                     protocol_revision_id=selected.protocol_revision_id, design_revision_id=selected.design_revision_id,
                     replicate_result_id=parent.id, replicate_label=parent.replicate_label, status=status,
-                    result_summary={'truncated': truncated, 'evaluation_state': evaluation, 'observations': [
+                    node_runs={'agent': {'truncation': {}}} if truncated else {},
+                    attempt_result={'evaluation_state': evaluation, 'measurement': {'observations': [
                         {'metric_id': identifier, 'status': state}
                         for identifier, state in [('auc', auc), ('calibration', calibration)] if state
-                    ]}))
+                    ]}}))
     await db.flush()
     await read_summary(db, selected)
     refresh = await db.get(ResultRefresh, selected.key)
@@ -852,7 +854,7 @@ async def test_row_cell_waits_for_all_forecast_rows_before_becoming_ready(result
             protocol_revision_id=selected.protocol_revision_id, design_revision_id=selected.design_revision_id,
             replicate_result_id=parent.id, row_result_id=row.id,
             replicate_label=parent.replicate_label, status='completed',
-            result_summary={'observations': [{'metric_id': 'auc', 'status': 'measured'}]}))
+            attempt_result={'measurement': {'observations': [{'metric_id': 'auc', 'status': 'measured'}]}}))
         await db.flush()
         await rebuild_result_summary(db, selected, refresh.generation)
         await db.refresh(refresh)

@@ -335,15 +335,15 @@ export function PersonaNodeInspector({
         <FactorBindableField
           experimentId={experimentId}
           nodeId={node.id}
-          fieldPath="config.persona_text"
+          fieldPath="config"
           creationInToolbar
-          defaultLabel="Persona text"
+          defaultLabel="Persona"
           nodeLabel={factorNodeLabel}
           levelType="persona_text"
-          currentValue={config.persona_text}
-          boundFactorName={bindings['config.persona_text']}
-          onBind={(name) => bindFactor('config.persona_text', name)}
-          onUnbind={() => unbindFactor('config.persona_text')}
+          currentValue={config}
+          boundFactorName={bindings.config}
+          onBind={(name) => bindFactor('config', name)}
+          onUnbind={() => unbindFactor('config')}
         >
           {(trigger) => trigger}
         </FactorBindableField>

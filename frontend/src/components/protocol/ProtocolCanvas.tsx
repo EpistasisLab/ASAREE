@@ -109,6 +109,7 @@ import type { Skill } from '@/types/skills'
 import { AddNodePanel } from './AddNodePanel'
 import { AgentNodeInspector } from './AgentNodeInspector'
 import { agentTracedLabel, factorBoundField, factorCreationFields, revealsHiddenMcpServers, toolFactorServerId, type UnboundField } from './bindableFields'
+import { computeFactorName, seedStructuredLevels } from './factorLevels'
 import { CanvasControls } from './CanvasControls'
 import { CriticGateNodeInspector } from './CriticGateNodeInspector'
 import { ToolStepNodeInspector } from './ToolStepNodeInspector'
@@ -3061,9 +3062,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
       {personaFactorNodeId && (() => {
         const personaNode = nodes.find((n) => n.id === personaFactorNodeId)
         if (!personaNode) return null
-        const boundFactorName = (personaNode.data.factor_bindings as Record<string, string> | undefined)?.[
-          'config.persona_text'
-        ]
+        const boundFactorName = (personaNode.data.factor_bindings as Record<string, string> | undefined)?.config
         const existingFactor = factors.find((f) => f.name === boundFactorName)
         return (
           <FactorEditorDialog
@@ -3075,16 +3074,12 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
             }}
             factor={
               existingFactor || {
-                name: '',
-                levels: [],
+                name: computeFactorName(agentTracedLabel(personaNode, edges, nodes), 'Persona', factors.map((f) => f.name)),
+                levels: seedStructuredLevels(personaNode.data.config, 'persona_text'),
                 level_type: 'persona_text',
               }
             }
-            nodeForDirectBinding={{
-              nodeId: personaFactorNodeId,
-              fieldPath: 'config.persona_text',
-              levelType: 'persona_text',
-            }}
+            boundField={{ nodeId: personaFactorNodeId, fieldPath: 'config' }}
             canvasAgentCount={nodes.filter((node) => node.type === 'agent' || node.type === 'sub_agent').length}
             onSave={async (factor) => {
               const fresh = await experimentsApi.get(experimentId!)
@@ -3103,11 +3098,13 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
                   ],
                 },
               })
-              bindFactorOnNode(personaFactorNodeId, 'config.persona_text', factor.name)
+              bindFactorOnNode(personaFactorNodeId, 'config', factor.name)
+              // Mirror level 1 into the node so reconcileFactorBaselines sees
+              // canvas == baseline and doesn't rewrite the level back.
+              setNodes((current) => graphWithFactorBaseline({ nodes: current as unknown as ProtocolNode[], edges: [] }, factor.name, factor.levels[0]).nodes as unknown as Node[])
               queryClient.invalidateQueries({ queryKey: ['experiments', experimentId] })
               queryClient.invalidateQueries({ queryKey: ['experiments', experimentId, 'design-impact'] })
             }}
-            existingFactorNames={factors.map((f) => f.name).filter((name) => name !== boundFactorName)}
             revealHiddenServers={revealsHiddenMcpServers(nodes)}
           />
         )

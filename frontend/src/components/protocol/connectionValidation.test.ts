@@ -1,10 +1,26 @@
 import type { Connection, Edge, Node } from '@xyflow/react'
 import { describe, expect, it } from 'vitest'
 import { isProtocolConnectionValid } from './connectionValidation'
+import { isMainEdge } from '@/lib/coordinationStrategy'
 
 const target: Node = { id: 'agent', type: 'agent', position: { x: 0, y: 0 }, data: {} }
 
 describe('isProtocolConnectionValid', () => {
+  it('treats a persona as configuration rather than an upstream pipeline input', () => {
+    expect(isMainEdge({ targetHandle: 'persona' })).toBe(false)
+    expect(isMainEdge({ targetHandle: null })).toBe(true)
+  })
+
+  it('allows a sequential handoff into an Agent that already has a persona', () => {
+    const upstream: Node = { ...target, id: 'upstream' }
+    const persona: Node = { ...target, id: 'persona', type: 'persona' }
+    const connection: Connection = { source: upstream.id, target: target.id, sourceHandle: null, targetHandle: null }
+    const personaEdge: Edge = { id: 'persona-edge', source: persona.id, target: target.id, targetHandle: 'persona' }
+    const nodes = [upstream, target, persona]
+    expect(isProtocolConnectionValid(connection, nodes, [personaEdge], true)).toBe(true)
+    expect(isProtocolConnectionValid(connection, nodes, [personaEdge, { ...connection, id: 'handoff' }], true)).toBe(false)
+  })
+
   it('allows the same Sub-Agent to connect to multiple parent Agents', () => {
     const child: Node = { id: 'child', type: 'sub_agent', position: { x: 0, y: 0 }, data: {} }
     const other = { ...target, id: 'other' }
@@ -53,6 +69,7 @@ describe('isProtocolConnectionValid', () => {
     ['tool', 'mcp_tool'],
     ['dataset', 'dataset'],
     ['skill', 'skill'],
+    ['persona', 'persona'],
     ['knowledge', 'okf_bundle'],
   ])('continues to accept multiple %s connections', (slot, sourceType) => {
     const firstSource: Node = { id: 'first', type: sourceType, position: { x: 0, y: 0 }, data: {} }

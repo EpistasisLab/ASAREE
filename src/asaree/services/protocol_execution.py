@@ -87,6 +87,7 @@ from asaree.services.factorial_cells import get_replicate, list_replicates, upse
 from asaree.services.factorial_row_results import claim_row_attempt, ensure_row_result, get_row_result
 from asaree.services.knowledge_factors import knowledge_id, validate_knowledge_factors
 from asaree.services.model_config import build_model_config
+from asaree.services.persona_factors import validate_persona_factors
 from asaree.services.protocol_revisions import get_revision
 from asaree.services.protocol_runs import (
     RERUN_ON_REQUEST_STATUSES,
@@ -2118,15 +2119,23 @@ def _resolve_persona_configs(graph: dict[str, Any], node_id: str) -> list[str]:
     prefix -- the persona text becomes part of the agent's instructions. Multiple
     personas are concatenated with double newlines between them.
 
-    A node with ``enabled: False`` or no ``persona_text`` is skipped."""
+    A connector factor overrides individual enabled switches. Without one,
+    a node with ``enabled: False`` is skipped. Empty prompts contribute no prefix."""
     nodes, _downstream, _upstream = _adjacency(graph)
     persona_texts: list[str] = []
+    agent_data = (nodes.get(node_id) or {}).get("data") or {}
+    selection = (
+        agent_data.get("persona_selection")
+        if (agent_data.get("factor_bindings") or {}).get("persona_selection") else None
+    )
     for edge in _edges_with_handle(graph, node_id, "persona", direction="incoming"):
         source = nodes.get(edge["source"])
         if source is None or source.get("type") != "persona":
             continue
         persona_config = (source.get("data") or {}).get("config") or {}
-        if not persona_config.get("enabled", True):
+        if selection is not None and source["id"] not in selection:
+            continue
+        if selection is None and not persona_config.get("enabled", True):
             continue
         persona_text = persona_config.get("persona_text")
         if persona_text and str(persona_text).strip():
@@ -4916,6 +4925,7 @@ async def plan_cell_runs(
         try:
             validate_factor_bindings(design_spec, graph)
             await validate_skill_factors(design_spec, graph, owner_id)
+            await validate_persona_factors(design_spec, graph, owner_id)
             await validate_knowledge_factors(design_spec, graph, owner_id)
             await validate_dataset_factors(design_spec, graph, owner_id, db)
         except ValueError as exc:
@@ -5318,6 +5328,7 @@ async def plan_single_replicate_run(
     try:
         validate_factor_bindings(design_spec, graph)
         await validate_skill_factors(design_spec, graph, owner_id)
+        await validate_persona_factors(design_spec, graph, owner_id)
         await validate_knowledge_factors(design_spec, graph, owner_id)
         await validate_dataset_factors(design_spec, graph, owner_id, db)
     except ValueError as exc:

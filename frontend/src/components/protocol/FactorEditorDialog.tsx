@@ -1,9 +1,10 @@
+import { PersonaFactorEditor } from './PersonaFactorEditor'
 import type { ModelCapabilities } from '@/types/llmSettings'
 import { modelCapabilities } from '@/lib/modelCapabilities'
 import { SubAgentFactorEditor } from './SubAgentFactorEditor'
 import type { ProtocolGraph } from '@/types/protocols'
-import { useEffect, useMemo, useState, type SetStateAction } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useEffect, useId, useMemo, useState, type SetStateAction } from 'react'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Plus, Split, X } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -39,9 +40,12 @@ import { PythonCodeEditor } from './PythonCodeEditor'
 import { useDialogAutosave } from './useDialogAutosave'
 import { useDialogDraft } from './useDialogDraft'
 import type { DesignFactor } from '@/types/experiments'
-import { Library, Upload } from 'lucide-react'
+import { Upload } from 'lucide-react'
 import { DatasetFactorEditor } from './DatasetFactorEditor'
-import { PERSONA_LIBRARY } from './personaLibrary'
+import { PersonaLibraryPicker } from './PersonaLibraryPicker'
+import { configForSavedPersona } from './usePersonaLibrary'
+import { personasApi } from '@/api/client'
+import type { PersonaNodeConfig } from '@/types/protocols'
 import { KnowledgeFactorEditor } from './KnowledgeFactorEditor'
 import { ScriptFactorEditor } from './ScriptFactorEditor'
 import { ToolFactorEditor } from './ToolFactorEditor'
@@ -422,189 +426,33 @@ function DatasetConfigLevelRow({
 }
 
 function PersonaLevelRow({ value, onChange }: { value: StructuredLevel; onChange: (next: StructuredLevel) => void }) {
-  const [selectedPersonas, setSelectedPersonas] = useState<string[]>(() => {
-    const ids = value.persona_ids as string[] | undefined
-    if (ids && Array.isArray(ids) && ids.length > 0) return ids
-    const id = value.persona_id as string | null
-    return id ? [id] : ['']
+  const uploadId = useId()
+  const client = useQueryClient()
+  const upload = useMutation({
+    mutationFn: personasApi.upload,
+    onSuccess: () => client.invalidateQueries({ queryKey: ['personas'] }),
   })
-
-  // Sync state when value changes (e.g., when loading an existing factor for editing)
-  useEffect(() => {
-    const ids = value.persona_ids as string[] | undefined
-    if (ids && Array.isArray(ids) && ids.length > 0) {
-      setSelectedPersonas(ids)
-    } else {
-      const id = value.persona_id as string | null
-      setSelectedPersonas(id ? [id] : [''])
-    }
-  }, [value.persona_ids, value.persona_id])
-
-  function patch(patch: StructuredLevel) {
-    onChange({ ...value, ...patch })
-  }
-
-  function updatePersona(index: number, newId: string | null) {
-    const newSelected = [...selectedPersonas]
-    newSelected[index] = newId || ''
-    const filtered = newSelected.filter(id => id !== '')
-    setSelectedPersonas(filtered.length > 0 ? filtered : [''])
-
-    const combinedText = filtered
-      .map(id => PERSONA_LIBRARY.find(p => p.id === id)?.prompt ?? '')
-      .filter(Boolean)
-      .join('\n\n')
-
-    const allLabels = filtered
-      .map(id => PERSONA_LIBRARY.find(p => p.id === id)?.label)
-      .filter(Boolean)
-      .join(' + ')
-
-    patch({
-      persona_text: combinedText,
-      persona_id: filtered[0] || null,
-      persona_ids: filtered,
-      persona_label: allLabels || null,
-      mode: 'library',
-      persona_file: null
-    })
-  }
-
-  function addPersona() {
-    if (selectedPersonas.length < 5) {
-      setSelectedPersonas([...selectedPersonas, ''])
-    }
-  }
-
-  function removePersona(index: number) {
-    const newSelected = selectedPersonas.filter((_, i) => i !== index)
-    setSelectedPersonas(newSelected.length > 0 ? newSelected : [''])
-
-    const combinedText = newSelected
-      .map(id => PERSONA_LIBRARY.find(p => p.id === id)?.prompt ?? '')
-      .filter(Boolean)
-      .join('\n\n')
-
-    const allLabels = newSelected
-      .map(id => PERSONA_LIBRARY.find(p => p.id === id)?.label)
-      .filter(Boolean)
-      .join(' + ')
-
-    patch({
-      persona_text: combinedText,
-      persona_id: newSelected[0] || null,
-      persona_ids: newSelected,
-      persona_label: allLabels || null,
-      mode: newSelected.length > 0 ? 'library' : 'custom',
-      persona_file: null
-    })
-  }
-
-  async function handleFileUpload(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0]
-    if (!file) return
-    const text = await file.text()
-    patch({
-      persona_text: text,
-      persona_file: file.name,
-      mode: 'file',
-      persona_id: null,
-      persona_ids: [],
-      persona_label: null
-    })
-    setSelectedPersonas([''])
-  }
-
   return (
     <div className="space-y-2 rounded-lg border p-2">
-      <div className="space-y-1.5">
-        <Label className="text-xs">Choose from library</Label>
-        <div className="space-y-1.5">
-          {selectedPersonas.map((personaId, index) => (
-            <div key={index} className="flex gap-1.5">
-              <Select
-                value={personaId || '__none__'}
-                onValueChange={(newId) => {
-                  if (newId === '__none__') return
-                  updatePersona(index, newId)
-                }}
-              >
-                <SelectTrigger className="h-8 flex-1">
-                  <SelectValue>
-                    {() => PERSONA_LIBRARY.find(p => p.id === personaId)?.label ?? 'Select a persona...'}
-                  </SelectValue>
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="__none__" disabled>
-                    Select a persona...
-                  </SelectItem>
-                  {PERSONA_LIBRARY.map(p => (
-                    <SelectItem key={p.id} value={p.id}>
-                      <div className="flex items-center gap-2">
-                        <Library className="size-4" />
-                        {p.label}
-                      </div>
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              {selectedPersonas.length > 1 && (
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  type="button"
-                  className="h-8 w-8 p-0"
-                  onClick={() => removePersona(index)}
-                >
-                  <X className="size-3.5" />
-                </Button>
-              )}
-            </div>
-          ))}
-        </div>
-        {selectedPersonas.length < 5 && (
-          <Button
-            variant="outline"
-            size="sm"
-            type="button"
-            className="h-7 w-full text-xs"
-            onClick={addPersona}
-          >
-            <Plus className="size-3 mr-1" />
-            Add another (max 5)
-          </Button>
-        )}
+      <PersonaLibraryPicker value={value as unknown as PersonaNodeConfig} onChange={next => onChange({ ...value, ...next })} />
+      <div className="space-y-1">
+        <Label htmlFor={uploadId} className="text-xs">Upload persona (.md)</Label>
+        <Button variant="outline" size="sm" type="button" disabled={upload.isPending} className="h-8 w-full text-xs" onClick={() => document.getElementById(uploadId)?.click()}>
+          <Upload className="mr-1.5 size-3" />{upload.isPending ? 'Saving persona…' : (value.persona_file as string) || 'Choose .md file'}
+        </Button>
+        <input id={uploadId} type="file" accept=".md" className="hidden" onChange={event => {
+          const file = event.target.files?.[0]
+          if (file) upload.mutate(file, { onSuccess: persona => onChange({ ...value, ...configForSavedPersona(persona), mode: 'file' }) })
+          event.target.value = ''
+        }} />
+        <p className="text-xs text-muted-foreground">Upload plain Markdown; no frontmatter is required. The persona is saved to your library and its text is copied into this level.</p>
+        {upload.error && <p role="alert" className="text-xs text-destructive">{upload.error.message}</p>}
       </div>
       <div className="space-y-1">
-        <Label className="text-xs">Upload .md file</Label>
-        <div className="flex gap-2">
-          <Button
-            variant="outline"
-            size="sm"
-            type="button"
-            className="h-8 w-full text-xs"
-            onClick={() => document.getElementById(`persona-upload-${String(value.persona_id || 'custom')}`)?.click()}
-          >
-            <Upload className="size-3 mr-1.5" />
-            {(value.persona_file as string) || 'Choose .md file'}
-          </Button>
-          <input
-            id={`persona-upload-${String(value.persona_id || 'custom')}`}
-            type="file"
-            accept=".md"
-            className="hidden"
-            onChange={handleFileUpload}
-          />
-        </div>
-      </div>
-      <div className="space-y-1">
-        <Label className="text-xs">Persona text</Label>
-        <Textarea
-          value={(value.persona_text as string) ?? ''}
-          onChange={(e) => patch({ persona_text: e.target.value, mode: 'custom', persona_id: null, persona_label: null, persona_file: null })}
-          placeholder="You are extremely organized, very responsible..."
-          className="h-20 font-mono text-xs"
-        />
+        <Label htmlFor={`${uploadId}-text`} className="text-xs">Persona text</Label>
+        <Textarea id={`${uploadId}-text`} value={(value.persona_text as string) ?? ''} onChange={event => onChange({
+          ...value, persona_text: event.target.value, mode: 'text', persona_id: null, persona_ids: [], persona_sources: [], persona_label: null, persona_file: null,
+        })} placeholder="Describe the agent's personality and behavior…" className="h-20 font-mono text-xs" />
       </div>
     </div>
   )
@@ -710,6 +558,7 @@ export function FactorEditorDialog(props: Parameters<typeof StandardFactorEditor
   if (props.factor.level_type === 'sub_agent_selection' || props.factor.level_type === 'sub_agent_toggle') return <SubAgentFactorEditor {...props} />
   if (props.factor.level_type === 'knowledge_selection' || props.factor.level_type === 'knowledge_toggle') return <KnowledgeFactorEditor {...props} />
   if (props.factor.level_type === 'dataset_selection' || props.factor.level_type === 'dataset_toggle') return <DatasetFactorEditor {...props} />
+  if (props.factor.level_type === 'persona_selection' || props.factor.level_type === 'persona_toggle') return <PersonaFactorEditor {...props} />
   if ((props.factor.level_type === 'skill_selection' || props.factor.level_type === 'skill_toggle')) return <SkillFactorEditor {...props} />
   if (props.factor.level_type === 'tool_selection' || props.factor.level_type === 'tool_toggle') return <ToolFactorEditor {...props} />
   if (props.factor.level_type === 'script_selection' || props.factor.level_type === 'script_toggle') return <ScriptFactorEditor {...props} />

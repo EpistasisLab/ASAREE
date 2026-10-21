@@ -27,6 +27,7 @@ import { NodeSummaryLine } from './NodeSummaryLine'
 // layout.ts) -- otherwise a node can land under a connector that isn't the one
 // that asked for it.
 const CONNECTOR_LEFT = connectorLefts('agent')
+const SUB_AGENT_PARENT_LEFT = '55%'
 
 export function AgentNode({
   id,
@@ -62,6 +63,7 @@ export function AgentNode({
   }
 }) {
   const isSubAgent = data.isSubAgent === true
+  const personaLeft = CONNECTOR_LEFT.persona
   const accent = nodeAccent(isSubAgent ? 'sub_agent' : 'agent')
   const badge = nodeRunBadge(data.runStatus, data.runTruncated, data.runBypassed)
   // Peers are offered to the model as function schemas -- that is the only
@@ -123,12 +125,14 @@ export function AgentNode({
   return (
     <div
       style={cardAccent(accent)}
-      className={`group relative flex min-h-20 w-72 flex-col justify-center rounded-md border bg-card px-2.5 py-3.5 shadow-[0_0_12px_-6px_var(--card-accent)] ring-1 ring-[color:var(--card-accent)]/40 ${
+      className={`group relative flex min-h-20 w-72 flex-col rounded-md border bg-card shadow-[0_0_12px_-6px_var(--card-accent)] ring-1 ring-[color:var(--card-accent)]/40 ${
         selected ? 'ring-2 ring-[color:var(--card-accent)]' : ''
       } ${isActive ? '' : 'opacity-50'}`}
     >
+      <div className="group/agent-body flex flex-1 flex-col justify-center px-2.5 py-3.5">
       <NodeHoverToolbar
         nodeId={id}
+        hoverClassName="pointer-events-none group-hover/agent-body:pointer-events-auto group-hover/agent-body:opacity-100"
         isActive={isActive}
         onToggleActive={controlled ? undefined : () => updateNodeData(id, { active: !isActive })}
         onMakeFactor={experimentLocked ? undefined : isSubAgent ? requestSubAgentFactor && (() => requestSubAgentFactor(id)) : requestAgentFactor && (() => requestAgentFactor(id))}
@@ -150,6 +154,25 @@ export function AgentNode({
           Architectural Pattern connector's own label/stub live OUTSIDE the
           card on the left of this edge, so neither competes for this corner. */}
       {factorCount > 0 && <NodeFactorBadge count={factorCount} className="-top-3 -right-3" />}
+      <div className="flex items-center gap-1.5">
+        <Bot className="size-3.5 shrink-0 text-[color:var(--card-accent)]" />
+        <span className="truncate text-xs font-medium" title={data.label}>
+          {data.label || (isSubAgent ? 'Sub-Agent' : 'Agent')}
+        </span>
+        {data.leadRole && (
+          <Badge
+            variant="outline"
+            title={data.leadRole === 'supervisor'
+              ? 'This agent briefs the workers wired to it and writes the final answer, which is the recorded result'
+              : 'The conversation starts here -- this agent gets the task and its answer is the recorded result'}
+            className="h-4 shrink-0 border-[color:var(--card-accent)]/60 px-1.5 text-[10px] text-[color:var(--card-accent)]"
+          >
+            {data.leadRole === 'supervisor' ? 'Supervisor' : 'Lead'}
+          </Badge>
+        )}
+      </div>
+      <NodeSummaryLine text={summary || null} warning={warnings.length > 0 ? warnings : null} />
+      </div>
       {/* Main flow is left-to-right -- the bottom sub-connectors stay on the
           bottom edge regardless, since a config source hangs below a node no
           matter which way the main flow runs.
@@ -179,44 +202,13 @@ export function AgentNode({
             type="source"
             id="sub_agents"
             position={Position.Top}
-            style={{ left: '50%' }}
+            style={{ left: SUB_AGENT_PARENT_LEFT }}
             title="Parent Agent"
             className="!size-2 !border-2 !bg-background !border-[color:var(--card-accent)]"
           />
-          <ConnectorHandleLabel left="50%" side="top">Parent</ConnectorHandleLabel>
+          <ConnectorHandleLabel left={SUB_AGENT_PARENT_LEFT} side="top">Parent</ConnectorHandleLabel>
         </>
       )}
-      <div className="flex items-center gap-1.5">
-        <Bot className="size-3.5 shrink-0 text-[color:var(--card-accent)]" />
-        {/* Renaming happens in the Inspector's own title now (click it,
-            same as the experiment name) -- not here anymore. */}
-        <span className="truncate text-xs font-medium" title={data.label}>
-          {data.label || (isSubAgent ? 'Sub-Agent' : 'Agent')}
-        </span>
-        {/* Inline on the title row rather than hung off a corner: all three
-            corners are spoken for (run status and the factor badge share the
-            top-right, the Pattern/Skill captions sit above the top-left), and
-            "this is the agent that leads" reads as part of the node's identity
-            anyway. `outline` so it states a role without competing with the
-            run-status badge, which is the thing that actually changes. */}
-        {data.leadRole && (
-          <Badge
-            variant="outline"
-            title={
-              data.leadRole === 'supervisor'
-                ? 'This agent briefs the workers wired to it and writes the final answer, which is the recorded result'
-                : 'The conversation starts here -- this agent gets the task and its answer is the recorded result'
-            }
-            className="h-4 shrink-0 border-[color:var(--card-accent)]/60 px-1.5 text-[10px] text-[color:var(--card-accent)]"
-          >
-            {data.leadRole === 'supervisor' ? 'Supervisor' : 'Lead'}
-          </Badge>
-        )}
-      </div>
-      <NodeSummaryLine
-        text={summary || null}
-        warning={warnings.length > 0 ? warnings : null}
-      />
       {/* FOUR connectors live on the TOP edge -- Pattern, Skill, Dataset,
           Knowledge, in that reading order -- all of them "what this agent IS
           configured with" rather than a runtime capability, which is what
@@ -296,12 +288,12 @@ export function AgentNode({
         type="target"
         id="persona"
         position={Position.Top}
-        style={{ left: CONNECTOR_LEFT.persona }}
+        style={{ left: personaLeft }}
         title="Persona -- OCEAN personality traits for experimental manipulation"
         className="!size-2 !border-2 !bg-background !border-[color:var(--card-accent)]"
       />
-      <ConnectorHandleLabel left={CONNECTOR_LEFT.persona} side="top">Persona</ConnectorHandleLabel>
-      <ConnectorAddStub nodeId={id} slot="persona" left={CONNECTOR_LEFT.persona} side="top" />
+      <ConnectorHandleLabel left={personaLeft} side="top">Persona</ConnectorHandleLabel>
+      <ConnectorAddStub nodeId={id} slot="persona" left={personaLeft} side="top" alwaysVisible factorName={data.factor_bindings?.persona_selection} factorLevelCount={data.personaFactorLevelCount as number | undefined} factorOnOff={data.persona_factor_mode === 'persona_toggle'} />
       {/* Dataset -- the data an agent works ON, as opposed to the Tool
           connector's "capabilities it works WITH". UNCAPPED, like
           Skill/Knowledge/Tool: a cell's workspace holds one dataset per named

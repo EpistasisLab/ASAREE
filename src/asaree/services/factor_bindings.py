@@ -6,6 +6,7 @@ from typing import Any
 
 from asaree.services.dataset_factors import validate_dataset_factor_structure
 from asaree.services.knowledge_factors import validate_knowledge_factor_structure
+from asaree.services.persona_factors import validate_persona_factor_structure
 from asaree.services.script_factors import validate_script_factor_structure, validate_tool_step_script_factors
 from asaree.services.shared_factors import validate_shared_factor_groups
 from asaree.services.skill_factors import validate_skill_factor_structure
@@ -43,6 +44,7 @@ def validate_factor_bindings(
     validate_tool_step_script_factors(design_spec, graph)
     validate_tool_factor_structure(design_spec, graph, complete=complete_skills)
     validate_skill_factor_structure(design_spec, graph, complete=complete_skills)
+    validate_persona_factor_structure(design_spec, graph, complete=complete_skills)
     validate_knowledge_factor_structure(design_spec, graph, complete=complete_skills)
     validate_dataset_factor_structure(design_spec, graph, complete=complete_skills)
     missing = unbound_factor_names(design_spec, graph)
@@ -83,7 +85,7 @@ def validate_factor_bindings(
                 level_type not in {
                     "boolean", "sub_agent_selection", "sub_agent_toggle",
                     "script_selection", "script_toggle", "tool_selection", "tool_toggle",
-                    "skill_selection", "skill_toggle",
+                    "skill_selection", "skill_toggle", "persona_selection", "persona_toggle",
                     "dataset_selection", "dataset_toggle",
                     "knowledge_selection", "knowledge_toggle",
                 }

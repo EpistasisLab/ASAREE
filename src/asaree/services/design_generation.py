@@ -37,6 +37,7 @@ from asaree.services.dataset_factors import validate_dataset_factors
 from asaree.services.design_revisions import get_current_revision, supersede_and_create
 from asaree.services.factorial_cells import list_replicates, materialize_replicates
 from asaree.services.knowledge_factors import validate_knowledge_factors
+from asaree.services.persona_factors import validate_persona_factors
 from asaree.services.script_factors import validate_script_factors, validate_tool_step_script_factors
 from asaree.services.skill_factors import validate_skill_factors
 from asaree.services.sub_agent_factors import validate_sub_agent_factor_structure
@@ -294,6 +295,7 @@ async def get_design_impact(
                 "script_selection",
                 "tool_selection",
                 "skill_selection",
+                "persona_selection",
                 "dataset_selection",
                 "knowledge_selection",
             }
@@ -306,6 +308,7 @@ async def get_design_impact(
                 "script_toggle",
                 "tool_toggle",
                 "skill_toggle",
+                "persona_toggle",
                 "dataset_toggle",
                 "knowledge_toggle",
             }
@@ -458,6 +461,8 @@ async def generate_design_cells(
             "tool_toggle",
             "skill_selection",
             "skill_toggle",
+            "persona_selection",
+            "persona_toggle",
             "dataset_selection",
             "dataset_toggle",
             "knowledge_selection",
@@ -471,6 +476,9 @@ async def generate_design_cells(
             validate_script_factors({"factors": factors}, protocol.graph if protocol else {})
             await validate_tool_factors({"factors": factors}, protocol.graph if protocol else {}, experiment.owner_id)
             await validate_skill_factors({"factors": factors}, protocol.graph if protocol else {}, experiment.owner_id)
+            await validate_persona_factors(
+                {"factors": factors}, protocol.graph if protocol else {}, experiment.owner_id
+            )
             await validate_knowledge_factors(
                 {"factors": factors}, protocol.graph if protocol else {}, experiment.owner_id
             )

@@ -28,6 +28,8 @@ export interface DesignFactor {
     | 'tool_toggle'
     | 'skill_selection'
     | 'skill_toggle'
+  | 'persona_selection'
+  | 'persona_toggle'
     | 'sub_agent_selection'
     | 'sub_agent_toggle'
   | 'dataset_selection'

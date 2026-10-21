@@ -1,9 +1,10 @@
 import type { DesignFactor } from '@/types/experiments'
 import type { ProtocolGraph, ProtocolNode } from '@/types/protocols'
 
-export type SharedFactorKind = 'skill' | 'dataset' | 'knowledge' | 'script' | 'tool' | 'sub_agent' | 'pattern'
+export type SharedFactorKind = 'persona' | 'skill' | 'dataset' | 'knowledge' | 'script' | 'tool' | 'sub_agent' | 'pattern'
 
 const specs = {
+  persona: { types: ['persona'], handles: ['persona'], path: 'persona_selection' },
   skill: { types: ['skill'], handles: ['skill'], path: 'skill_selection' },
   dataset: { types: ['dataset'], handles: ['dataset', 'resource', 'tool'], path: 'dataset_selection' },
   knowledge: { types: ['okf_bundle', 'okf_document'], handles: ['knowledge'], path: 'knowledge_selection' },

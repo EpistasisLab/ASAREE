@@ -28,6 +28,7 @@ import asaree.models.factorial_cell  # noqa: F401
 import asaree.models.factorial_replicate_result  # noqa: F401
 import asaree.models.factorial_row_result  # noqa: F401
 import asaree.models.password_reset_token  # noqa: F401
+import asaree.models.persona  # noqa: F401
 import asaree.models.protocol  # noqa: F401
 import asaree.models.protocol_revision  # noqa: F401
 import asaree.models.protocol_run  # noqa: F401

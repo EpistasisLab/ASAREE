@@ -1,3 +1,11 @@
+import { NodeSelectionDrawer } from './NodeSelectionDrawer'
+import type { PersonaNodeConfig } from '@/types/protocols'
+import { PersonaBrowserPanel } from './PersonaBrowserPanel'
+import { PERSONA_BROWSE, nodeDataForPersona } from './personaCatalog'
+import { PersonaFactorDialog } from './PersonaFactorDialog'
+import { reconcilePersonaFactor, personaFactorConflict, personaFactorOwner, PERSONA_FACTOR_PATH } from '@/lib/personaFactors'
+import { usePersonaTestSelection } from './usePersonaTestSelection'
+import { PersonaTestSelectors } from './PersonaTestSelectors'
 import { graphWithSharedFactor } from '@/lib/sharedFactors'
 import { reconcileSubAgentFactor, subAgentFactorConflict, subAgentFactorOwner, SUB_AGENT_FACTOR_PATH } from '@/lib/subAgentFactors'
 import { SubAgentFactorDialog } from './SubAgentFactorDialog'
@@ -109,7 +117,6 @@ import type { Skill } from '@/types/skills'
 import { AddNodePanel } from './AddNodePanel'
 import { AgentNodeInspector } from './AgentNodeInspector'
 import { agentTracedLabel, factorBoundField, factorCreationFields, revealsHiddenMcpServers, toolFactorServerId, type UnboundField } from './bindableFields'
-import { computeFactorName, seedStructuredLevels } from './factorLevels'
 import { CanvasControls } from './CanvasControls'
 import { CriticGateNodeInspector } from './CriticGateNodeInspector'
 import { ToolStepNodeInspector } from './ToolStepNodeInspector'
@@ -284,7 +291,7 @@ const CONNECTOR_PANEL_INFO: Record<ConnectorSlot, { allowedTypes: string[]; titl
   model: { allowedTypes: MODEL_NODE_TYPES, title: 'Add Model' },
   tool: { allowedTypes: [MCP_SERVER_BROWSE, 'script'], title: 'Add Tool' },
   memory: { allowedTypes: ['memory'], title: 'Add Memory' },
-  persona: { allowedTypes: ['persona'], title: 'Add Persona' },
+  persona: { allowedTypes: [PERSONA_BROWSE], title: 'Add Persona' },
   output_parser: { allowedTypes: ['output_parser'], title: 'Add Output Parser' },
   architectural_pattern: { allowedTypes: PATTERN_NODE_TYPES, title: 'Add Architectural Pattern' },
   skill: { allowedTypes: [SKILL_BROWSE], title: 'Add Skill' },
@@ -444,10 +451,11 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
         const toolIds = new Set(edges.filter((edge) => edge.targetHandle === 'tool' && (nds.find((node) => node.id === edge.target)?.data.factor_bindings as Record<string, string> | undefined)?.[TOOL_FACTOR_PATH] === factorName).map((edge) => edge.source).filter((id) => MCP_TOOL_NODE_TYPES.includes(nds.find((node) => node.id === id)?.type ?? '')))
         const scriptIds = new Set(edges.filter((edge) => edge.targetHandle === 'tool' && (nds.find((node) => node.id === edge.target)?.data.factor_bindings as Record<string, string> | undefined)?.[SCRIPT_FACTOR_PATH] === factorName).map((edge) => edge.source).filter((id) => nds.find((node) => node.id === id)?.type === 'script'))
         const skillIds = new Set(edges.filter((edge) => edge.targetHandle === 'skill' && (nds.find((node) => node.id === edge.target)?.data.factor_bindings as Record<string, string> | undefined)?.[SKILL_FACTOR_PATH] === factorName).map((edge) => edge.source))
+        const personaIds = new Set(edges.filter((edge) => edge.targetHandle === 'persona' && (nds.find((node) => node.id === edge.target)?.data.factor_bindings as Record<string, string> | undefined)?.[PERSONA_FACTOR_PATH] === factorName).map((edge) => edge.source))
         const datasetIds = new Set(edges.filter((edge) => ['dataset', 'resource', 'tool'].includes(edge.targetHandle ?? '') && (nds.find((node) => node.id === edge.target)?.data.factor_bindings as Record<string, string> | undefined)?.[DATASET_FACTOR_PATH] === factorName).map((edge) => edge.source).filter((id) => nds.find((node) => node.id === id)?.type === 'dataset'))
         return nds.map((n) => {
           if (subAgentIds.has(n.id)) return { ...n, data: { ...n.data, active: true } }
-          if (scriptIds.has(n.id) || toolIds.has(n.id) || skillIds.has(n.id) || datasetIds.has(n.id) || knowledgeIds.has(n.id)) return { ...n, data: { ...n.data, config: { ...(n.data.config as object), enabled: true } } }
+          if (scriptIds.has(n.id) || toolIds.has(n.id) || skillIds.has(n.id) || personaIds.has(n.id) || datasetIds.has(n.id) || knowledgeIds.has(n.id)) return { ...n, data: { ...n.data, config: { ...(n.data.config as object), enabled: true } } }
           const bindings = n.data.factor_bindings as Record<string, string> | undefined
           if (!bindings || !Object.values(bindings).includes(factorName)) return n
           const next = Object.fromEntries(Object.entries(bindings).filter(([, name]) => name !== factorName))
@@ -471,6 +479,10 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
           if (bindings[SKILL_FACTOR_PATH] === factorName) {
             delete data.skill_selection
             delete data.skill_factor_mode
+          }
+          if (bindings[PERSONA_FACTOR_PATH] === factorName) {
+            delete data.persona_selection
+            delete data.persona_factor_mode
           }
           if (bindings[DATASET_FACTOR_PATH] === factorName) {
             delete data.dataset_selection
@@ -523,6 +535,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
         else if (field.connectorFactor.kind === 'tool') setToolFactorNodeId(field.connectorFactor.nodeId)
         else if (field.connectorFactor.kind === 'script') setScriptFactorNodeId(field.connectorFactor.nodeId)
         else if (field.connectorFactor.kind === 'skill') setSkillFactorNodeId(field.connectorFactor.nodeId)
+        else if (field.connectorFactor.kind === 'persona') setPersonaFactorNodeId(field.connectorFactor.nodeId)
         else if (field.connectorFactor.kind === 'dataset') setDatasetFactorNodeId(field.connectorFactor.nodeId)
         else if (field.connectorFactor.kind === 'model') { setModelFactorLevelIndex(undefined); setModelFactorFieldPath(field.fieldPath); setModelFactorNodeId(field.connectorFactor.nodeId) }
         else if (field.connectorFactor.kind === 'pattern') { setPatternFactorFieldPath(field.fieldPath); setPatternFactorNodeId(field.connectorFactor.nodeId) }
@@ -566,6 +579,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   // meaningful while addPanelOpen.
   const [serverBrowserOpen, setServerBrowserOpen] = useState(false)
   const [skillBrowserOpen, setSkillBrowserOpen] = useState(false)
+  const [personaBrowserOpen, setPersonaBrowserOpen] = useState(false)
   const [bundleBrowserOpen, setBundleBrowserOpen] = useState(false)
   const [documentBrowserOpen, setDocumentBrowserOpen] = useState(false)
   const [datasetBrowserOpen, setDatasetBrowserOpen] = useState(false)
@@ -688,11 +702,12 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
       if (draftScripts.error) throw new Error(draftScripts.error)
       if (draftTools.error) throw new Error(draftTools.error)
       if (draftSkills.error) throw new Error(draftSkills.error)
+      if (draftPersonas.error) throw new Error(draftPersonas.error)
       if (draftKnowledge.error) throw new Error(draftKnowledge.error)
       if (draftDatasets.error) throw new Error(draftDatasets.error)
       await protocolsApi.update(protocolId, { graph: toPersistedGraph(nodes, edges) })
       const published = await protocolsApi.publish(protocolId)
-      return { published, scope, rowIndex, skillOptions: { ...draftSubAgents.options, ...draftScripts.options, ...draftTools.options, ...draftSkills.options, ...draftKnowledge.options, ...draftDatasets.options } }
+      return { published, scope, rowIndex, skillOptions: { ...draftSubAgents.options, ...draftScripts.options, ...draftTools.options, ...draftSkills.options, ...draftPersonas.options, ...draftKnowledge.options, ...draftDatasets.options } }
     },
     onSuccess: async ({ published, scope, rowIndex, skillOptions }) => {
       queryClient.invalidateQueries({ queryKey: ['protocols', protocolId, 'revisions'] })
@@ -726,9 +741,11 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   const publishedSubAgents = useSubAgentTestSelection(pendingRunConfirm ? publishedGraphQuery.data?.graph : undefined, pendingNodeId)
   const draftSubAgents = useSubAgentTestSelection(pendingRunConfirm ? toPersistedGraph(nodes, edges) : undefined, pendingNodeId)
   const publishedSkills = useSkillTestSelection(pendingRunConfirm ? publishedGraphQuery.data?.graph : undefined, pendingNodeId)
+  const publishedPersonas = usePersonaTestSelection(pendingRunConfirm ? publishedGraphQuery.data?.graph : undefined, pendingNodeId)
   const publishedTools = useToolTestSelection(pendingRunConfirm ? publishedGraphQuery.data?.graph : undefined, pendingNodeId)
   const publishedScripts = useScriptTestSelection(pendingRunConfirm ? publishedGraphQuery.data?.graph : undefined, pendingNodeId)
   const draftSkills = useSkillTestSelection(pendingRunConfirm ? toPersistedGraph(nodes, edges) : undefined, pendingNodeId)
+  const draftPersonas = usePersonaTestSelection(pendingRunConfirm ? toPersistedGraph(nodes, edges) : undefined, pendingNodeId)
   const draftTools = useToolTestSelection(pendingRunConfirm ? toPersistedGraph(nodes, edges) : undefined, pendingNodeId)
   const draftScripts = useScriptTestSelection(pendingRunConfirm ? toPersistedGraph(nodes, edges) : undefined, pendingNodeId)
   const publishedKnowledge = useKnowledgeTestSelection(pendingRunConfirm ? publishedGraphQuery.data?.graph : undefined, pendingNodeId)
@@ -746,9 +763,10 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
       if (publishedScripts.error) throw new Error(publishedScripts.error)
       if (publishedTools.error) throw new Error(publishedTools.error)
       if (publishedSkills.error) throw new Error(publishedSkills.error)
+      if (publishedPersonas.error) throw new Error(publishedPersonas.error)
       if (publishedKnowledge.error) throw new Error(publishedKnowledge.error)
       if (publishedDatasets.error) throw new Error(publishedDatasets.error)
-      return protocolsApi.testRun(protocolId, publishedRow.binding || publishedSubAgents.owners.length || publishedScripts.owners.length || publishedTools.owners.length || publishedSkills.owners.length || publishedKnowledge.owners.length || publishedDatasets.owners.length ? { ...(publishedRow.binding ? { row_index: rowIndex } : {}), ...publishedSubAgents.options, ...publishedScripts.options, ...publishedTools.options, ...publishedSkills.options, ...publishedKnowledge.options, ...publishedDatasets.options } : undefined)
+      return protocolsApi.testRun(protocolId, publishedRow.binding || publishedSubAgents.owners.length || publishedScripts.owners.length || publishedTools.owners.length || publishedSkills.owners.length || publishedPersonas.owners.length || publishedKnowledge.owners.length || publishedDatasets.owners.length ? { ...(publishedRow.binding ? { row_index: rowIndex } : {}), ...publishedSubAgents.options, ...publishedScripts.options, ...publishedTools.options, ...publishedSkills.options, ...publishedPersonas.options, ...publishedKnowledge.options, ...publishedDatasets.options } : undefined)
     },
     onSuccess: (run) => {
       setRunId(run.id)
@@ -772,9 +790,10 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
       if (publishedScripts.error) throw new Error(publishedScripts.error)
       if (publishedTools.error) throw new Error(publishedTools.error)
       if (publishedSkills.error) throw new Error(publishedSkills.error)
+      if (publishedPersonas.error) throw new Error(publishedPersonas.error)
       if (publishedKnowledge.error) throw new Error(publishedKnowledge.error)
       if (publishedDatasets.error) throw new Error(publishedDatasets.error)
-      return protocolsApi.runNode(protocolId, nodeId, binding || publishedSubAgents.owners.length || publishedScripts.owners.length || publishedTools.owners.length || publishedSkills.owners.length || publishedKnowledge.owners.length || publishedDatasets.owners.length ? { ...(binding ? { row_index: rowIndex } : {}), ...publishedSubAgents.options, ...publishedScripts.options, ...publishedTools.options, ...publishedSkills.options, ...publishedKnowledge.options, ...publishedDatasets.options } : undefined)
+      return protocolsApi.runNode(protocolId, nodeId, binding || publishedSubAgents.owners.length || publishedScripts.owners.length || publishedTools.owners.length || publishedSkills.owners.length || publishedPersonas.owners.length || publishedKnowledge.owners.length || publishedDatasets.owners.length ? { ...(binding ? { row_index: rowIndex } : {}), ...publishedSubAgents.options, ...publishedScripts.options, ...publishedTools.options, ...publishedSkills.options, ...publishedPersonas.options, ...publishedKnowledge.options, ...publishedDatasets.options } : undefined)
     },
     onSuccess: (run) => {
       setRunId(run.id)
@@ -1244,7 +1263,9 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
           toolFactorControlled: MCP_TOOL_NODE_TYPES.includes(n.type ?? '') && !!toolFactorOwner(toPersistedGraph(nodes, edges), n.id),
           scriptFactorControlled: n.type === 'script' && !!scriptFactorOwner(toPersistedGraph(nodes, edges), n.id),
           skillFactorLevelCount: factors.find((factor) => factor.name === (n.data.factor_bindings as Record<string, string> | undefined)?.[SKILL_FACTOR_PATH])?.levels.length,
+          personaFactorLevelCount: factors.find((factor) => factor.name === (n.data.factor_bindings as Record<string, string> | undefined)?.[PERSONA_FACTOR_PATH])?.levels.length,
           skillFactorControlled: n.type === 'skill' && !!skillFactorOwner(toPersistedGraph(nodes, edges), n.id),
+          personaFactorControlled: n.type === 'persona' && !!personaFactorOwner(toPersistedGraph(nodes, edges), n.id),
           datasetFactorLevelCount: factors.find((factor) => factor.name === (n.data.factor_bindings as Record<string, string> | undefined)?.[DATASET_FACTOR_PATH])?.levels.length,
           datasetFactorControlled: n.type === 'dataset' && !!datasetFactorOwner(toPersistedGraph(nodes, edges), n.id),
           isSubAgent: n.type === 'sub_agent',
@@ -1369,6 +1390,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   function resetAddPanelBrowsers() {
     setServerBrowserOpen(false)
     setSkillBrowserOpen(false)
+    setPersonaBrowserOpen(false)
     setBundleBrowserOpen(false)
     setDocumentBrowserOpen(false)
     setDatasetBrowserOpen(false)
@@ -1521,6 +1543,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   const requestPersonaFactor = useCallback((nodeId: string) => {
     if (!experimentId || experimentLocked) return
     setSelectedNodeId(null)
+    setConnectorFactorChoice(undefined)
     setPersonaFactorNodeId(nodeId)
   }, [experimentId, experimentLocked])
   const metricsByNode = useMemo(() => {
@@ -1738,6 +1761,10 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
       return
     }
     // Ditto for skills -- see SKILL_BROWSE in skillCatalog.ts.
+    if (nodeType === PERSONA_BROWSE) {
+      setPersonaBrowserOpen(true)
+      return
+    }
     if (nodeType === SKILL_BROWSE) {
       setSkillBrowserOpen(true)
       return
@@ -1975,6 +2002,11 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
 
   // Same shape as addServerNode: the node is created with the skill already
   // bound, and everything after this is the ordinary addNode path.
+  function addPersonaNode(config: PersonaNodeConfig) {
+    setPersonaBrowserOpen(false)
+    addNode('persona', nodeDataForPersona(config))
+  }
+
   function addSkillNode(skill: Skill) {
     setSkillBrowserOpen(false)
     addNode('skill', nodeDataForSkill(skill))
@@ -2097,6 +2129,14 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
       const factor = factors.find((factor) => (factor.level_type === 'skill_selection' || factor.level_type === 'skill_toggle') && (node.data.factor_bindings as Record<string, string> | undefined)?.[SKILL_FACTOR_PATH] === factor.name)
       if (!factor || JSON.stringify(node.data.skill_selection) === JSON.stringify(factor.levels[0] ?? [])) return node
       return { ...node, data: { ...node.data, skill_selection: factor.levels[0] ?? [] } }
+    }))
+  }, [factors, experimentLocked, setNodes])
+  useEffect(() => {
+    if (experimentLocked) return
+    setNodes((current) => current.map((node) => {
+      const factor = factors.find((factor) => (factor.level_type === 'persona_selection' || factor.level_type === 'persona_toggle') && (node.data.factor_bindings as Record<string, string> | undefined)?.[PERSONA_FACTOR_PATH] === factor.name)
+      if (!factor || JSON.stringify(node.data.persona_selection) === JSON.stringify(factor.levels[0] ?? [])) return node
+      return { ...node, data: { ...node.data, persona_selection: factor.levels[0] ?? [] } }
     }))
   }, [factors, experimentLocked, setNodes])
   useEffect(() => {
@@ -2257,8 +2297,8 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
 
   return (
     <ProtocolCanvasActionsProvider value={canvasActions}>
-      <div className="flex h-full w-full">
-        <div ref={paneRef} className="relative flex-1">
+      <div className="flex h-full min-w-0 w-full">
+        <div ref={paneRef} className="relative min-w-0 flex-1">
           <ReactFlow
             nodes={nodesWithRunStatus}
             edges={renderedEdges}
@@ -2385,7 +2425,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
                 setRunErrorDismissed(false)
                 setPendingRunConfirm({ type: 'graph' })
               }}
-              title="Test this protocol; choose a skill level for each connector factor"
+              title="Test this protocol; choose a level for each connector factor"
             >
               <Play className="size-4" />
               {testRunIsRunning ? 'Test Run running…' : 'Test Run'}
@@ -2431,55 +2471,61 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
             </div>
           )}
         </div>
-        {addPanelOpen && serverBrowserOpen ? (
-          <McpServerBrowserPanel
-            onPick={addServerNode}
-            onConnect={addClientToolNode}
-            onBack={() => setServerBrowserOpen(false)}
-            onClose={closeAddPanel}
-            revealHiddenServers={revealsHiddenMcpServers(nodes)}
-          />
-        ) : addPanelOpen && skillBrowserOpen ? (
-          <SkillBrowserPanel onPick={addSkillNode} onBack={() => setSkillBrowserOpen(false)} onClose={closeAddPanel} />
-        ) : addPanelOpen && bundleBrowserOpen ? (
-          <OkfBundleBrowserPanel
-            onPick={addBundleNode}
-            onBack={() => setBundleBrowserOpen(false)}
-            onClose={closeAddPanel}
-          />
-        ) : addPanelOpen && documentBrowserOpen ? (
-          <OkfDocumentBrowserPanel
-            onPick={addDocumentNode}
-            onBack={() => setDocumentBrowserOpen(false)}
-            onClose={closeAddPanel}
-          />
-        ) : addPanelOpen && datasetBrowserOpen ? (
-          <DatasetBrowserPanel
-            onPick={addDatasetNode}
-            onBack={() => setDatasetBrowserOpen(false)}
-            onClose={closeAddPanel}
-          />
-        ) : addPanelOpen ? (
-          <AddNodePanel
-            onAdd={addNode}
-            onClose={closeAddPanel}
-            allowedTypes={
-              pendingConnectorAdd
-                ? CONNECTOR_PANEL_INFO[pendingConnectorAdd.slot].allowedTypes
-                : pendingMainEdgeAdd || pendingEdgeInsert
-                  ? MAIN_FLOW_NODE_TYPES
-                  : undefined
-            }
-            title={
-              pendingConnectorAdd
-                ? CONNECTOR_PANEL_INFO[pendingConnectorAdd.slot].title
-                : pendingMainEdgeAdd
-                  ? 'Connect a step'
-                  : pendingEdgeInsert
-                    ? 'Insert a step'
-                    : undefined
-            }
-          />
+        {addPanelOpen ? (
+          <NodeSelectionDrawer>
+            {serverBrowserOpen ? (
+              <McpServerBrowserPanel
+                onPick={addServerNode}
+                onConnect={addClientToolNode}
+                onBack={() => setServerBrowserOpen(false)}
+                onClose={closeAddPanel}
+                revealHiddenServers={revealsHiddenMcpServers(nodes)}
+              />
+            ) : personaBrowserOpen ? (
+              <PersonaBrowserPanel onPick={addPersonaNode} onBack={() => setPersonaBrowserOpen(false)} onClose={closeAddPanel} />
+            ) : skillBrowserOpen ? (
+              <SkillBrowserPanel onPick={addSkillNode} onBack={() => setSkillBrowserOpen(false)} onClose={closeAddPanel} />
+            ) : bundleBrowserOpen ? (
+              <OkfBundleBrowserPanel
+                onPick={addBundleNode}
+                onBack={() => setBundleBrowserOpen(false)}
+                onClose={closeAddPanel}
+              />
+            ) : documentBrowserOpen ? (
+              <OkfDocumentBrowserPanel
+                onPick={addDocumentNode}
+                onBack={() => setDocumentBrowserOpen(false)}
+                onClose={closeAddPanel}
+              />
+            ) : datasetBrowserOpen ? (
+              <DatasetBrowserPanel
+                onPick={addDatasetNode}
+                onBack={() => setDatasetBrowserOpen(false)}
+                onClose={closeAddPanel}
+              />
+            ) : (
+              <AddNodePanel
+                onAdd={addNode}
+                onClose={closeAddPanel}
+                allowedTypes={
+                  pendingConnectorAdd
+                    ? CONNECTOR_PANEL_INFO[pendingConnectorAdd.slot].allowedTypes
+                    : pendingMainEdgeAdd || pendingEdgeInsert
+                      ? MAIN_FLOW_NODE_TYPES
+                      : undefined
+                }
+                title={
+                  pendingConnectorAdd
+                    ? CONNECTOR_PANEL_INFO[pendingConnectorAdd.slot].title
+                    : pendingMainEdgeAdd
+                      ? 'Connect a step'
+                      : pendingEdgeInsert
+                        ? 'Insert a step'
+                        : undefined
+                }
+              />
+            )}
+          </NodeSelectionDrawer>
         ) : MCP_TOOL_NODE_TYPES.includes(selectedNode?.type ?? '') ? (
           <McpToolNodeInspector
             node={{ id: selectedNode!.id, type: selectedNode!.type!, position: selectedNode!.position, data: selectedNode!.data as McpToolNodeData }}
@@ -2547,11 +2593,10 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
         ) : selectedNode?.type === 'persona' ? (
           <PersonaNodeInspector
             node={{ id: selectedNode.id, type: 'persona', position: selectedNode.position, data: selectedNode.data as PersonaNodeData }}
-            experimentId={experimentId}
-            factorNodeLabel={factorNodeLabel}
             onChange={updateNodeData}
             onDelete={requestDeleteNode}
             onClose={() => setSelectedNodeId(null)}
+            connectorFactorName={personaFactorOwner(toPersistedGraph(nodes, edges), selectedNode.id)}
           />
         ) : selectedNode?.type === 'skill' ? (
           <SkillNodeInspector
@@ -2669,15 +2714,17 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
           }
           onPublishAndRun={() => publishAndRunMutation.mutate({ scope: pendingRunConfirm, rowIndex: draftRow.rowIndex })}
           confirmLabel={pendingRunConfirm.type === 'graph' ? 'Test Run' : undefined}
-          confirmDisabled={!!publishedSourceError || !!publishedSubAgents.error || !!publishedScripts.error || !!publishedTools.error || !!publishedSkills.error || !!publishedKnowledge.error || !!publishedDatasets.error || (pendingHasRow && !!publishedRow.error)}
-          publishDisabled={!!draftRow.error || !!draftSubAgents.error || !!draftScripts.error || !!draftTools.error || !!draftSkills.error || !!draftKnowledge.error || !!draftDatasets.error}
+          confirmDisabled={!!publishedSourceError || !!publishedSubAgents.error || !!publishedScripts.error || !!publishedTools.error || !!publishedSkills.error || !!publishedPersonas.error || !!publishedKnowledge.error || !!publishedDatasets.error || (pendingHasRow && !!publishedRow.error)}
+          publishDisabled={!!draftRow.error || !!draftSubAgents.error || !!draftScripts.error || !!draftTools.error || !!draftSkills.error || !!draftPersonas.error || !!draftKnowledge.error || !!draftDatasets.error}
           additionalContent={<div className="space-y-3">
             {publishedSubAgents.owners.length > 0 && <div className="space-y-2"><p className="text-xs">Published Sub-Agents · run published v{publishedRevision}</p><SubAgentTestSelectors selection={publishedSubAgents} /></div>}
             {showDraftInputs && draftSubAgents.owners.length > 0 && <div className="space-y-2"><p className="text-xs">Draft Sub-Agents · publish and run</p><SubAgentTestSelectors selection={draftSubAgents} /></div>}
             {publishedSkills.owners.length > 0 && <div className="space-y-2"><p className="text-xs">Published skills · run published v{publishedRevision}</p><SkillTestSelectors selection={publishedSkills} /></div>}
+            {publishedPersonas.owners.length > 0 && <div className="space-y-2"><p className="text-xs">Published personas · run published v{publishedRevision}</p><PersonaTestSelectors selection={publishedPersonas} /></div>}
             {publishedTools.owners.length > 0 && <div className="space-y-2"><p className="text-xs">Published tools · run published v{publishedRevision}</p><ToolTestSelectors selection={publishedTools} /></div>}
             {publishedScripts.owners.length > 0 && <div className="space-y-2"><p className="text-xs">Published scripts · run published v{publishedRevision}</p><ScriptTestSelectors selection={publishedScripts} /></div>}
             {showDraftInputs && draftSkills.owners.length > 0 && <div className="space-y-2"><p className="text-xs">Draft skills · publish and run</p><SkillTestSelectors selection={draftSkills} /></div>}
+            {showDraftInputs && draftPersonas.owners.length > 0 && <div className="space-y-2"><p className="text-xs">Draft personas · publish and run</p><PersonaTestSelectors selection={draftPersonas} /></div>}
             {showDraftInputs && draftTools.owners.length > 0 && <div className="space-y-2"><p className="text-xs">Draft tools · publish and run</p><ToolTestSelectors selection={draftTools} /></div>}
             {showDraftInputs && draftScripts.owners.length > 0 && <div className="space-y-2"><p className="text-xs">Draft scripts · publish and run</p><ScriptTestSelectors selection={draftScripts} /></div>}
             {publishedKnowledge.owners.length > 0 && <div className="space-y-2"><p className="text-xs">Published knowledge · run published v{publishedRevision}</p><KnowledgeTestSelectors selection={publishedKnowledge} /></div>}
@@ -2708,6 +2755,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
             else if (field.connectorFactor.kind === 'tool') setToolFactorNodeId(field.connectorFactor.nodeId)
             else if (field.connectorFactor.kind === 'script') setScriptFactorNodeId(field.connectorFactor.nodeId)
             else if (field.connectorFactor.kind === 'skill') setSkillFactorNodeId(field.connectorFactor.nodeId)
+            else if (field.connectorFactor.kind === 'persona') setPersonaFactorNodeId(field.connectorFactor.nodeId)
             else if (field.connectorFactor.kind === 'dataset') setDatasetFactorNodeId(field.connectorFactor.nodeId)
             else if (field.connectorFactor.kind === 'model') { setModelFactorLevelIndex(undefined); setModelFactorFieldPath(field.fieldPath); setModelFactorNodeId(field.connectorFactor.nodeId) }
             else if (field.connectorFactor.kind === 'pattern') { setPatternFactorFieldPath(field.fieldPath); setPatternFactorNodeId(field.connectorFactor.nodeId) }
@@ -2839,11 +2887,11 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
           await experimentsApi.update(experimentId!, { design_spec: { ...fresh.design_spec, factors: [...(fresh.design_spec?.factors ?? []).filter((existing) => existing.name !== previousName), next] } })
           if (previousName) {
             renameFactorBindings(previousName, next.name)
-            setFactorBaseline(next.name, next.levels[0])
+            if (next.level_type !== 'boolean') setFactorBaseline(next.name, next.levels[0])
           }
           setNodes((current) => next.level_type === 'boolean' ? current.map((node) => node.id === ownerId ? { ...node, data: {
             ...node.data,
-            active: next.levels[0],
+            active: node.data.active ?? true,
             factor_bindings: { ...(node.data.factor_bindings as Record<string, string> | undefined), active: next.name },
           } } : node) : graphWithSharedFactor({ nodes: current as unknown as ProtocolNode[], edges }, subAgentFactorNodeId, 'sub_agent', next).nodes as unknown as Node[])
           queryClient.invalidateQueries({ queryKey: ['experiments', experimentId] })
@@ -2878,11 +2926,11 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
           await experimentsApi.update(experimentId!, { design_spec: { ...fresh.design_spec, factors: [...(fresh.design_spec?.factors ?? []).filter((existing) => existing.name !== previousName), next] } })
           if (previousName) {
             renameFactorBindings(previousName, next.name)
-            setFactorBaseline(next.name, next.levels[0])
+            if (next.level_type !== 'boolean') setFactorBaseline(next.name, next.levels[0])
           }
           setNodes((current) => next.level_type === 'boolean' ? current.map((node) => node.id === ownerId ? { ...node, data: {
             ...node.data,
-            config: { ...(node.data.config as object), enabled: next.levels[0] },
+            config: { ...(node.data.config as object), enabled: (node.data.config as { enabled?: boolean })?.enabled ?? true },
             factor_bindings: { ...(node.data.factor_bindings as Record<string, string> | undefined), 'config.enabled': next.name },
           } } : node) : graphWithSharedFactor({ nodes: current as unknown as ProtocolNode[], edges }, skillFactorNodeId, 'skill', next).nodes as unknown as Node[])
           queryClient.invalidateQueries({ queryKey: ['experiments', experimentId] })
@@ -2917,11 +2965,11 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
           await experimentsApi.update(experimentId!, { design_spec: { ...fresh.design_spec, factors: [...(fresh.design_spec?.factors ?? []).filter((existing) => existing.name !== previousName), next] } })
           if (previousName) {
             renameFactorBindings(previousName, next.name)
-            setFactorBaseline(next.name, next.levels[0])
+            if (next.level_type !== 'boolean') setFactorBaseline(next.name, next.levels[0])
           }
           setNodes((current) => isIndividualToolMode(next.level_type as ToolFactorMode) ? current.map((node) => node.id === ownerId ? { ...node, data: {
             ...node.data,
-            ...(next.level_type === 'boolean' ? { config: { ...(node.data.config as object), enabled: next.levels[0] } } : next.level_type === 'tool_names' ? { config: { ...(node.data.config as object), tool_names: next.levels[0] ?? [] } } : { tool_selection: next.levels[0] ?? [], tool_factor_mode: next.level_type }),
+            ...(next.level_type === 'boolean' ? { config: { ...(node.data.config as object), enabled: (node.data.config as { enabled?: boolean })?.enabled ?? true } } : next.level_type === 'tool_names' ? { config: { ...(node.data.config as object), tool_names: next.levels[0] ?? [] } } : { tool_selection: next.levels[0] ?? [], tool_factor_mode: next.level_type }),
             factor_bindings: { ...(node.data.factor_bindings as Record<string, string> | undefined), [toolFactorPath(next.level_type as ToolFactorMode)]: next.name },
           } } : node) : graphWithSharedFactor({ nodes: current as unknown as ProtocolNode[], edges }, toolFactorNodeId, 'tool', next).nodes as unknown as Node[])
           queryClient.invalidateQueries({ queryKey: ['experiments', experimentId] })
@@ -2957,11 +3005,11 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
           await experimentsApi.update(experimentId!, { design_spec: { ...fresh.design_spec, factors: [...(fresh.design_spec?.factors ?? []).filter((existing) => existing.name !== previousName), next] } })
           if (previousName) {
             renameFactorBindings(previousName, next.name)
-            setFactorBaseline(next.name, next.levels[0])
+            if (next.level_type !== 'boolean') setFactorBaseline(next.name, next.levels[0])
           }
           setNodes((current) => isIndividualScriptMode(next.level_type as ScriptFactorMode) ? current.map((node) => node.id === ownerId ? { ...node, data: {
             ...node.data,
-            ...(next.level_type === 'boolean' ? { config: { ...(node.data.config as object), enabled: next.levels[0] } } : { script_selection: next.levels[0] ?? [], script_factor_mode: next.level_type }),
+            ...(next.level_type === 'boolean' ? { config: { ...(node.data.config as object), enabled: (node.data.config as { enabled?: boolean })?.enabled ?? true } } : { script_selection: next.levels[0] ?? [], script_factor_mode: next.level_type }),
             factor_bindings: { ...(node.data.factor_bindings as Record<string, string> | undefined), [scriptFactorPath(next.level_type as ScriptFactorMode)]: next.name },
           } } : node) : graphWithSharedFactor({ nodes: current as unknown as ProtocolNode[], edges }, scriptFactorNodeId, 'script', next).nodes as unknown as Node[])
           queryClient.invalidateQueries({ queryKey: ['experiments', experimentId] })
@@ -2997,11 +3045,11 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
           await experimentsApi.update(experimentId!, { design_spec: { ...fresh.design_spec, factors: [...(fresh.design_spec?.factors ?? []).filter((existing) => existing.name !== previousName), next] } })
           if (previousName) {
             renameFactorBindings(previousName, next.name)
-            setFactorBaseline(next.name, next.levels[0])
+            if (next.level_type !== 'boolean') setFactorBaseline(next.name, next.levels[0])
           }
           setNodes((current) => next.level_type === 'boolean' ? current.map((node) => node.id === ownerId ? { ...node, data: {
             ...node.data,
-            config: { ...(node.data.config as object), enabled: next.levels[0] },
+            config: { ...(node.data.config as object), enabled: (node.data.config as { enabled?: boolean })?.enabled ?? true },
             factor_bindings: { ...(node.data.factor_bindings as Record<string, string> | undefined), 'config.enabled': next.name },
           } } : node) : graphWithSharedFactor({ nodes: current as unknown as ProtocolNode[], edges }, knowledgeFactorNodeId, 'knowledge', next).nodes as unknown as Node[])
           queryClient.invalidateQueries({ queryKey: ['experiments', experimentId] })
@@ -3036,11 +3084,11 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
           await experimentsApi.update(experimentId!, { design_spec: { ...fresh.design_spec, factors: [...(fresh.design_spec?.factors ?? []).filter((existing) => existing.name !== previousName), next] } })
           if (previousName) {
             renameFactorBindings(previousName, next.name)
-            setFactorBaseline(next.name, next.levels[0])
+            if (next.level_type !== 'boolean') setFactorBaseline(next.name, next.levels[0])
           }
           setNodes((current) => next.level_type === 'boolean' ? current.map((node) => node.id === ownerId ? { ...node, data: {
             ...node.data,
-            config: { ...(node.data.config as object), enabled: next.levels[0] },
+            config: { ...(node.data.config as object), enabled: (node.data.config as { enabled?: boolean })?.enabled ?? true },
             factor_bindings: { ...(node.data.factor_bindings as Record<string, string> | undefined), 'config.enabled': next.name },
           } } : node) : graphWithSharedFactor({ nodes: current as unknown as ProtocolNode[], edges }, datasetFactorNodeId, 'dataset', next).nodes as unknown as Node[])
           queryClient.invalidateQueries({ queryKey: ['experiments', experimentId] })
@@ -3059,56 +3107,45 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
           queryClient.invalidateQueries({ queryKey: ['experiments', experimentId, 'design-impact'] })
         }}
       />}
-      {personaFactorNodeId && (() => {
-        const personaNode = nodes.find((n) => n.id === personaFactorNodeId)
-        if (!personaNode) return null
-        const boundFactorName = (personaNode.data.factor_bindings as Record<string, string> | undefined)?.config
-        const existingFactor = factors.find((f) => f.name === boundFactorName)
-        return (
-          <FactorEditorDialog
-            key={personaFactorNodeId}
-            graph={toPersistedGraph(nodes, edges)}
-            open
-            onOpenChange={(open) => {
-              if (!open) setPersonaFactorNodeId(null)
-            }}
-            factor={
-              existingFactor || {
-                name: computeFactorName(agentTracedLabel(personaNode, edges, nodes), 'Persona', factors.map((f) => f.name)),
-                levels: seedStructuredLevels(personaNode.data.config, 'persona_text'),
-                level_type: 'persona_text',
-              }
-            }
-            boundField={{ nodeId: personaFactorNodeId, fieldPath: 'config' }}
-            canvasAgentCount={nodes.filter((node) => node.type === 'agent' || node.type === 'sub_agent').length}
-            onSave={async (factor) => {
-              const fresh = await experimentsApi.get(experimentId!)
-              if (
-                (fresh.design_spec?.factors ?? []).some(
-                  (existing) => existing.name === factor.name && existing.name !== boundFactorName,
-                )
-              )
-                throw new Error('A factor with this name already exists.')
-              await experimentsApi.update(experimentId!, {
-                design_spec: {
-                  ...fresh.design_spec,
-                  factors: [
-                    ...(fresh.design_spec?.factors ?? []).filter((existing) => existing.name !== boundFactorName),
-                    factor,
-                  ],
-                },
-              })
-              bindFactorOnNode(personaFactorNodeId, 'config', factor.name)
-              // Mirror level 1 into the node so reconcileFactorBaselines sees
-              // canvas == baseline and doesn't rewrite the level back.
-              setNodes((current) => graphWithFactorBaseline({ nodes: current as unknown as ProtocolNode[], edges: [] }, factor.name, factor.levels[0]).nodes as unknown as Node[])
-              queryClient.invalidateQueries({ queryKey: ['experiments', experimentId] })
-              queryClient.invalidateQueries({ queryKey: ['experiments', experimentId, 'design-impact'] })
-            }}
-            revealHiddenServers={revealsHiddenMcpServers(nodes)}
-          />
-        )
-      })()}
+      {personaFactorNodeId && <PersonaFactorDialog
+        key={personaFactorNodeId}
+        personaNodeId={personaFactorNodeId}
+        initialMode={connectorFactorChoice?.mode as 'boolean' | 'persona_selection' | 'persona_toggle' | undefined}
+        graph={toPersistedGraph(nodes, edges)}
+        factors={factors}
+        onClose={() => setPersonaFactorNodeId(null)}
+        onSave={async (factor, ownerId, previousName) => {
+          const fresh = await experimentsApi.get(experimentId!)
+          const graph = toPersistedGraph(nodes, edges)
+          const conflict = personaFactorConflict(graph, fresh.design_spec?.factors ?? [], personaFactorNodeId, factor.level_type as 'boolean' | 'persona_selection' | 'persona_toggle', ownerId)
+          if (conflict) throw new Error(conflict)
+          if ((fresh.design_spec?.factors ?? []).some((existing) => existing.name === factor.name && existing.name !== previousName)) throw new Error('A factor with this name already exists.')
+          const next = factor.level_type === 'boolean' ? factor : reconcilePersonaFactor(factor, toPersistedGraph(nodes, edges), ownerId)
+          await experimentsApi.update(experimentId!, { design_spec: { ...fresh.design_spec, factors: [...(fresh.design_spec?.factors ?? []).filter((existing) => existing.name !== previousName), next] } })
+          if (previousName) {
+            renameFactorBindings(previousName, next.name)
+            if (next.level_type !== 'boolean') setFactorBaseline(next.name, next.levels[0])
+          }
+          setNodes((current) => next.level_type === 'boolean' ? current.map((node) => node.id === ownerId ? { ...node, data: {
+            ...node.data,
+            config: { ...(node.data.config as object), enabled: (node.data.config as { enabled?: boolean })?.enabled ?? true },
+            factor_bindings: { ...(node.data.factor_bindings as Record<string, string> | undefined), 'config.enabled': next.name },
+          } } : node) : graphWithSharedFactor({ nodes: current as unknown as ProtocolNode[], edges }, personaFactorNodeId, 'persona', next).nodes as unknown as Node[])
+          queryClient.invalidateQueries({ queryKey: ['experiments', experimentId] })
+          queryClient.invalidateQueries({ queryKey: ['experiments', experimentId, 'design-impact'] })
+        }}
+        onRemove={async (name) => {
+          const fresh = await experimentsApi.get(experimentId!)
+          const graph = toPersistedGraph(nodes, edges)
+          const individual = graph.nodes.find((node) => node.id === personaFactorNodeId)?.data.factor_bindings?.['config.enabled'] === name
+          const shared = individual && graph.nodes.some((node) => node.id !== personaFactorNodeId && Object.values(node.data.factor_bindings ?? {}).includes(name))
+          if (!shared) await experimentsApi.update(experimentId!, { design_spec: { ...fresh.design_spec, factors: (fresh.design_spec?.factors ?? []).filter((factor) => factor.name !== name) } })
+          if (individual) setNodes((current) => current.map((node) => node.id === personaFactorNodeId ? { ...node, data: { ...node.data, factor_bindings: Object.fromEntries(Object.entries(node.data.factor_bindings as Record<string, string>).filter(([path]) => path !== 'config.enabled')) } } : node))
+          else removeFactorBindings(name)
+          queryClient.invalidateQueries({ queryKey: ['experiments', experimentId] })
+          queryClient.invalidateQueries({ queryKey: ['experiments', experimentId, 'design-impact'] })
+        }}
+      />}
       {editingFactor && (
         <FactorEditorDialog
           graph={toPersistedGraph(nodes, edges)}

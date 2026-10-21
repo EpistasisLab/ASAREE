@@ -9,6 +9,7 @@ import {
   ChevronRight,
   FlaskConical,
   Layers,
+  Search,
   SlidersHorizontal,
 } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
@@ -16,6 +17,7 @@ import { AppHeader } from '@/components/AppHeader'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Input } from '@/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
@@ -29,6 +31,22 @@ import type { ExecutionSummary } from '@/types/executionResults'
 
 type SortKey = 'name' | 'design_type' | 'created_at'
 type SortDir = 'asc' | 'desc'
+type ProgressFilter = 'all' | 'none' | 'unscored' | 'partial' | 'scored'
+
+const PROGRESS_LABELS: Record<ProgressFilter, string> = {
+  all: 'All progress',
+  none: 'No cells',
+  unscored: 'Unscored',
+  partial: 'Partially scored',
+  scored: 'Fully scored',
+}
+
+function experimentProgress(summary: ExecutionSummary): ProgressFilter | undefined {
+  if (!summary.ready || summary.total === undefined || summary.scored_count === undefined) return undefined
+  if (summary.total === 0) return 'none'
+  if (summary.scored_count === 0) return 'unscored'
+  return summary.scored_count === summary.total ? 'scored' : 'partial'
+}
 
 const SORT_LABELS: Record<SortKey, string> = {
   created_at: 'Created',
@@ -52,10 +70,19 @@ export function ExperimentsPage() {
   })
   const [sort, setSort] = useState<{ key: SortKey; dir: SortDir }>({ key: 'created_at', dir: 'desc' })
   const [page, setPage] = useState(1)
+  const [search, setSearch] = useState('')
+  const [designType, setDesignType] = useState('all')
+  const [progress, setProgress] = useState<ProgressFilter>('all')
+  const designTypes = useMemo(() => [...new Set(data?.map((experiment) => experiment.design_type))].sort(), [data])
 
   const sorted = useMemo(() => {
     if (!data) return data
-    const rows = [...data]
+    const query = search.trim().toLowerCase()
+    const rows = data.filter((experiment) =>
+      (designType === 'all' || experiment.design_type === designType) &&
+      [experiment.name, experiment.description, experiment.id, experiment.design_type]
+        .some((value) => value?.toLowerCase().includes(query)),
+    )
     rows.sort((a, b) => {
       const av = sortValue(a, sort.key)
       const bv = sortValue(b, sort.key)
@@ -63,22 +90,41 @@ export function ExperimentsPage() {
       return sort.dir === 'asc' ? cmp : -cmp
     })
     return rows
-  }, [data, sort])
+  }, [data, sort, search, designType])
 
-  const totalPages = Math.max(1, Math.ceil((sorted?.length ?? 0) / PAGE_SIZE))
-  const currentPage = Math.min(page, totalPages)
-  const paged = sorted?.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE)
+  const unfilteredPage = Math.min(page, Math.max(1, Math.ceil((sorted?.length ?? 0) / PAGE_SIZE)))
+  // A progress filter needs summaries across every matching page, not just visible tiles.
+  const summaryExperiments = progress === 'all'
+    ? sorted?.slice((unfilteredPage - 1) * PAGE_SIZE, unfilteredPage * PAGE_SIZE)
+    : sorted
 
   // Only maintained summaries cross the list/detail navigation boundary.
   const summaryQueries = useQueries({
-    queries: (paged ?? []).map((experiment) => ({
+    queries: (summaryExperiments ?? []).map((experiment) => ({
       queryKey: executionKeys.summary(experiment.id, {}),
       queryFn: ({ signal }) => experimentsApi.getExecutionSummary(experiment.id, {}, signal),
       refetchInterval: (query: Query<ExecutionSummary>) => query.state.error && !query.state.data ? false : !query.state.data?.ready || query.state.data.refreshing || query.state.data.has_active ? 5000 : false,
     })),
   })
+  const summaryByExperiment = new Map(
+    (summaryExperiments ?? []).map((experiment, i) => [experiment.id, summaryQueries[i]?.data]),
+  )
+  const filtered = progress === 'all' ? sorted : sorted?.filter((experiment) => {
+    const summary = summaryByExperiment.get(experiment.id)
+    return summary !== undefined && experimentProgress(summary) === progress
+  })
+  const progressLoading = progress !== 'all' && summaryQueries.some((query) =>
+    !query.isError && (!query.data || !query.data.ready),
+  )
+  const progressError = progress !== 'all' && summaryQueries.some((query) => query.isError)
+  const totalPages = Math.max(1, Math.ceil((filtered?.length ?? 0) / PAGE_SIZE))
+  const currentPage = Math.min(page, totalPages)
+  const paged = filtered?.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE)
   const accentByExperiment = new Map(
-    (paged ?? []).map((experiment, i) => [experiment.id, cellsStatusAccent(summaryQueries[i]?.data?.total ?? 0, summaryQueries[i]?.data?.scored_count ?? 0)]),
+    (paged ?? []).map((experiment) => {
+      const summary = summaryByExperiment.get(experiment.id)
+      return [experiment.id, cellsStatusAccent(summary?.total ?? 0, summary?.scored_count ?? 0)]
+    }),
   )
 
   return (
@@ -94,17 +140,67 @@ export function ExperimentsPage() {
           </div>
         </div>
 
-        <div className="flex items-center justify-between">
+        <div className="flex flex-wrap items-center gap-3">
+          <div className="relative w-full sm:max-w-md">
+            <Search aria-hidden="true" className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              type="search"
+              aria-label="Search experiments"
+              placeholder="Search by name, description, ID, or design…"
+              className="pl-9"
+              value={search}
+              onChange={(event) => {
+                setSearch(event.target.value)
+                setPage(1)
+              }}
+            />
+          </div>
+          <Select value={designType} onValueChange={(value) => {
+            if (value === null) return
+            setDesignType(value)
+            setPage(1)
+          }}>
+            <SelectTrigger aria-label="Filter by design type" className="w-44">
+              <SelectValue>{(value: string) => value === 'all' ? 'All designs' : value}</SelectValue>
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All designs</SelectItem>
+              {designTypes.map((type) => <SelectItem key={type} value={type}>{type}</SelectItem>)}
+            </SelectContent>
+          </Select>
+          <Select value={progress} onValueChange={(value) => {
+            if (value === null || !(value in PROGRESS_LABELS)) return
+            setProgress(value as ProgressFilter)
+            setPage(1)
+          }}>
+            <SelectTrigger aria-label="Filter by progress" className="w-44">
+              <SelectValue>{(value: ProgressFilter) => PROGRESS_LABELS[value]}</SelectValue>
+            </SelectTrigger>
+            <SelectContent>
+              {Object.entries(PROGRESS_LABELS).map(([value, label]) => (
+                <SelectItem key={value} value={value}>{label}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          {(search || designType !== 'all' || progress !== 'all') && (
+            <Button variant="outline" size="sm" onClick={() => {
+              setSearch('')
+              setDesignType('all')
+              setProgress('all')
+              setPage(1)
+            }}>Clear filters</Button>
+          )}
+        </div>
+
+        <div className="flex flex-wrap items-center justify-between gap-3">
           <p className="text-sm text-muted-foreground">
-            {isLoading ? 'Loading…' : `${sorted?.length ?? 0} experiment${sorted?.length === 1 ? '' : 's'}`}
+            {isLoading || progressLoading ? 'Loading…' : `${filtered?.length ?? 0} experiment${filtered?.length === 1 ? '' : 's'}`}
           </p>
           <div className="flex items-center gap-2">
             <span className="text-xs text-muted-foreground">Show archived</span>
-            {/* Not gated behind "sorted.length > 0" like the Sort controls below --
-                otherwise archiving your only experiment hides this toggle along with
-                the (now empty) list, with no way to reveal it again. */}
-            <Switch checked={includeArchived} onCheckedChange={setIncludeArchived} aria-label="Show archived" />
-            {sorted && sorted.length > 0 && (
+            {/* Always reachable, including when all experiments are archived. */}
+            <Switch checked={includeArchived} onCheckedChange={(checked) => { setIncludeArchived(checked); setPage(1) }} aria-label="Show archived" />
+            {data && data.length > 0 && (
               <>
                 <span className="text-xs text-muted-foreground">Sort</span>
                 <Select
@@ -140,7 +236,11 @@ export function ExperimentsPage() {
           </div>
         </div>
 
-        {isLoading ? (
+        {progressError && (
+          <p role="alert" className="text-sm text-destructive">Some progress could not be loaded. Results may be incomplete.</p>
+        )}
+
+        {isLoading || progressLoading ? (
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
             {Array.from({ length: 6 }).map((_, i) => (
               <Skeleton key={i} className="h-36 w-full" />
@@ -150,6 +250,11 @@ export function ExperimentsPage() {
           <div className="flex flex-col items-center gap-2 rounded-xl border border-dashed py-16 text-center">
             <FlaskConical className="size-8 text-muted-foreground/40" />
             <p className="text-sm text-muted-foreground">No experiments yet.</p>
+          </div>
+        ) : filtered?.length === 0 ? (
+          <div className="flex flex-col items-center gap-3 rounded-xl border border-dashed py-16 text-center">
+            <Search aria-hidden="true" className="size-8 text-muted-foreground/40" />
+            <p className="text-sm text-muted-foreground">{progressError ? 'Progress is unavailable for the remaining experiments.' : 'No experiments match your search or filters.'}</p>
           </div>
         ) : (
           <>
@@ -215,8 +320,8 @@ export function ExperimentsPage() {
 
             <div className="flex items-center justify-between">
               <p className="text-xs text-muted-foreground">
-                Showing {(currentPage - 1) * PAGE_SIZE + 1}–{Math.min(currentPage * PAGE_SIZE, sorted!.length)} of{' '}
-                {sorted!.length}
+                Showing {(currentPage - 1) * PAGE_SIZE + 1}–{Math.min(currentPage * PAGE_SIZE, filtered!.length)} of{' '}
+                {filtered!.length}
               </p>
               <div className="flex items-center gap-2">
                 <Button

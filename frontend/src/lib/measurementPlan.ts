@@ -86,7 +86,6 @@ export function upsertRuntimeMetric(plan: MeasurementPlan | null, metric: Design
         value_type: 'number',
         direction: metric.direction,
         aggregation: metric.aggregation ?? 'mean',
-        primary: metric.primary,
         description: metric.description,
         unit: metric.unit,
       },

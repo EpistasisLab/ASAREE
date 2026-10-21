@@ -11,7 +11,6 @@ from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from asaree.services.measurement_engine import (
-    MultiplePrimaryMetricsError,
     ValidationIssue,
     ValidationReport,
     parse_measurement_plan,
@@ -90,18 +89,7 @@ async def validate_experiment_measurement_plan(
     allow_preserved_bindings: bool = True,
 ) -> ValidationReport:
     """Validate the complete producer plan before lock, publish, or execution."""
-    try:
-        normalized_document = normalize_experiment_measurement_plan(document, metrics)
-    except MultiplePrimaryMetricsError:
-        return ValidationReport(
-            (
-                ValidationIssue(
-                    "multiple_primary_metrics",
-                    "A measurement plan can have at most one primary metric.",
-                    "metrics",
-                ),
-            )
-        )
+    normalized_document = normalize_experiment_measurement_plan(document, metrics)
     plan = parse_measurement_plan(normalized_document)
     plan_by_id = {metric.id: metric for metric in plan.metrics}
     selected = normalize_metrics(
@@ -134,13 +122,11 @@ async def validate_experiment_measurement_plan(
                 metric.get("valueType", "number"),
                 metric.get("direction", "maximize"),
                 "rate" if metric.get("valueType") == "boolean" else metric.get("aggregation", "mean"),
-                bool(metric.get("primary")),
             )
             declared_semantics += (
                 declared.value_type,
                 declared.direction,
                 declared.aggregation,
-                bool(declared.primary),
             )
         if selected_semantics != declared_semantics:
             reconciliation_issues.append(

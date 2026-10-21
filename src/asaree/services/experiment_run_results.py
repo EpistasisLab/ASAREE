@@ -167,29 +167,6 @@ def _sum_reported(rows: list[dict[str, Any]], key: str) -> float | None:
     return sum(values) if values else None
 
 
-def _primary_metric(design_spec: dict[str, Any] | None) -> tuple[str | None, str | None]:
-    """The declared comparison metric and direction, with safe defaults."""
-    metrics = design_spec.get("metrics") if isinstance(design_spec, dict) else None
-    if not isinstance(metrics, list):
-        return None, None
-    for metric in metrics:
-        if (
-            isinstance(metric, dict)
-            and metric.get("kind") == "runtime"
-            and metric.get("primary")
-            and isinstance(metric.get("name"), str)
-            and metric.get("valueType", "number") in {"number", "boolean"}
-        ):
-            direction = metric.get("direction")
-            # Catalog runtime metrics are stored under their telemetry key
-            # (cost_usd, duration_seconds, ...), while their display name is
-            # intentionally human-readable ("Cost", "Duration").
-            key = metric.get("catalogKey") if metric.get("kind") == "runtime" else metric["name"]
-            resolved_key = key if isinstance(key, str) else metric["name"]
-            if direction == "neutral" or metric.get("valueType") == "string":
-                continue
-            return resolved_key, direction if direction in {"maximize", "minimize"} else "maximize"
-    return None, None
 
 
 def _declared_runtime_metrics(design_spec: dict[str, Any] | None, execution: dict[str, Any]) -> dict[str, float]:
@@ -1214,7 +1191,6 @@ async def summarize_experiment_run_results(
         "reported_usage_count": sum(row["reported_usage_count"] for row in current_rows),
         "reported_cost_count": sum(row["reported_cost_count"] for row in current_rows),
     }
-    primary_metric, primary_metric_direction = _primary_metric(design_spec)
     return {
         "consumption_mode": "whole_dataset",
         "selected_design_spec": design_spec,
@@ -1225,8 +1201,8 @@ async def summarize_experiment_run_results(
         "metric_types": {key: metric_types.get(key, "number") for key in sorted(metric_keys)},
         "metric_aggregations": {key: metric_aggregations.get(key, "mean") for key in sorted(metric_keys)},
         "metric_directions": {key: metric_directions.get(key, "neutral") for key in sorted(metric_keys)},
-        "primary_metric": primary_metric if primary_metric in metric_keys else None,
-        "primary_metric_direction": primary_metric_direction,
+        "primary_metric": None,
+        "primary_metric_direction": None,
         "cells": sorted(cell_summaries, key=lambda cell: cell["cell_label"]),
         "replicates": sorted(result_rows, key=lambda row: (row["cell_label"], row["replicate_number"])),
     }

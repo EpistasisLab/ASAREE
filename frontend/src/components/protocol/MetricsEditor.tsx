@@ -62,7 +62,6 @@ function synchronizeMeasurementPlanMetrics(plan: MeasurementPlan | null, metrics
     return [metric.kind === 'custom' ? { ...definition, name: metric.name } : {
       ...synchronized,
       direction: metric.direction,
-      primary: metric.primary,
     }]
   })
   return { ...plan, metrics: [...orderedDefinitions, ...definitionsById.values()] }
@@ -548,15 +547,7 @@ export function MetricsEditor({
     }
     for (const metric of selected) nextPlan = upsertRuntimeMetric(nextPlan, metric)
     const nextMetrics = [...preserved, ...selected]
-    const byId = new Map(nextMetrics.map((metric) => [metric.id, metric]))
-    const synchronizedPlan = nextPlan && {
-      ...nextPlan,
-      metrics: nextPlan.metrics.map((definition) => {
-        const designMetric = byId.get(definition.id)
-        return designMetric?.kind === 'runtime' ? { ...definition, primary: designMetric.primary } : definition
-      }),
-    }
-    return { metrics: nextMetrics, measurementPlan: synchronizedPlan }
+    return { metrics: nextMetrics, measurementPlan: nextPlan }
   }
 
   return (

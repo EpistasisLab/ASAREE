@@ -31,8 +31,8 @@ from asaree.services.users import get_user_by_email
 
 
 @pytest_asyncio.fixture
-async def row_results_setup(tmp_path: Path) -> AsyncIterator[tuple[AsyncSession, dict]]:
-    """Use the seeded application user and a real hash-verified CSV source."""
+async def row_results_setup(tmp_path: Path, row_test_users: None) -> AsyncIterator[tuple[AsyncSession, dict]]:
+    """Use the fixture-created application user and a real hash-verified CSV source."""
     engine = create_async_engine(os.environ["ASAREE_PRODUCT_DATABASE_URL"])
     try:
         async with engine.begin() as connection:

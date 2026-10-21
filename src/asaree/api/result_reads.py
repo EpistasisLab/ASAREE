@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import uuid
 from collections.abc import Awaitable, Callable
 from typing import Annotated, Any
@@ -48,6 +49,16 @@ async def selected_scope(
 Scope = Annotated[result_reads.ResultScope, Depends(selected_scope)]
 
 
+def factor_selection(factors: str | None) -> dict[str, Any]:
+    try:
+        value = json.loads(factors or '{}')
+        if not isinstance(value, dict) or len(value) > 50:
+            raise ValueError
+        return value
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(status_code=422, detail='Invalid factor filters.') from exc
+
+
 async def _read(operation: Callable[..., Awaitable[dict[str, Any]]], *args: Any, **kwargs: Any) -> dict[str, Any]:
     try:
         return await operation(*args, **kwargs)
@@ -81,11 +92,18 @@ async def cells(
     scope: Scope,
     limit: Limit = result_reads.PAGE_SIZE,
     cursor: str | None = None,
-    metric: str | None = None,
-    direction: str = "maximize",
+    search: Annotated[str, Query(max_length=200)] = '',
+    status: Annotated[str | None, Query(pattern=(
+        "^(not_started|pending|running|finalizing|completed|failed|cancelled|limit_reached|scoring_failed)$"
+    ))] = None,
+    factors: Annotated[str | None, Query(max_length=10000)] = None,
+    result_status: Annotated[str | None, Query(pattern="^(ready|needs_attention|awaiting_results)$")] = None,
+    include_all_attempt_usage: bool = False,
 ) -> dict[str, Any]:
     return await _read(
-        result_reads.read_cells, db, scope, limit=limit, cursor=cursor, metric=metric, direction=direction
+        result_reads.read_cells, db, scope, limit=limit, cursor=cursor,
+        search=search, status=status, result_status=result_status, factors=factor_selection(factors),
+        include_all_attempt_usage=include_all_attempt_usage,
     )
 
 
@@ -98,8 +116,20 @@ async def executions(
     cell_id: uuid.UUID | None = None,
     replicate_id: uuid.UUID | None = None,
     status: Annotated[
-        str | None, Query(pattern="^(not_started|pending|running|finalizing|completed|failed|cancelled|limit_reached)$")
+        str | None,
+        Query(pattern=(
+            "^(not_started|pending|running|finalizing|completed|failed|cancelled|limit_reached|scoring_failed)$"
+        )),
     ] = None,
+    search: Annotated[str, Query(max_length=200)] = '',
+    execution_search: Annotated[str, Query(max_length=200)] = '',
+    factors: Annotated[str | None, Query(max_length=10000)] = None,
+    sort_metric: Annotated[str | None, Query(pattern="^(total_tokens|cost_usd|duration_seconds)$")] = None,
+    sort_direction: Annotated[str, Query(pattern="^(asc|desc)$")] = "asc",
+    usage_metric: Annotated[str | None, Query(pattern="^(total_tokens|cost_usd|duration_seconds)$")] = None,
+    usage_min: Annotated[float | None, Query(ge=0, allow_inf_nan=False)] = None,
+    usage_max: Annotated[float | None, Query(ge=0, allow_inf_nan=False)] = None,
+    usage_upper_inclusive: bool = False,
 ) -> dict[str, Any]:
     return await _read(
         result_reads.read_executions,
@@ -110,7 +140,21 @@ async def executions(
         cell_id=cell_id,
         replicate_id=replicate_id,
         status=status,
+        search=search, execution_search=execution_search, factors=factor_selection(factors),
+        sort_metric=sort_metric, sort_direction=sort_direction,
+        usage_metric=usage_metric, usage_min=usage_min, usage_max=usage_max,
+        usage_upper_inclusive=usage_upper_inclusive,
     )
+
+
+@router.get('/factor-options')
+async def factor_options(db: DbSession, scope: Scope) -> dict[str, Any]:
+    return await _read(result_reads.read_factor_options, db, scope)
+
+
+@router.get("/slots/{slot_id}/neighbors")
+async def neighbors(slot_id: uuid.UUID, db: DbSession, scope: Scope) -> dict[str, Any]:
+    return await _read(result_reads.read_execution_neighbors, db, scope, slot_id=slot_id)
 
 
 @router.get("/slots/{slot_id}/attempts")
@@ -136,6 +180,14 @@ async def cell(
     if cell_id is None and cell_label is None:
         raise HTTPException(status_code=422, detail="cell_selection_required")
     return await _read(result_reads.read_cell, db, scope, cell_id, cell_label)
+
+
+@router.get("/cell/usage-distribution")
+async def usage_distribution(
+    db: DbSession, scope: Scope, cell_id: uuid.UUID,
+    metric: Annotated[str, Query(pattern="^(total_tokens|cost_usd|duration_seconds)$")],
+) -> dict[str, Any]:
+    return await _read(result_reads.read_usage_distribution, db, scope, cell_id=cell_id, metric=metric)
 
 
 @router.get("/attempts/{run_id}")

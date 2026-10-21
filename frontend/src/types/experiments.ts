@@ -49,6 +49,7 @@ export interface DesignMetric {
   kind?: 'runtime' | 'custom'
   valueType?: 'number' | 'boolean' | 'string' | 'opaque'
   unit?: string
+  /** Historical metadata, ignored by current comparison and execution behavior. */
   primary?: boolean
   direction?: 'maximize' | 'minimize' | 'neutral'
   aggregation?: 'mean' | 'sum' | 'none'
@@ -66,6 +67,7 @@ export interface MeasurementPlan {
     value_type?: 'number' | 'boolean' | 'opaque'
     direction?: MeasurementDirection
     aggregation?: MeasurementAggregation
+    /** Historical metadata, ignored by current comparison and execution behavior. */
     primary?: boolean
     description?: string
     unit?: string
@@ -297,8 +299,8 @@ export interface ExperimentAnalysis {
 }
 
 // GET /experiments/{id}/results -- available is false (with a human-
-// readable reason) whenever there's nothing to show yet: no factors/primary
-// metric declared, a factor with other than 2 levels, or not enough scored
+// readable reason) whenever there's nothing to show yet: no factors/comparison
+// metric selected, a factor with other than 2 levels, or not enough scored
 // replicates (see services.factorial_analysis.analyze_experiment_design).
 export interface ExperimentResults {
   available: boolean

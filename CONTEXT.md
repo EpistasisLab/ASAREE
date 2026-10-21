@@ -30,9 +30,9 @@ One execution unit planned under a cell. A row-mode parent Replicate owns one Ro
 **Row execution**:
 One complete protocol execution for a (cell, original dataset row, replicate) tuple.
 
-**Primary metric**:
-The optional declared metric Results uses to rank cells. An editable experiment may have none; when declared, it must be unique.
-_Avoid_: Main metric, target metric
+**Comparison metric**:
+A metric selected to compare outcomes. Selecting it does not designate an experiment-wide winner or make other measurements less valid.
+_Avoid_: Primary metric, main metric
 
 **Design revision**:
 An immutable snapshot of the generated design. The current design is the one revision with `superseded_at IS NULL`.

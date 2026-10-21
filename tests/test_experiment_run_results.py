@@ -18,7 +18,6 @@ from asaree.services.experiment_run_results import (
     _merge_legacy_facets,
     _node_labels,
     _numeric_metrics,
-    _primary_metric,
     _row_attempt_payload,
     _sum,
     _usage,
@@ -86,19 +85,6 @@ def test_boolean_metric_is_a_binary_numeric_outcome() -> None:
     assert _numeric_metrics({"passed": True, "failed": False}) == {"passed": 1.0, "failed": 0.0}
 
 
-def test_primary_metric_uses_the_design_direction() -> None:
-    assert _primary_metric(
-        {
-            "metrics": [
-                {"name": "Loss", "catalogKey": "loss", "kind": "runtime", "primary": True, "direction": "minimize"}
-            ]
-        }
-    ) == (
-        "loss",
-        "minimize",
-    )
-
-
 def test_declared_runtime_metrics_are_projected_from_execution_telemetry() -> None:
     spec = {
         "metrics": [
@@ -108,7 +94,6 @@ def test_declared_runtime_metrics_are_projected_from_execution_telemetry() -> No
     }
     execution = {"cost_usd": 0.04, "total_tokens": 150, "duration_seconds": 2.5}
     assert _declared_runtime_metrics(spec, execution) == {"cost_usd": 0.04, "total_tokens": 150.0}
-    assert _primary_metric(spec) == ("cost_usd", "maximize")
 
 
 def test_only_builtin_metrics_declare_aggregations() -> None:
@@ -229,7 +214,6 @@ def test_results_csv_ignores_legacy_custom_metric_semantics() -> None:
     reported = next(column for column in schema["columns"] if column["name"] == "pr_auc")
 
     assert reported == {"name": "pr_auc", "role": "reported"}
-    assert _primary_metric(design_spec) == (None, None)
 
 
 def test_results_csv_projects_script_stdout_and_execution_metadata() -> None:

@@ -137,6 +137,8 @@ CMD ["uvicorn", "asaree.app:app", "--host", "0.0.0.0", "--port", "8000"]
 FROM application AS test
 
 COPY tests/ ./tests/
+# Publication contract tests read these fixtures at their repository-relative path.
+COPY publications/BDM/myocardial-*.json ./publications/BDM/
 # One backend contract test compares the mirrored TypeScript catalog with the
 # Python source of truth. Keep the test image narrow while making that source
 # available at the same repository-relative path used outside containers.

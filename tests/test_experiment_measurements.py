@@ -258,7 +258,6 @@ async def test_experiment_measurement_validation_rejects_invalid_cross_plan_stru
                 "valueType": metric["value_type"],
                 "direction": metric["direction"],
                 "aggregation": metric["aggregation"],
-                "primary": metric["primary"],
             }
             for metric in document["metrics"]
         ],
@@ -323,7 +322,7 @@ async def test_experiment_measurement_validation_accepts_a_plan_without_a_primar
 
 
 @pytest.mark.asyncio
-async def test_experiment_measurement_validation_reports_multiple_primary_metrics() -> None:
+async def test_experiment_measurement_validation_ignores_historical_primary_flags() -> None:
     metric = {
         "name": "Cost",
         "value_type": "number",
@@ -344,7 +343,7 @@ async def test_experiment_measurement_validation_reports_multiple_primary_metric
         owner_id=uuid.uuid4(),
     )
 
-    assert [issue.code for issue in report.issues] == ["multiple_primary_metrics"]
+    assert not any('primary' in issue.code for issue in report.issues)
 
 
 @pytest.mark.asyncio

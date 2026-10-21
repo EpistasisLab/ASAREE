@@ -46,11 +46,9 @@ class ResearchExperiment(Base, TimestampMixin):
     #     when absent, see services.design_generation).
     #   "randomization_seed": int | None -- shuffles generated cells'
     #     execution order (not the combinations themselves) when set.
-    #   "metrics": [{"name": str, "primary": bool, "direction": "maximize"|
-    #     "minimize"}, ...] -- declared up front, unlike the frontend's
-    #     purely-inferred availableMetricKeys, so a primary metric/direction
-    #     exists before any cell has run (services.factorial_analysis reads
-    #     this to default its own primary_metric/reference_condition params).
+    #   "metrics": metric declarations and producer bindings. Comparison
+    #     metrics are explicit viewing/analysis choices; old primary flags
+    #     have no effect on validation, execution, scoring, or ranking.
     #   "coordination_strategy": {"slug": str, "params": dict} -- "sequential"
     #     (default when absent -- today's exact existing DAG-handoff
     #     behavior, unchanged) or "critic_gate" (promotes the existing

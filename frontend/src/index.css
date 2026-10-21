@@ -107,6 +107,10 @@
     --chart-3: oklch(0.7 0.16 150);
     --chart-4: oklch(0.74 0.17 60);
     --chart-5: oklch(0.7 0.18 25);
+    /* Execution outcomes use distinct hues in summaries and replicate badges. */
+    --status-cancelled: oklch(0.72 0.15 250);
+    --status-limit: oklch(0.86 0.17 105);
+    --status-scoring-failed: oklch(0.74 0.2 333);
     /* Protocol-canvas node palette -- the EXTRA hues, beyond the five
        --chart-* ones, that the thirteen node kinds need in order not to
        repeat. Five kinds keep a --chart-* hue and eight get a slot here;

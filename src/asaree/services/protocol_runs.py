@@ -581,13 +581,6 @@ async def update_attempt_result(
     return run
 
 
-def _required_metric_was_measured(evaluation: MeasurementEvaluation, metric_id: str | None) -> bool:
-    return metric_id is None or any(
-        observation.metric_id == metric_id and observation.status == "measured"
-        for observation in evaluation.observations
-    )
-
-
 @dataclass(frozen=True)
 class MeasurementSubject:
     """Stable identity and current result projection for one attempt."""
@@ -662,7 +655,7 @@ async def record_measurement_evaluation(
     protocol_run_id: uuid.UUID,
     evaluation: MeasurementEvaluation,
     *,
-    required_metric_id: str | None = None,
+    required_metric_id: str | None = None,  # Accepted from old callers; never gates valid observations.
 ) -> ProtocolRun | None:
     """Freeze one engine result on its attempt and update only its current projection.
 
@@ -696,7 +689,6 @@ async def record_measurement_evaluation(
         for observation in evaluation.observations
         if observation.status == "measured" and observation.producer.kind != "runtime"
     }
-    required_metric_measured = _required_metric_was_measured(evaluation, required_metric_id)
     if measured_values:
         attempt_result["metric_values"] = {
             **(attempt_result.get("metric_values") or {}),
@@ -764,7 +756,6 @@ async def record_measurement_evaluation(
         if (
             run.status == "completed"
             and measured_values
-            and required_metric_measured
             and node_run_truncation(run.node_runs) is None
         ):
             projection["metric_values"] = measured_values
@@ -785,7 +776,7 @@ async def record_measurement_evaluation(
         # The numbers are not lost: `attempt_result["metric_values"]` above and
         # `artifacts["measurement"]` here both keep the full document, so the
         # run stays inspectable and a re-run at a workable cap scores normally.
-        if measured_values and required_metric_measured and node_run_truncation(run.node_runs) is None:
+        if measured_values and node_run_truncation(run.node_runs) is None:
             replicate.metric_values = {**(replicate.metric_values or {}), **measured_values}
     await db.flush()
     await db.refresh(run)

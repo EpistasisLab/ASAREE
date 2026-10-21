@@ -9,18 +9,18 @@ import { jobActive, useResultJob } from '@/lib/resultJobs'
 import { newRequestKey } from '@/lib/requestKey'
 import { InfoTooltip } from './InfoTooltip'
 
-export function ResultsScorecard({ label, help, value, note, icon: Icon }: { label: string; help: string; value: string; note?: string; icon: LucideIcon }) {
-  return <div className="rounded-md border bg-card px-2.5 py-2 transition-colors hover:bg-muted/30">
-    <div className="flex items-center justify-between gap-2 text-muted-foreground"><span className="flex items-center gap-1 text-xs">{label}<InfoTooltip>{help}</InfoTooltip></span><Icon className="size-3.5" aria-hidden="true" /></div>
-    <p className="mt-1 truncate text-base font-medium tabular-nums" title={value}>{value}</p>
+export function ResultsScorecard({ label, help, value, valueTitle, note, icon: Icon }: { label: string; help: string; value: string; valueTitle?: string; note?: string; icon: LucideIcon }) {
+  return <Card size="sm" className="min-w-0 gap-2 p-2 transition-colors hover:bg-muted/30 @min-[450px]:p-3">
+    <div className="flex items-start gap-1 text-[11px] text-muted-foreground @min-[450px]:text-xs"><Icon className="mt-0.5 size-3 shrink-0" aria-hidden="true" /><span className="min-w-0 flex-1 break-words">{label}</span><InfoTooltip>{help}</InfoTooltip></div>
+    <p className="mt-auto truncate text-center font-mono text-sm font-medium tabular-nums @min-[450px]:text-lg" title={valueTitle ?? value}>{value}</p>
     {note && <p className="mt-0.5 text-[11px] text-muted-foreground">{note}</p>}
-  </div>
+  </Card>
 }
 
 /** One panel structure for both modes; data-specific content occupies these slots. */
-export function ResultsPanel({ experimentId, experimentName, scope, controls, summary, scorecards, notice, comparison, cells, details }: {
+export function ResultsPanel({ experimentId, experimentName, scope, progress, controls, metadata, summary, scorecards, notice, comparison, cells, details }: {
   experimentId: string; experimentName: string; scope: ResultsScope
-  controls?: ReactNode; summary: ReactNode; scorecards?: ReactNode; notice?: ReactNode
+  progress?: ReactNode; controls?: ReactNode; metadata?: ReactNode; summary?: ReactNode; scorecards?: ReactNode; notice?: ReactNode
   comparison?: ReactNode; cells: ReactNode; details?: ReactNode
 }) {
   const [maximized, setMaximized] = useState(false)
@@ -47,16 +47,19 @@ export function ResultsPanel({ experimentId, experimentName, scope, controls, su
     document.addEventListener('keydown', close)
     return () => { document.body.style.overflow = previous; document.removeEventListener('keydown', close) }
   }, [maximized])
+  const panelActions = <div role="group" aria-label="Results actions" className="flex shrink-0 flex-wrap justify-end gap-1.5">
+    <Button variant="outline" size="xs" onClick={() => setMaximized(value => !value)}>{maximized ? <Minimize2 className="size-3" /> : <Maximize2 className="size-3" />}{maximized ? 'Restore Results' : 'Maximize Results'}</Button>
+    <Button variant="outline" size="xs" disabled={downloading} onClick={() => createExport.mutate()}>{downloading ? 'Preparing…' : <><Download className="size-3" /> Download CSV</>}</Button>
+  </div>
   return <div className={maximized ? '@container fixed inset-0 z-50 space-y-4 overflow-auto bg-background p-4' : '@container space-y-4 p-3'}>
+    {panelActions}
+    {metadata}
+    {progress}
     <section className="space-y-2">
       {controls}
-      <Card size="sm" className="flex-row flex-wrap items-start justify-between gap-3 border-primary/25 bg-primary/5 p-3">
+      {summary && <Card size="sm" className="flex-row flex-wrap items-start justify-between gap-3 p-3">
         {summary}
-        <div className="flex shrink-0 flex-wrap gap-1.5">
-          <Button variant="outline" size="xs" onClick={() => setMaximized(value => !value)}>{maximized ? <Minimize2 className="size-3" /> : <Maximize2 className="size-3" />}{maximized ? 'Restore Results' : 'Maximize Results'}</Button>
-          <Button variant="outline" size="xs" disabled={downloading} onClick={() => createExport.mutate()}>{downloading ? 'Preparing…' : <><Download className="size-3" /> Download CSV</>}</Button>
-        </div>
-      </Card>
+      </Card>}
       {scorecards && <div className="mt-2 grid grid-cols-2 gap-2">{scorecards}</div>}
       {notice}
       {error && <p role="alert" className="text-xs text-destructive">{error}</p>}
@@ -65,7 +68,7 @@ export function ResultsPanel({ experimentId, experimentName, scope, controls, su
     </section>
     {comparison}
     <section className="space-y-2">
-      <div><h2 className="flex items-center gap-1 text-sm font-medium">Cell results<InfoTooltip>Each card groups replicates that share the same experimental factor levels. Expand one to compare individual runs.</InfoTooltip></h2><p className="text-xs text-muted-foreground">Expand a condition to inspect its replicates, metrics, usage, outputs, and node activity.</p></div>
+      <div><h2 className="flex items-center gap-1 text-sm font-medium">Cells<InfoTooltip>Each cell groups replicates that share the same experimental factor levels. Select a cell to review its results and replicates in the inspector.</InfoTooltip></h2><p className="text-xs text-muted-foreground">Select a cell to inspect its replicates, measurements, usage, and outputs.</p></div>
       {cells}
     </section>
     {details}

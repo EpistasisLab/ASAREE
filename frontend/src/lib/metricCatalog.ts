@@ -93,7 +93,6 @@ export function normalizeDesignMetrics(metrics: DesignMetric[] | undefined): Des
         ? raw.direction
         : (catalog?.defaultDirection ?? 'maximize'),
       aggregation: raw.valueType === 'boolean' ? 'mean' : (raw.aggregation === 'sum' ? 'sum' : raw.aggregation === 'none' ? 'none' : (catalog?.aggregation ?? 'mean')),
-      primary: Boolean(raw.primary),
       unit: raw.unit ?? catalog?.unit,
       scoring: undefined,
     }

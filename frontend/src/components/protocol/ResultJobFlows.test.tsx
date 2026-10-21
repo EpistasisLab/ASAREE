@@ -37,7 +37,7 @@ describe('asynchronous result commands', () => {
   it('prepares without executing, then confirms the sealed job independently of summary preparation', async () => {
     mount(<RunAllCellsButton protocol={protocol} experimentId="experiment" regenerationRequired={false} unboundFactors={[]} bindingDiscrepancies={[]} />)
     fireEvent.click(screen.getByRole('button', { name: 'Run all cells' }))
-    await screen.findByText('15786 executions will be queued.')
+    await screen.findByText('15786 run attempts will be queued.')
     expect(protocolsApi.runCells).not.toHaveBeenCalled()
     expect(experimentsApi.confirmResultJob).not.toHaveBeenCalled()
     fireEvent.click(screen.getByRole('button', { name: 'Confirm batch' }))
@@ -50,7 +50,7 @@ describe('asynchronous result commands', () => {
   it('selects completed work by slot ID and abandons the previous preview safely', async () => {
     mount(<RunAllCellsButton protocol={protocol} experimentId="experiment" regenerationRequired={false} unboundFactors={[]} bindingDiscrepancies={[]} />)
     fireEvent.click(screen.getByRole('button', { name: 'Run all cells' }))
-    await screen.findByText('15786 executions will be queued.')
+    await screen.findByText('15786 run attempts will be queued.')
     fireEvent.click(screen.getByRole('checkbox', { name: 'Run replicate 1 again' }))
     await waitFor(() => expect(experimentsApi.createResultJob).toHaveBeenLastCalledWith('experiment', expect.anything(),
       expect.objectContaining({ rerun_slot_ids: ['stable-slot'] }), expect.any(AbortSignal)))
@@ -64,7 +64,7 @@ describe('asynchronous result commands', () => {
     try {
       mount(<RunAllCellsButton protocol={protocol} experimentId="experiment" regenerationRequired={false} unboundFactors={[]} bindingDiscrepancies={[]} />)
       fireEvent.click(screen.getByRole('button', { name: 'Run all cells' }))
-      await screen.findByText('15786 executions will be queued.')
+      await screen.findByText('15786 run attempts will be queued.')
       expect(screen.getByText(/including ones that hit their iteration limit, are skipped unless selected/)).toBeInTheDocument()
       fireEvent.click(screen.getByRole('checkbox', { name: 'Run replicate 1 again' }))
       await waitFor(() => expect(experimentsApi.createResultJob).toHaveBeenLastCalledWith('experiment', expect.anything(),

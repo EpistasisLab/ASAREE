@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type RefObject } from 'react'
 import { BarChart3, ListChecks, PanelLeftClose, PencilRuler } from 'lucide-react'
+import { useSearchParams } from 'react-router-dom'
 import { Card } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
 import { cn } from '@/lib/utils'
@@ -8,6 +9,7 @@ import { ExperimentVersionDesign, ExperimentVersionRuns } from './ExperimentVers
 import type { ProtocolCanvasHandle } from './ProtocolCanvas'
 import { RunsTab } from './RunsTab'
 import { ResultsTab, type ResultsSelection } from './ResultsTab'
+import { ResultsStatusBadge } from './ResultsStatusBadge'
 import type { Experiment } from '@/types/experiments'
 import type { Protocol, ProtocolRevision } from '@/types/protocols'
 
@@ -71,6 +73,7 @@ export function ExperimentSidePanel({
   regenerationRequired,
   unboundFactors,
   onResultSelection,
+  selectedResultCellId,
   version,
   viewingHistory = false,
   onDraftBusyChange,
@@ -86,13 +89,16 @@ export function ExperimentSidePanel({
   regenerationRequired: boolean
   unboundFactors: string[]
   onResultSelection: (selection: ResultsSelection | null) => void
+  selectedResultCellId?: string | null
   version?: ProtocolRevision
   viewingHistory?: boolean
   onDraftBusyChange?: (busy: boolean) => void
 }) {
   const [width, setWidth] = useState(readStoredPanelWidth)
   const [collapsed, setCollapsed] = useState(readStoredCollapsed)
-  const [activeTab, setActiveTab] = useState<PanelTab>('design')
+  const [searchParams, setSearchParams] = useSearchParams()
+  const requestedTab = searchParams.get('tab')
+  const activeTab: PanelTab = requestedTab === 'runs' || requestedTab === 'results' ? requestedTab : 'design'
   const [hasPendingDesignUpdate, setHasPendingDesignUpdate] = useState(false)
   const [dragging, setDragging] = useState(false)
   const dragStart = useRef<{ x: number; width: number } | null>(null)
@@ -160,7 +166,11 @@ export function ExperimentSidePanel({
   }
 
   function openPanel(tab: PanelTab) {
-    setActiveTab(tab)
+    if (searchParams.get('tab') !== tab) setSearchParams(previous => {
+      const next = new URLSearchParams(previous)
+      next.set('tab', tab)
+      return next
+    })
     setPanelCollapsed(false)
     // Result selection owns the canvas-side inspector. Leaving Results via
     // the persistent rail should not leave a stale detail panel over the
@@ -233,8 +243,11 @@ export function ExperimentSidePanel({
           showDesignAttentionBorder && 'border border-[color:var(--chart-4)]/60',
         )}>
           <div className="flex h-11 shrink-0 items-center justify-between border-b px-3">
-            <span className="text-sm font-medium">{activeTab === 'design' ? 'Design' : activeTab === 'runs' ? 'Runs' : 'Results'}</span>
-            <div className="flex items-center gap-1">
+            <span className="text-sm font-medium">{activeTab === 'design' ? 'Design' : activeTab === 'runs' ? 'Runs' : 'Experiment Results'}</span>
+            <div className="flex items-center gap-2">
+              {activeTab === 'results' && experiment && !isLoading && !(viewingHistory && !version) && <ResultsStatusBadge
+                experimentId={experiment.id} scope={{ protocol_id: protocol?.id,
+                  protocol_revision_id: version?.id ?? protocol?.published_revision_id ?? undefined }} />}
               <button
                 type="button"
                 aria-label="Collapse experiment panel"
@@ -276,6 +289,7 @@ export function ExperimentSidePanel({
                 />
               ) : activeTab === 'results' ? (
                 <ResultsTab
+                  selectedCellId={selectedResultCellId ?? null}
                   versionId={version?.id ?? protocol?.published_revision_id ?? undefined}
                   protocolId={protocol?.id}
                   experimentId={experiment.id}

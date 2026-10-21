@@ -34,7 +34,7 @@ import type { CellRunBatch, DatasetRowSchema, PromptPreview, Protocol, ProtocolG
 import type { Run, RunStep } from '@/types/runs'
 import type { Skill, SkillListResponse, SkillUrlPreview } from '@/types/skills'
 import type { Persona } from '@/types/personas'
-import type { AttemptDetail, AttemptPage, CursorPage, ExecutionCell, ExecutionSlot, ExecutionSummary, ResultJob } from '@/types/executionResults'
+import type { AttemptDetail, AttemptPage, CursorPage, ExecutionCell, ExecutionSlot, ExecutionSummary, ResultJob, UsageDistribution } from '@/types/executionResults'
 
 const ACCESS_TOKEN_KEY = 'asaree_access_token'
 
@@ -236,16 +236,22 @@ export const experimentsApi = {
     if (res.status === 304 && cached) return cached
     return { ...await res.json() as ExecutionSummary, etag: res.headers.get('ETag') ?? undefined }
   },
+  getExecutionFactorOptions: (id: string, scope: ResultsScope, signal?: AbortSignal) =>
+    request<{ factors: Record<string, unknown[]>; truncated: boolean }>(`/experiments/${id}/execution-results/factor-options${scopeQuery(scope)}`, { signal }),
   listExecutionCells: (id: string, scope: ResultsScope, params: Record<string, string | number | undefined> = {}, signal?: AbortSignal) =>
     request<CursorPage<ExecutionCell>>(`/experiments/${id}/execution-results/cells${resultPageQuery(scope, params)}`, { signal }),
   listExecutions: (id: string, scope: ResultsScope, params: Record<string, string | number | undefined> = {}, signal?: AbortSignal) =>
     request<CursorPage<ExecutionSlot>>(`/experiments/${id}/execution-results/executions${resultPageQuery(scope, params)}`, { signal }),
   listExecutionAttempts: (id: string, slotId: string, scope: ResultsScope, cursor?: string, signal?: AbortSignal) =>
     request<AttemptPage>(`/experiments/${id}/execution-results/slots/${slotId}/attempts${resultPageQuery(scope, { cursor })}`, { signal }),
+  getExecutionNeighbors: (id: string, slotId: string, scope: ResultsScope, signal?: AbortSignal) =>
+    request<{ previous_slot_id: string | null; next_slot_id: string | null }>(`/experiments/${id}/execution-results/slots/${slotId}/neighbors${scopeQuery(scope)}`, { signal }),
   lookupExecution: (id: string, replicateLabel: string, scope: ResultsScope, signal?: AbortSignal) =>
     request<ExecutionSlot>(`/experiments/${id}/execution-results/lookup${resultPageQuery(scope, { replicate_label: replicateLabel })}`, { signal }),
   getExecutionCell: (id: string, scope: ResultsScope, selection: { cell_id?: string; cell_label?: string }, signal?: AbortSignal) =>
     request<ExecutionCell>(`/experiments/${id}/execution-results/cell${resultPageQuery(scope, selection)}`, { signal }),
+  getUsageDistribution: (id: string, scope: ResultsScope, cellId: string, metric: UsageDistribution['metric'], signal?: AbortSignal) =>
+    request<UsageDistribution>(`/experiments/${id}/execution-results/cell/usage-distribution${resultPageQuery(scope, { cell_id: cellId, metric })}`, { signal }),
   getExecutionAttempt: (id: string, runId: string, scope: ResultsScope, signal?: AbortSignal) =>
     request<AttemptDetail>(`/experiments/${id}/execution-results/attempts/${runId}${scopeQuery(scope)}`, { signal }),
   getExecutionConversation: (id: string, runId: string, scope: ResultsScope, offset = 0, signal?: AbortSignal) =>
@@ -342,11 +348,8 @@ export const experimentsApi = {
   // been run is still listed, with status "not_started" (see TrialResponse /
   // services.protocol_runs.list_experiment_trials).
   listTrials: (id: string) => request<Trial[]>(`/experiments/${id}/runs`),
-  // Derives analyze_factorial's own condition_factors/positive_levels/
-  // reference_condition/primary_metric from this experiment's Design tab
-  // declarations -- no request body needed (see
-  // services.factorial_analysis.analyze_experiment_design).
-  getResults: (id: string) => request<ExperimentResults>(`/experiments/${id}/results`),
+  // Factorial analysis uses an explicit comparison metric and declared factors.
+  getResults: (id: string, metric?: string) => request<ExperimentResults>(`/experiments/${id}/results${metric ? `?metric=${encodeURIComponent(metric)}` : ''}`),
   // A current-design scorecard and the per-cell/per-replicate evidence behind
   // it. Unlike getResults(), no balanced-factorial assumptions are required.
   getRunResults: (id: string, scope?: ResultsScope) => request<ExperimentRunResults>(`/experiments/${id}/run-results${scopeQuery(scope)}`),

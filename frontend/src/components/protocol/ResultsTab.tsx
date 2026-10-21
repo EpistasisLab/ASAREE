@@ -4,31 +4,12 @@ import { Badge } from '@/components/ui/badge'
 import { Card } from '@/components/ui/card'
 import { formatMetricLabel, formatMetricValue } from '@/lib/experiment'
 import { OBSERVATION_LABELS } from '@/lib/measurementPlan'
+import { formatUsageValue, usageMetricLabels, type UsageMetric } from '@/lib/resultUsage'
 import type { EvaluationArtifact, Experiment, MetricObservation, ResultReplicate } from '@/types/experiments'
-import { ResultsScorecard as Scorecard } from './ResultsPanel'
 import { ResultTimelineNode } from './ResultTimelineNode'
 import type { ExecutionContext } from './ExecutionNodeEvidence'
 import { ExecutionBrowser } from './ExecutionBrowser'
 import { ExecutionInspector } from './ExecutionInspector'
-
-function formatNumber(value: number | null, maximumFractionDigits = 0): string {
-  if (value === null || !Number.isFinite(value)) return 'Not reported'
-  return new Intl.NumberFormat(undefined, { maximumFractionDigits }).format(value)
-}
-
-function formatCurrency(value: number | null): string {
-  if (value === null || !Number.isFinite(value)) return 'Not reported'
-  return new Intl.NumberFormat(undefined, { style: 'currency', currency: 'USD', maximumFractionDigits: 2 }).format(value)
-}
-
-function formatDuration(value: number | null): string {
-  if (value === null || !Number.isFinite(value)) return 'Not reported'
-  if (value < 60) return `${Math.round(value)} sec`
-  if (value < 3600) return `${(value / 60).toFixed(1)} min`
-  return `${(value / 3600).toFixed(1)} hr`
-}
-
-
 
 type ResultMetricTypes = Record<string, 'number' | 'boolean'>
 
@@ -87,21 +68,26 @@ function observationForMetric(replicate: ResultReplicate, metricId: string | und
 }
 
 
-function ObservationCard({ observation }: { observation: MetricObservation }) {
+function ObservationCard({ observation, usageMetric, completed }: { observation: MetricObservation; usageMetric?: UsageMetric; completed: boolean }) {
   const problem = observation.status === 'failed' || observation.status === 'timed_out'
-  const measuredValue = typeof observation.value === 'boolean'
+  const Icon = usageMetric === 'total_tokens' ? Coins : usageMetric === 'cost_usd' ? CircleDollarSign : usageMetric === 'duration_seconds' ? Clock3 : null
+  const label = usageMetric ? usageMetricLabels(completed)[usageMetric] : observation.metric_name
+  const measuredValue = usageMetric && typeof observation.value === 'number'
+    ? formatUsageValue(usageMetric, observation.value)
+    : typeof observation.value === 'boolean'
     ? (observation.value ? 'True' : 'False')
     : typeof observation.value === 'number'
       ? formatMetricValue(observation.metric_name, observation.value)
       : typeof observation.value === 'string'
         ? observation.value
         : JSON.stringify(observation.value, null, 2)
-  return <Card size="sm" className={`gap-0 px-2.5 py-2 ${problem ? 'border-destructive/30 bg-destructive/5' : 'bg-background'}`}>
-    <div className="flex items-start justify-between gap-2"><p className="text-xs font-medium">{observation.metric_name}</p><Badge variant="outline" className={problem ? 'border-destructive/50 text-destructive' : ''}>{OBSERVATION_LABELS[observation.status]}</Badge></div>
-    {observation.status === 'measured' && <pre className="mt-1 overflow-x-auto whitespace-pre-wrap break-words font-sans font-medium">{observation.value_truncated ? observation.value_preview : measuredValue}</pre>}
+  return <Card size="sm" className={`min-w-0 gap-0 p-2 @min-[450px]:p-3 ${usageMetric ? 'col-span-2' : 'col-span-6 @lg:col-span-3'} ${problem ? 'border-destructive/30 bg-destructive/5' : 'bg-background'}`}>
+    <div className={`flex items-start gap-2 ${usageMetric ? 'flex-col' : 'justify-between'}`}><p className="flex min-w-0 items-start gap-1 text-[11px] text-muted-foreground @min-[450px]:text-xs">{Icon && <Icon className="mt-0.5 size-3 shrink-0" aria-hidden="true" />}<span className="min-w-0 break-words">{label}</span></p><Badge variant="outline" className={problem ? 'border-destructive/50 text-destructive' : ''}>{OBSERVATION_LABELS[observation.status]}</Badge></div>
+    {observation.status === 'measured' && <pre className={`overflow-x-auto whitespace-pre-wrap break-words font-medium ${usageMetric ? 'mt-auto pt-2 text-center font-mono text-sm tabular-nums @min-[450px]:text-lg' : 'mt-1 font-mono text-xs'}`}
+      title={usageMetric === 'total_tokens' && typeof observation.value === 'number' ? `${observation.value.toLocaleString()} tokens` : undefined}>{observation.value_truncated ? observation.value_preview : measuredValue}</pre>}
     {observation.value_truncated && <p className="mt-1 text-xs text-muted-foreground">Preview · open complete recorded JSON for the original value.</p>}
     {observation.error && <p className={`mt-1 text-xs ${problem ? 'text-destructive' : 'text-muted-foreground'}`}>{observation.error}</p>}
-    <p className="mt-1 font-mono text-[11px] text-muted-foreground">{observation.producer.producer_id} · v{observation.producer.version}</p>
+    <p className="mt-1 break-words font-mono text-[10px] text-muted-foreground @min-[450px]:text-[11px]">{observation.producer.producer_id} · v{observation.producer.version}</p>
   </Card>
 }
 
@@ -148,25 +134,34 @@ function usageSummarizesMetric(
 }
 
 
-export function ReplicateResultDetail({ replicate, metricKeys, metricTypes, executionContext, metricLabels }: {
+export function ReplicateResultDetail({ replicate, metricKeys, metricTypes, executionContext, metricLabels, usageMetricKeys = {} }: {
   replicate: ResultReplicate
   metricKeys: string[]
   metricTypes: ResultMetricTypes
   executionContext?: ExecutionContext
   metricLabels?: Record<string, string>
+  usageMetricKeys?: Record<string, UsageMetric>
 }) {
   const metrics = metricKeys.filter((key) => {
     if (typeof replicate.metric_values[key] !== 'number') return false
-    return !usageSummarizesMetric(key, replicate)
+    return !usageSummarizesMetric(usageMetricKeys[key] ?? key, replicate)
   })
   const summarizedObservations = new Set(
     metrics
       .map((key) => observationForMetric(replicate, undefined, key))
       .filter((observation): observation is MetricObservation => observation?.status === 'measured'),
   )
+  const usageMetricFor = (observation: MetricObservation) =>
+    observation.producer.producer_id === 'asaree.runtime' || observation.producer.producer_id === 'asaree.node_runtime'
+      ? usageMetricKeys[observation.metric_id] : undefined
+  const usageOrder: UsageMetric[] = ['total_tokens', 'cost_usd', 'duration_seconds']
+  const observationRank = (observation: MetricObservation) => {
+    const metric = usageMetricFor(observation)
+    return metric ? usageOrder.indexOf(metric) : usageOrder.length
+  }
   const detailedObservations = replicate.metric_observations.filter((observation) => !summarizedObservations.has(observation))
-  const hasUsage = replicate.cost_usd !== null || replicate.total_tokens !== null || replicate.duration_seconds !== null || replicate.agent_run_count > 0
-  const timelineOnly = metrics.length === 0 && !hasUsage && !replicate.error
+    .sort((a, b) => observationRank(a) - observationRank(b))
+  const timelineOnly = metrics.length === 0 && detailedObservations.length === 0 && !replicate.error
   const agentNodes = replicate.node_runs.filter((node) => node.agent_run_id)
   const defaultOpenNodeId = agentNodes.length === 1 ? agentNodes[0].node_id : null
   return (
@@ -192,21 +187,10 @@ export function ReplicateResultDetail({ replicate, metricKeys, metricTypes, exec
             </div>
             </section>
           )}
-          {detailedObservations.length > 0 && <section className="space-y-2"><h3 className="text-sm font-medium">Measurement observations</h3><div className="grid gap-2 @lg:grid-cols-2">{detailedObservations.map((observation) => <ObservationCard key={observation.metric_id} observation={observation} />)}</div></section>}
+          {detailedObservations.length > 0 && <section aria-label="Measurement observations" className="space-y-2"><h3 className="text-sm font-medium">Measurement observations</h3><div className="grid grid-cols-6 gap-2">{detailedObservations.map((observation) => <ObservationCard key={observation.metric_id} observation={observation} usageMetric={usageMetricFor(observation)} completed={replicate.status === 'completed'} />)}</div></section>}
           {(replicate.legacy_values ?? []).length > 0 && <section className="space-y-2"><h3 className="text-sm font-medium">Legacy values</h3><p className="text-xs text-muted-foreground">The original producers were not recorded, so these values are shown without inferred provenance and are not ranked.</p><div className="grid gap-2 @lg:grid-cols-2">{replicate.legacy_values!.map((item) => <div key={item.metric_id} className="rounded-md border px-2.5 py-2"><p className="truncate text-xs text-muted-foreground">{item.metric_name}</p><pre className="mt-1 overflow-x-auto text-xs">{typeof item.value === 'string' ? item.value : JSON.stringify(item.value, null, 2)}</pre><Badge variant="outline" className="mt-2">Legacy · producer unknown</Badge></div>)}</div></section>}
           {replicate.evaluation_artifacts.length > 0 && <section className="space-y-2"><h3 className="text-sm font-medium">Evaluation artifacts</h3><div className="space-y-2">{replicate.evaluation_artifacts.map((artifact) => <ArtifactCard key={`${artifact.artifact_key}-${artifact.attempt_id}`} artifact={artifact} />)}</div></section>}
-          {hasUsage && (
-            <section className="space-y-2">
-              <h3 className="text-sm font-medium">Usage</h3>
-              <div className="grid grid-cols-2 gap-2 @lg:grid-cols-4">
-                <Scorecard label="Estimated cost" help="Provider-reported or estimated cost for this replicate’s Agent calls." value={formatCurrency(replicate.cost_usd)} icon={CircleDollarSign} />
-                <Scorecard label="Duration" help="Wall-clock time from the protocol run starting to it finishing." value={formatDuration(replicate.duration_seconds)} icon={Clock3} />
-                <Scorecard label="Total tokens" help="Input and output tokens reported by the provider for this replicate." value={formatNumber(replicate.total_tokens)} icon={Coins} />
-                <Scorecard label="Agent calls" help="Number of Agent runs recorded while executing this replicate." value={String(replicate.agent_run_count)} icon={Cpu} />
-              </div>
-              {replicate.agent_run_count > 0 && (replicate.reported_usage_count < replicate.agent_run_count || replicate.reported_cost_count < replicate.agent_run_count) && <p className="text-xs text-muted-foreground">Usage and cost are shown only where the provider reported them.</p>}
-            </section>
-          )}
+          <p className="flex items-center gap-1 text-xs text-muted-foreground"><Cpu className="size-3 shrink-0" aria-hidden="true" />Agent calls: <span className="font-mono tabular-nums">{replicate.agent_run_count}</span></p>
           {replicate.error && <section className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive"><h3 className="font-medium">Run error</h3><p className="mt-1 whitespace-pre-wrap break-words">{replicate.error}</p></section>}
           <section className={timelineOnly ? 'flex min-h-[20rem] flex-1 flex-col space-y-2' : 'space-y-2'}>
             <h3 className="text-sm font-medium">Run timeline</h3>
@@ -222,7 +206,10 @@ export function ReplicateResultDetail({ replicate, metricKeys, metricTypes, exec
 
 
 export type ResultsSelection =
-  | { type: 'cell'; cellLabel: string; cellId?: string; scope?: ResultsScope }
+  | ({ type: 'cell'; scope?: ResultsScope } & (
+    | { cellId: string; cellLabel?: string }
+    | { cellId?: string; cellLabel: string }
+  ))
   | { type: 'replicate'; replicateLabel: string; scope?: ResultsScope }
   | { type: 'row'; rowResultId: string; scope: ResultsScope }
   | { type: 'execution'; slotId: string; scope: ResultsScope }
@@ -231,11 +218,12 @@ export function ResultsInspectorPanel(props: {
   experimentId: string; experiment: Experiment; selection: ResultsSelection | null; onClose: () => void
 }) { return <ExecutionInspector {...props} /> }
 
-export function ResultsTab({ protocolId, experimentId, experiment, onSelectResult, versionId }: {
+export function ResultsTab({ protocolId, experimentId, experiment, onSelectResult, versionId, selectedCellId }: {
   protocolId?: string; experimentId: string; experimentName: string; experiment: Experiment
   onSelectResult: (selection: ResultsSelection) => void; versionId?: string
+  selectedCellId?: string | null
 }) {
   const scope = { protocol_id: protocolId, protocol_revision_id: versionId }
   return <ExecutionBrowser key={JSON.stringify(scope)} experimentId={experimentId} scope={scope}
-    experiment={experiment} mode="results" onSelect={onSelectResult} />
+    experiment={experiment} mode="results" onSelect={onSelectResult} selectedCellId={selectedCellId} />
 }

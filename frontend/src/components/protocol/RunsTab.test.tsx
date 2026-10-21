@@ -10,6 +10,7 @@ describe('RunsTab factor discrepancy warning', () => {
   afterEach(() => vi.restoreAllMocks())
 
   it('warns immediately and blocks runs when the canvas disagrees with generated factor levels', async () => {
+    vi.spyOn(experimentsApi, 'getExecutionFactorOptions').mockResolvedValue({ factors: {}, truncated: false })
     vi.spyOn(experimentsApi, 'getExecutionSummary').mockResolvedValue({ ready: true, metric_types: {}, metric_directions: {} } as never)
     vi.spyOn(experimentsApi, 'listExecutionCells').mockResolvedValue({ items: [], next_cursor: null })
     vi.spyOn(experimentsApi, 'listReplicates').mockResolvedValue([{
@@ -62,14 +63,15 @@ describe('RunsTab stop controls', () => {
   const cell = (counts: Record<string, number>) => ({ cell_id: 'cell-1', cell_label: 'model=a', factor_values: { model: 'a' },
     replicate_count: 3, total: 3, counts })
 
-  async function mount(hasActive: boolean, counts: Record<string, number>) {
+  async function mount(hasActive: boolean, counts: Record<string, number>, summaryCounts = counts, total = 3) {
+    vi.spyOn(experimentsApi, 'getExecutionFactorOptions').mockResolvedValue({ factors: {}, truncated: false })
     vi.spyOn(experimentsApi, 'getExecutionSummary').mockResolvedValue(
-      { ready: true, has_active: hasActive, counts, metric_types: {}, metric_directions: {} } as never)
+      { ready: true, has_active: hasActive, counts: summaryCounts, total, metric_types: {}, metric_directions: {} } as never)
     vi.spyOn(experimentsApi, 'listExecutionCells').mockResolvedValue({ items: [cell(counts)], next_cursor: null } as never)
     render(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
       <RunsTab experimentId="experiment-1" designSpec={{}} protocol={protocol} regenerationRequired={false} unboundFactors={[]} onViewResult={vi.fn()} />
     </QueryClientProvider>)
-    await screen.findByRole('button', { name: 'Run cell' })
+    await screen.findByRole('button', { name: /^(Re-run|Run) cell$/ })
   }
 
   it('hides Stop all and Stop cell when nothing is pending or running', async () => {
@@ -82,5 +84,31 @@ describe('RunsTab stop controls', () => {
     await mount(true, { completed: 1, running: 1, pending: 1 })
     expect(await screen.findByRole('button', { name: 'Stop all' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Stop cell' })).toBeInTheDocument()
+  })
+
+  it.each([
+    [{ completed: 3 }, 'Re-run cell'],
+    [{ completed: 2, failed: 1 }, 'Re-run cell'],
+    [{ failed: 1, cancelled: 1, limit_reached: 1 }, 'Re-run cell'],
+    [{ completed: 2, not_started: 1 }, 'Run cell'],
+    [{ completed: 2, running: 1 }, 'Run cell'],
+    [{ completed: 2, pending: 1 }, 'Run cell'],
+    [{ completed: 2, finalizing: 1 }, 'Run cell'],
+    [{ not_started: 3 }, 'Run cell'],
+  ] as const)('labels the cell action for %j as %s', async (counts, label) => {
+    await mount(false, counts)
+    expect(screen.getByRole('button', { name: label })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: label === 'Re-run cell' ? 'Re-run all cells' : 'Run all cells' })).toBeInTheDocument()
+  })
+
+  it('keeps Run all cells when another cell still has unstarted replicates', async () => {
+    await mount(false, { completed: 3 }, { completed: 3, not_started: 3 }, 6)
+    expect(screen.getByRole('button', { name: 'Re-run cell' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Run all cells' })).toBeInTheDocument()
+  })
+
+  it('uses the whole design summary when other finished cells are on another page', async () => {
+    await mount(false, { completed: 3 }, { completed: 4, failed: 2 }, 6)
+    expect(screen.getByRole('button', { name: 'Re-run all cells' })).toBeInTheDocument()
   })
 })

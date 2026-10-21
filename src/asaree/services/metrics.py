@@ -6,7 +6,7 @@ import uuid
 from copy import deepcopy
 from typing import Any
 
-from asaree.services.measurement_engine import ensure_at_most_one_primary, parse_measurement_plan
+from asaree.services.measurement_engine import parse_measurement_plan
 
 MetricCatalogEntry = dict[str, str | bool]
 
@@ -246,7 +246,6 @@ def recommended_runtime_measurements() -> tuple[list[dict[str, Any]], dict[str, 
             "valueType": catalog["valueType"],
             "direction": catalog["defaultDirection"],
             "aggregation": catalog["aggregation"],
-            "primary": False,
             "unit": catalog["unit"],
         }
         declarations.append(declaration)
@@ -257,7 +256,6 @@ def recommended_runtime_measurements() -> tuple[list[dict[str, Any]], dict[str, 
                 "value_type": catalog["valueType"],
                 "direction": catalog["defaultDirection"],
                 "aggregation": catalog["aggregation"],
-                "primary": False,
                 "description": catalog["shortDescription"],
                 "unit": catalog["unit"],
             }
@@ -307,7 +305,6 @@ def design_metrics_from_measurement_plan(document: Any) -> list[dict[str, Any]]:
             declaration["valueType"] = metric.value_type
             declaration["direction"] = metric.direction
             declaration["aggregation"] = metric.aggregation
-            declaration["primary"] = bool(metric.primary)
         if metric.description is not None:
             declaration["description"] = metric.description
         if metric.unit is not None:
@@ -391,7 +388,7 @@ def normalize_metrics(metrics: Any, *, validate_custom_names: bool = False) -> l
             if catalog
             else "maximize"
         )
-        metric["primary"] = bool(metric.get("primary"))
+        metric.pop("primary", None)
         metric["aggregation"] = (
             "mean"
             if metric["valueType"] == "boolean"
@@ -409,7 +406,6 @@ def normalize_metrics(metrics: Any, *, validate_custom_names: bool = False) -> l
         # "Untitled custom metric"), so the measurement-plan validator blocks
         # production while still preserving every draft for repair.
         normalized.append(metric)
-    ensure_at_most_one_primary(tuple(bool(metric.get("primary")) for metric in normalized))
     return normalized
 
 
@@ -454,9 +450,6 @@ def normalize_design_spec(
     return result
 
 
-def declared_primary_metric(metrics: Any) -> dict[str, Any] | None:
-    """Return the one explicitly primary design metric, if one is declared."""
-    return next((metric for metric in normalize_metrics(metrics) if metric.get("primary")), None)
 
 
 def validate_metric_values(metrics: Any, values: dict[str, Any] | None) -> dict[str, Any]:

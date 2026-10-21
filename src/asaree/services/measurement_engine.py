@@ -42,7 +42,7 @@ class MetricDefinition:
     value_type: MetricValueType | None = None
     direction: MetricDirection | None = None
     aggregation: MetricAggregation | None = None
-    primary: bool | None = None
+    primary: bool | None = None  # Historical payload compatibility; has no behavioral meaning.
     description: str | None = None
     unit: str | None = None
 
@@ -76,15 +76,6 @@ class MeasurementPlan:
 _MEASUREMENT_PLAN_ADAPTER = TypeAdapter(MeasurementPlan)
 
 
-class MultiplePrimaryMetricsError(ValueError):
-    """Raised when a measurement declaration marks more than one primary."""
-
-
-def ensure_at_most_one_primary(primary_flags: Sequence[bool]) -> None:
-    if sum(primary_flags) > 1:
-        raise MultiplePrimaryMetricsError("A measurement plan can have at most one primary metric.")
-
-
 def parse_measurement_plan(document: Any) -> MeasurementPlan:
     """Parse the one canonical persisted measurement-plan shape."""
     try:
@@ -96,7 +87,6 @@ def parse_measurement_plan(document: Any) -> MeasurementPlan:
 def normalize_measurement_plan(document: Any) -> dict[str, Any]:
     """Return a JSON-compatible canonical plan document."""
     plan = parse_measurement_plan(document)
-    ensure_at_most_one_primary(tuple(bool(metric.primary) for metric in plan.metrics))
     return cast(
         dict[str, Any],
         _MEASUREMENT_PLAN_ADAPTER.dump_python(plan, mode="json", exclude_none=True),
@@ -313,8 +303,6 @@ def preserved_binding_severity(
 
 def validate_measurement_plan_structure(
     plan: MeasurementPlan,
-    *,
-    require_primary: bool = False,
 ) -> ValidationReport:
     """Validate producer-neutral invariants across the complete plan."""
     issues: list[ValidationIssue] = []
@@ -341,14 +329,6 @@ def validate_measurement_plan_structure(
                 )
             )
         names.add(folded_name)
-        if metric.primary and metric.direction == "neutral":
-            issues.append(
-                ValidationIssue(
-                    "invalid_direction",
-                    f"Neutral metric {metric.name!r} cannot be the primary ranking metric.",
-                    f"metrics[{index}].direction",
-                )
-            )
 
     producer_ids: set[str] = set()
     bound_metric_ids: list[str] = []
@@ -415,19 +395,6 @@ def validate_measurement_plan_structure(
                 )
             )
 
-    primary_count = sum(bool(metric.primary) for metric in plan.metrics)
-    if require_primary and plan.metrics and primary_count == 0:
-        issues.append(
-            ValidationIssue(
-                "missing_primary_metric", "A non-empty measurement plan must have one primary metric.", "metrics"
-            )
-        )
-    elif primary_count > 1:
-        issues.append(
-            ValidationIssue(
-                "multiple_primary_metrics", "A measurement plan can have at most one primary metric.", "metrics"
-            )
-        )
     return ValidationReport(tuple(issues))
 
 
@@ -510,10 +477,8 @@ class MeasurementEngine:
         self,
         plan: MeasurementPlan,
         snapshot: ExperimentSnapshot,
-        *,
-        require_primary: bool = False,
     ) -> ValidationReport:
-        issues = list(validate_measurement_plan_structure(plan, require_primary=require_primary).issues)
+        issues = list(validate_measurement_plan_structure(plan).issues)
         capabilities = {item.producer_id: item for item in self.list_capabilities(snapshot)}
         metrics_by_id: dict[str, MetricDefinition] = {}
         for metric in plan.metrics:
@@ -946,7 +911,6 @@ __all__ = [
     "MeasurementBindingValidator",
     "MeasurementPlan",
     "MeasurementProducerAdapter",
-    "MultiplePrimaryMetricsError",
     "MetricDefinition",
     "MetricObservation",
     "ProducedArtifact",
@@ -960,7 +924,6 @@ __all__ = [
     "ScalarOutputCapability",
     "ValidationIssue",
     "ValidationReport",
-    "ensure_at_most_one_primary",
     "is_scalar_value",
     "normalize_measurement_plan",
     "parse_measurement_plan",

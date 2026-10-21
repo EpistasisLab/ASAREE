@@ -310,28 +310,6 @@ export function pickMetricColumns(experiment: Experiment | undefined, cells: Cel
   return ordered.slice(0, max)
 }
 
-/** The explicitly declared metric that decides an experiment's headline
- * result. task_brief.selection_metric is only a legacy display hint, so it
- * must never choose the canvas top-bar result. */
-export function primaryMetric(experiment: Experiment | undefined): { key: string; direction: 'maximize' | 'minimize'; valueType?: 'number' | 'boolean' | 'string' } | null {
-  const metric = experiment?.design_spec?.metrics?.find((candidate) => candidate.primary && candidate.name)
-  if (!metric || (metric.direction !== 'maximize' && metric.direction !== 'minimize') || metric.valueType === 'string' || metric.valueType === 'opaque') return null
-  const key = metric.kind === 'runtime' && typeof metric.catalogKey === 'string' ? metric.catalogKey : metric.name
-  return { key, direction: metric.direction, valueType: metric.valueType }
-}
-
-/** The single headline number for an experiment -- the best observed value of
- * its declared primary metric. Drives the canvas top bar's own result readout. */
-export function bestMetric(experiment: Experiment | undefined, replicates: Replicate[] | undefined): { key: string; value: number; valueType?: 'number' | 'boolean' | 'string' } | null {
-  if (!replicates) return null
-  const primary = primaryMetric(experiment)
-  if (!primary) return null
-  const values = groupReplicatesIntoCells(replicates)
-    .map((cell) => meanMetric(cell.replicates, primary.key))
-    .filter((value): value is number => value !== null)
-  if (values.length === 0) return null
-  return { key: primary.key, value: primary.direction === 'minimize' ? Math.min(...values) : Math.max(...values), valueType: primary.valueType }
-}
 
 /** Formatted for display: scaled into its display unit, trailing zeros
  * trimmed, unit suffix appended, non-numbers rendered as an em dash. */

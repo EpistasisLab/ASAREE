@@ -26,7 +26,7 @@ export function mcpToolSourceOptions(graph: ProtocolGraph | undefined): McpToolS
     const agent = nodes.get(edge.target); const tool = nodes.get(edge.source)
     if (!agent || !tool || !['agent', 'sub_agent'].includes(agent.type) || !isMcpToolNodeType(tool.type)) return []
     const config = 'config' in tool.data ? tool.data.config : undefined
-    const serverId = (config && 'server_id' in config ? config.server_id : null) as string | null
+    const serverId = config && 'server_id' in config ? config.server_id : null
     const toolNames = config && 'tool_names' in config && Array.isArray(config.tool_names) ? config.tool_names : []
     const disabledReason = config && 'enabled' in config && config.enabled === false ? 'MCP Tool is disabled.'
       : !serverId ? 'MCP Server is not configured.' : toolNames.length === 0 ? 'MCP Tool has no enabled tools.' : undefined

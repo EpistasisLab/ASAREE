@@ -938,6 +938,8 @@ export interface PersonaNodeConfig {
   mode: 'library' | 'text' | 'file'
   // Library mode: persona_id from registered personas (e.g., "analyst_v1")
   persona_id?: string | null
+  // Library mode, multi-select: every chosen persona (persona_id is the first)
+  persona_ids?: string[] | null
   // Text mode: direct persona prompt text
   persona_text?: string | null
   // File mode: path to uploaded .md file with persona definition
@@ -947,7 +949,6 @@ export interface PersonaNodeConfig {
   persona_description?: string | null
   // Absent means enabled, matching other connector conventions
   enabled?: boolean
-  [key: string]: unknown
 }
 
 export interface PersonaNodeData {

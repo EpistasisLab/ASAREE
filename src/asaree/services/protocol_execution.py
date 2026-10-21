@@ -258,6 +258,7 @@ _CONNECTOR_HANDLES = frozenset(
         "resource",
         "skill",
         "knowledge",
+        "persona",
         "output_parser",
         "sub_agents",
     }
@@ -431,6 +432,7 @@ _NODE_TYPE_TO_HANDLE: dict[str, str] = {
     **{t: "dataset" for t in _DATASET_NODE_TYPES},
     **{t: "tool" for t in _SCRIPT_NODE_TYPES},
     **{t: "skill" for t in _SKILL_NODE_TYPES},
+    **{t: "persona" for t in _PERSONA_NODE_TYPES},
     **{t: "knowledge" for t in _KNOWLEDGE_NODE_TYPES},
     **{t: "output_parser" for t in _OUTPUT_PARSER_NODE_TYPES},
     **{t: "sub_agents" for t in _SUB_AGENT_NODE_TYPES},
@@ -449,6 +451,7 @@ _HANDLE_LABELS: dict[str, str] = {
     "resource": "Dataset",  # pre-rename spelling, same slot -- see _LEGACY_DATASET_HANDLES
     "skill": "Skill",
     "knowledge": "Knowledge",
+    "persona": "Persona",
     "output_parser": "Output Parser",
     "sub_agents": "Sub-Agents",
 }
@@ -961,6 +964,7 @@ def resolve_conversation_entry_id(graph: dict[str, Any]) -> str:
 
 
 _NODE_TYPE_DISPLAY_NAMES: dict[str, str] = {
+    "persona": "Persona",
     "agent": "Agent",
     "sub_agent": "Sub-Agent",
     "critic_gate": "Critic Gate",
@@ -1159,6 +1163,7 @@ def topological_order(
         pattern_edges = _edges_with_handle(graph, nid, "architectural_pattern", direction="incoming")
         dataset_slot_edges = _edges_with_handle(graph, nid, "dataset", direction="incoming")
         skill_edges = _edges_with_handle(graph, nid, "skill", direction="incoming")
+        persona_edges = _edges_with_handle(graph, nid, "persona", direction="incoming")
         knowledge_edges = _edges_with_handle(graph, nid, "knowledge", direction="incoming")
         parser_edges = _edges_with_handle(graph, nid, "output_parser", direction="incoming")
         sub_agent_edges = _edges_with_handle(graph, nid, "sub_agents", direction="incoming")
@@ -1193,6 +1198,12 @@ def topological_order(
                 skill_source = nodes.get(edge["source"])
                 if skill_source is None or skill_source.get("type") not in _SKILL_NODE_TYPES:
                     raise ProtocolValidationError(f"Node {name!r}'s Skill connection must come from a Skill node.")
+            # Uncapped like Skill: several personas concatenate into one system
+            # prompt prefix (see _resolve_persona_configs), in wiring order.
+            for edge in persona_edges:
+                persona_source = nodes.get(edge["source"])
+                if persona_source is None or persona_source.get("type") not in _PERSONA_NODE_TYPES:
+                    raise ProtocolValidationError(f"Node {name!r}'s Persona connection must come from a Persona node.")
             # Uncapped for the same reason as Skill: reading a shared team
             # bundle while writing to a personal one is a normal setup, not an
             # ambiguity. _resolve_knowledge_config de-dupes by server name, so
@@ -1280,6 +1291,7 @@ def topological_order(
                 or pattern_edges
                 or dataset_slot_edges
                 or skill_edges
+                or persona_edges
                 or knowledge_edges
                 or parser_edges
                 or sub_agent_edges
@@ -1295,13 +1307,14 @@ def topological_order(
             or pattern_edges
             or dataset_slot_edges
             or skill_edges
+            or persona_edges
             or knowledge_edges
             or parser_edges
             or sub_agent_edges
         ):
             raise ProtocolValidationError(
                 f"Only Agent nodes can have a Tool, Memory, Architectural Pattern, Skill, Dataset, "
-                f"Knowledge, or Output Parser connection (node {name!r})."
+                f"Knowledge, Persona, or Output Parser connection (node {name!r})."
             )
 
         if node_type == "sub_agent":

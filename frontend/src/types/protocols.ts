@@ -1,4 +1,5 @@
 import type { ModelCapabilities } from './llmSettings'
+import type { PersonaSource } from './personas'
 import type { EvaluationArtifact, MetricObservation } from './experiments'
 
 export interface Protocol {
@@ -940,9 +941,11 @@ export interface PersonaNodeConfig {
   persona_id?: string | null
   // Library mode, multi-select: every chosen persona (persona_id is the first)
   persona_ids?: string[] | null
+  // Provenance only: runs always use the snapshotted persona_text below.
+  persona_sources?: PersonaSource[]
   // Text mode: direct persona prompt text
   persona_text?: string | null
-  // File mode: path to uploaded .md file with persona definition
+  // Original upload filename for display; the prompt is stored inline.
   persona_file?: string | null
   // Display metadata from library (cached to avoid fetch on render)
   persona_label?: string | null

@@ -43,7 +43,7 @@ export function AppHeader() {
 
   return (
     <header className="border-b bg-background">
-      <div className="mx-auto flex max-w-5xl items-center justify-between px-6 py-4">
+      <div className="flex w-full items-center justify-between gap-6 px-6 py-4">
         <div className="flex items-center gap-6">
           <Link to="/experiments" className="flex items-center gap-3">
             <div className="flex size-8 items-center justify-center rounded-lg bg-primary font-mono text-sm font-semibold text-primary-foreground shadow-[0_0_14px_-3px_var(--primary)]">

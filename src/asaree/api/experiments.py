@@ -1009,8 +1009,10 @@ async def analyze_factorial_endpoint(
     # The request's legacy field name means an explicit comparison choice,
     # never an experiment-owned primary declaration.
     selected_design = selection["design_spec"]
-    metric = next((metric for metric in (selected_design or {}).get('metrics', [])
-                   if metric.get('name') == body.primary_metric or metric.get('catalogKey') == body.primary_metric), None)
+    metric = next((
+        metric for metric in (selected_design or {}).get('metrics', [])
+        if metric.get('name') == body.primary_metric or metric.get('catalogKey') == body.primary_metric
+    ), None)
     if metric is None:
         raise HTTPException(
             status_code=422,

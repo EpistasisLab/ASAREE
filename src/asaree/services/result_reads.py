@@ -394,7 +394,8 @@ async def read_summary(db: AsyncSession, scope: ResultScope) -> dict[str, Any]:
     datasets = {}
     for node in scope.graph.get("nodes", []):
         config = (node.get("data") or {}).get("config") or {}
-        if node.get("type") == "dataset" and node.get("id") in connected and config.get("enabled") is not False and config.get("dataset_id"):
+        if (node.get("type") == "dataset" and node.get("id") in connected
+                and config.get("enabled") is not False and config.get("dataset_id")):
             identifier = str(config["dataset_id"])
             datasets[identifier] = {"id": identifier, "name": config.get("dataset_name") or "Dataset"}
     return {
@@ -693,7 +694,8 @@ def cell_numbers_query(scope: ResultScope):
         func.lag(FactorialCell.id).over(order_by=ordering).label("previous_cell_id"),
         func.lead(FactorialCell.id).over(order_by=ordering).label("next_cell_id")
     ).where(FactorialCell.experiment_id == scope.experiment_id,
-            FactorialCell.design_revision_id == scope.design_revision_id, *cell_predicates(scope)).subquery("cell_numbers")
+            FactorialCell.design_revision_id == scope.design_revision_id,
+            *cell_predicates(scope)).subquery("cell_numbers")
 
 
 def cell_attempt_usage_query(scope: ResultScope, cell_ids: list[uuid.UUID]) -> Any:
@@ -761,7 +763,8 @@ async def read_cells(
     cached = ResultCellRollup
     numbers = cell_numbers_query(scope)
     statement = (
-        select(FactorialCell.id, FactorialCell.cell_label, FactorialCell.factor_values, cached.data, numbers.c.cell_number)
+        select(FactorialCell.id, FactorialCell.cell_label, FactorialCell.factor_values,
+               cached.data, numbers.c.cell_number)
         .join(numbers, numbers.c.cell_id == FactorialCell.id)
         .outerjoin(cached, and_(cached.cell_id == FactorialCell.id, cached.scope_key == scope.key))
         .where(FactorialCell.experiment_id == scope.experiment_id,
@@ -809,7 +812,9 @@ async def read_cells(
             ))).mappings().all()
             completed_by_cell = {str(row["cell_id"]): row["completed"] for row in progress}
         for item in items:
-            item["completed_replicate_count"] = completed_by_cell.get(item["cell_id"], 0) if expected_rows is not None else None
+            item["completed_replicate_count"] = (
+                completed_by_cell.get(item["cell_id"], 0) if expected_rows is not None else None
+            )
     if include_all_attempt_usage and items:
         usage_rows = (await db.execute(cell_attempt_usage_query(
             scope, [uuid.UUID(item["cell_id"]) for item in items],
@@ -911,7 +916,9 @@ async def read_execution_neighbors(db: AsyncSession, scope: ResultScope, *, slot
                                        slots.c.slot_id).where(slots.c.slot_id == slot_id))).mappings().one_or_none()
     if current is None:
         raise RunResultsProjectionError("slot_not_found")
-    ordering = (slots.c.replicate_number, func.coalesce(cast(slots.c.row_index, BigInteger), -1), cast(slots.c.slot_id, Text))
+    ordering = (
+        slots.c.replicate_number, func.coalesce(cast(slots.c.row_index, BigInteger), -1), cast(slots.c.slot_id, Text),
+    )
     position = (current["replicate_number"], current["row_index"] if current["row_index"] is not None else -1,
                 str(current["slot_id"]))
     available = select(slots.c.slot_id).where(slots.c.cell_id == current["cell_id"],

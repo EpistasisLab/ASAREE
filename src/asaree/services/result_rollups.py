@@ -30,7 +30,9 @@ from asaree.services.result_reads import (
 
 logger = logging.getLogger(__name__)
 STATUSES = ("not_started", "pending", "running", "finalizing", "completed", "failed", "cancelled", "limit_reached")
-RESULT_ISSUES = ("failed", "cancelled", "limit_reached", "measurement_failed", "no_measurements", "measurements_missing")
+RESULT_ISSUES = (
+    "failed", "cancelled", "limit_reached", "measurement_failed", "no_measurements", "measurements_missing",
+)
 
 
 def rollup_query(scope: ResultScope) -> Any:
@@ -67,7 +69,10 @@ def rollup_query(scope: ResultScope) -> Any:
     stats_columns.append(
         func.count().filter(and_(slots.c.status == "completed", (slots.c.run_id.is_(None) | measured))).label("scored")
     )
-    declarations = scope.measurement_plan.get("metrics", []) if scope.measurement_plan is not None else normalize_metrics((scope.design_spec or {}).get("metrics"))
+    declarations = (
+        scope.measurement_plan.get("metrics", []) if scope.measurement_plan is not None
+        else normalize_metrics((scope.design_spec or {}).get("metrics"))
+    )
     expected_ids = {metric["id"] for metric in declarations if metric.get("id")}
     observation_id = cast(observations.c.value, JSONB)["metric_id"].astext
     observation_status = cast(observations.c.value, JSONB)["status"].astext
@@ -80,7 +85,7 @@ def rollup_query(scope: ResultScope) -> Any:
     evaluation = func.coalesce(slots.c.result["evaluation_state"].astext, "")
     scoring_pending = evaluation.in_(("pending", "queued", "running"))
     usable = and_(slots.c.status == "completed", ~scoring_pending, evaluation != "failed",
-                  func.coalesce(slots.c.result["truncated"].as_boolean(), False).is_(False),
+                  func.coalesce(slots.c.result["truncated"].as_boolean(), false()).is_(False),
                   obtained == len(expected_ids), has_measurement)
     needs_attention = or_(slots.c.status.in_(("failed", "cancelled", "limit_reached")),
                           and_(slots.c.status == "completed", ~scoring_pending, ~usable))
@@ -89,13 +94,14 @@ def rollup_query(scope: ResultScope) -> Any:
         (slots.c.status == "cancelled", "cancelled"),
         (or_(slots.c.status == "limit_reached", slots.c.result["truncated"].as_boolean().is_(True)), "limit_reached"),
         (evaluation == "failed", "measurement_failed"),
-        (literal(not expected_ids), "no_measurements"),
+        (false() if expected_ids else true(), "no_measurements"),
         else_="measurements_missing",
     )
     stats_columns += [
         func.count().filter(usable).label("usable_results"),
         func.count().filter(needs_attention).label("results_needing_attention"),
-        *[func.count().filter(and_(needs_attention, issue == reason)).label(f"issue_{reason}") for reason in RESULT_ISSUES],
+        *[func.count().filter(and_(needs_attention, issue == reason)).label(f"issue_{reason}")
+          for reason in RESULT_ISSUES],
     ]
     stats_columns += [func.count().filter(slots.c.status == status).label(status) for status in STATUSES]
     stats_columns += [

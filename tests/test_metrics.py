@@ -1,8 +1,6 @@
 import re
 from pathlib import Path
 
-import pytest
-
 from asaree.services.design_generation import material_design_spec
 from asaree.services.measurement_engine import normalize_measurement_plan
 from asaree.services.metrics import (

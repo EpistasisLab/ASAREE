@@ -120,11 +120,14 @@ async def test_legacy_required_metric_does_not_hide_other_measured_observations(
     )
 
     from dataclasses import replace
+
     from asaree.services.design_revisions import get_current_revision
 
     async with get_session() as db:
         experiment = await create_experiment(db, name=f'partial-metrics-{uuid.uuid4()}', owner_id=owner_id)
-        protocol = await create_protocol(db, name='Partial measurements', owner_id=owner_id, experiment_id=experiment.id)
+        protocol = await create_protocol(
+            db, name='Partial measurements', owner_id=owner_id, experiment_id=experiment.id,
+        )
         replicate = await upsert_replicate(db, experiment_id=experiment.id, replicate_label='partial',
                                           fields={'factor_values': {}})
         revision = await get_current_revision(db, experiment.id)

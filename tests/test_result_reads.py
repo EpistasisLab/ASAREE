@@ -308,11 +308,13 @@ async def test_row_cell_progress_counts_complete_replicates(results_db):
             db.add(row)
             await db.flush()
             db.add(ProtocolRun(protocol_id=selected.protocol_id, owner_id=user.id,
-                               protocol_revision_id=selected.protocol_revision_id, design_revision_id=selected.design_revision_id,
+                               protocol_revision_id=selected.protocol_revision_id,
+                               design_revision_id=selected.design_revision_id,
                                replicate_result_id=parent.id, row_result_id=row.id,
                                status="running" if (number, index) == (2, 1) else "completed"))
     db.add(ResultRefresh(scope_key=selected.key, protocol_id=selected.protocol_id,
-                         protocol_revision_id=selected.protocol_revision_id, design_revision_id=selected.design_revision_id,
+                         protocol_revision_id=selected.protocol_revision_id,
+                         design_revision_id=selected.design_revision_id,
                          summary={"source_row_count": 2}))
     await db.flush()
     result = await read_cells(db, selected)
@@ -334,7 +336,9 @@ async def test_cell_attempt_usage_counts_retries_and_excludes_other_scopes(resul
         (1000, {"status": "completed", "protocol_revision_id": None}),
         (1000, {"status": "completed", "design_revision_id": None}),
     ]:
-        db.add(ProtocolRun(**(base | overrides), usage_summary={"total_tokens": tokens, "cost_usd": tokens / 10000, "duration_seconds": tokens / 10}))
+        db.add(ProtocolRun(**(base | overrides), usage_summary={
+            "total_tokens": tokens, "cost_usd": tokens / 10000, "duration_seconds": tokens / 10,
+        }))
     await db.flush()
     await rebuild_result_summary(db, selected, 1)
     latest = await read_cells(db, selected)
@@ -734,7 +738,9 @@ async def test_cell_result_readiness_requires_all_planned_replicates_and_applica
         'failed_and_pending': ([('failed', None, None, False, None), waiting], 'needs_attention'),
         'cancelled': ([('cancelled', None, None, False, None)], 'needs_attention'),
         'truncated': ([('completed', 'measured', 'measured', True, 'completed')], 'needs_attention'),
-        'no_measured_values': ([('completed', 'not_applicable', 'not_applicable', False, 'completed')], 'needs_attention'),
+        'no_measured_values': (
+            [('completed', 'not_applicable', 'not_applicable', False, 'completed')], 'needs_attention',
+        ),
         'measurement_failed': ([('completed', 'measured', None, False, 'failed')], 'needs_attention'),
         'scoring_pending': ([('completed', 'measured', None, False, 'running')], 'awaiting_results'),
         'partial': ([good, waiting], 'awaiting_results'),
@@ -747,20 +753,24 @@ async def test_cell_result_readiness_requires_all_planned_replicates_and_applica
         db.add(cell)
         await db.flush()
         for number, (status, auc, calibration, truncated, evaluation) in enumerate(attempts, 1):
-            parent = FactorialReplicateResult(cell_id=cell.id, replicate_number=number, replicate_label=f'{label}-{number}')
+            parent = FactorialReplicateResult(
+                cell_id=cell.id, replicate_number=number, replicate_label=f'{label}-{number}',
+            )
             db.add(parent)
             await db.flush()
             if status != 'not_started':
                 if label == 'ready_all' and number == 1:
                     db.add(ProtocolRun(protocol_id=selected.protocol_id, owner_id=user.id,
-                        protocol_revision_id=selected.protocol_revision_id, design_revision_id=selected.design_revision_id,
+                        protocol_revision_id=selected.protocol_revision_id,
+                        design_revision_id=selected.design_revision_id,
                         replicate_result_id=parent.id, replicate_label=parent.replicate_label, status='failed',
                         created_at=datetime.now(UTC) - timedelta(days=1), result_summary={}))
                 db.add(ProtocolRun(protocol_id=selected.protocol_id, owner_id=user.id,
                     protocol_revision_id=selected.protocol_revision_id, design_revision_id=selected.design_revision_id,
                     replicate_result_id=parent.id, replicate_label=parent.replicate_label, status=status,
                     result_summary={'truncated': truncated, 'evaluation_state': evaluation, 'observations': [
-                        {'metric_id': identifier, 'status': state} for identifier, state in [('auc', auc), ('calibration', calibration)] if state
+                        {'metric_id': identifier, 'status': state}
+                        for identifier, state in [('auc', auc), ('calibration', calibration)] if state
                     ]}))
     await db.flush()
     await read_summary(db, selected)
@@ -801,12 +811,18 @@ async def test_results_context_uses_published_dataset_names(results_db):
     db, selected, _cell, _user = results_db
     publication = await db.get(ProtocolRevision, selected.protocol_revision_id)
     publication.graph = {'nodes': [
-        {'id': 'dataset', 'type': 'dataset', 'data': {'config': {'dataset_id': 'dataset-id', 'dataset_name': 'Published dataset'}}},
-        {'id': 'unused', 'type': 'dataset', 'data': {'config': {'dataset_id': 'unused', 'dataset_name': 'Disconnected'}}},
+        {'id': 'dataset', 'type': 'dataset', 'data': {'config': {
+            'dataset_id': 'dataset-id', 'dataset_name': 'Published dataset',
+        }}},
+        {'id': 'unused', 'type': 'dataset', 'data': {'config': {
+            'dataset_id': 'unused', 'dataset_name': 'Disconnected',
+        }}},
         {'id': 'agent', 'type': 'agent', 'data': {'config': {}}},
     ], 'edges': [{'id': 'input', 'source': 'dataset', 'target': 'agent', 'sourceHandle': 'dataset'}]}
     protocol = await db.get(Protocol, selected.protocol_id)
-    protocol.graph = {'nodes': [{'id': 'draft', 'type': 'dataset', 'data': {'config': {'dataset_name': 'Draft dataset'}}}], 'edges': []}
+    protocol.graph = {'nodes': [
+        {'id': 'draft', 'type': 'dataset', 'data': {'config': {'dataset_name': 'Draft dataset'}}},
+    ], 'edges': []}
     await db.flush()
     pinned = await resolve_result_scope(db, experiment_id=selected.experiment_id, protocol_id=selected.protocol_id)
     context = await read_summary(db, pinned)
@@ -834,7 +850,8 @@ async def test_row_cell_waits_for_all_forecast_rows_before_becoming_ready(result
         await db.flush()
         db.add(ProtocolRun(protocol_id=selected.protocol_id, owner_id=user.id,
             protocol_revision_id=selected.protocol_revision_id, design_revision_id=selected.design_revision_id,
-            replicate_result_id=parent.id, row_result_id=row.id, replicate_label=parent.replicate_label, status='completed',
+            replicate_result_id=parent.id, row_result_id=row.id,
+            replicate_label=parent.replicate_label, status='completed',
             result_summary={'observations': [{'metric_id': 'auc', 'status': 'measured'}]}))
         await db.flush()
         await rebuild_result_summary(db, selected, refresh.generation)
@@ -1002,7 +1019,8 @@ async def test_unstarted_row_pages_skip_occupied_rows_and_keep_gaps(results_db):
             db.add(ProtocolRun(protocol_id=selected.protocol_id, owner_id=user.id,
                                protocol_revision_id=selected.protocol_revision_id,
                                design_revision_id=selected.design_revision_id, replicate_result_id=parent.id,
-                               row_result_id=row.id, replicate_label=parent.replicate_label, status=status, node_runs={}))
+                               row_result_id=row.id, replicate_label=parent.replicate_label,
+                               status=status, node_runs={}))
     await db.flush()
     refresh = await db.get(ResultRefresh, selected.key)
     if refresh is None:
@@ -1425,12 +1443,14 @@ async def test_per_row_preview_fits_several_replicates_in_one_step(results_db, m
 
 
 @pytest.mark.parametrize("versioned", [True, False])
-def test_slot_query_never_binds_boolean_flags(versioned):
+@pytest.mark.parametrize("metrics", [[], [{"id": "auc", "name": "ROC AUC", "kind": "custom"}]])
+def test_slot_query_never_binds_boolean_flags(versioned, metrics):
     """A bound True/False can't be folded in a generic plan: a reused connection
     then couldn't simplify `replicate_result_id = x OR (<legacy> AND ...)` and
     scanned every run of the design per slot (rebuild 0.4 s -> 64 s)."""
-    statement = slot_query(scope(versioned=versioned), cutoff=datetime.now(UTC))
+    selected = scope(versioned=versioned, design_spec={"metrics": metrics})
+    statement = slot_query(selected, cutoff=datetime.now(UTC))
     params = statement.compile(dialect=postgresql.dialect()).params
     assert not [name for name, value in params.items() if isinstance(value, bool)]
-    rollup = rollup_query(scope(versioned=versioned)).compile(dialect=postgresql.dialect()).params
+    rollup = rollup_query(selected).compile(dialect=postgresql.dialect()).params
     assert not [name for name, value in rollup.items() if isinstance(value, bool)]

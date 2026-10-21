@@ -13,11 +13,14 @@ import {
   defaultCriticGateNodeData,
   defaultDatasetNodeData,
   defaultMemoryNodeData,
+  defaultMcpToolNodeData,
   defaultOutputParserNodeData,
+  defaultPersonaNodeData,
   defaultReasonActPatternNodeData,
   defaultScriptNodeData,
   type AgentNodeData,
   type ProtocolGraph,
+  type ProtocolNode,
   type ProtocolRun,
   type TestRun,
 } from '@/types/protocols'
@@ -875,6 +878,66 @@ describe('ProtocolCanvas connector adds', () => {
       expect(persisted?.nodes[0].data.active).toBe(false)
     })
   })
+
+  const onOffNodes: { kind: string; type: string; data: ProtocolNode['data'] }[] = [
+    { kind: 'skill', type: 'skill', data: { label: 'Subject', config: { skill_id: 'saved-skill', skill_name: 'Subject' } } },
+    { kind: 'persona', type: 'persona', data: defaultPersonaNodeData('Subject') },
+    { kind: 'tool', type: 'mcp_tool', data: defaultMcpToolNodeData('Subject') },
+    { kind: 'script', type: 'script', data: defaultScriptNodeData('Subject') },
+    { kind: 'dataset', type: 'dataset', data: defaultDatasetNodeData('Subject') },
+    { kind: 'knowledge', type: 'okf_bundle', data: { label: 'Subject', config: {
+      bundle_id: 'bundle', server_name: 'knowledge', bundle_path: '/bundle', bundle_label: 'Subject', tool_names: ['read_concept'],
+    } } },
+    { kind: 'sub-agent', type: 'sub_agent', data: defaultAgentNodeData('Subject') },
+  ]
+
+  it.each(onOffNodes.flatMap((node) => [true, false, undefined].map((enabled) => ({ ...node, enabled }))))(
+    'preserves $kind state ($enabled) when creating and editing an individual on/off factor',
+    async ({ kind, type, data, enabled }) => {
+      const user = userEvent.setup()
+      const experiment: Experiment = {
+        id: 'experiment-1', name: 'Experiment', description: null, hypothesis: null, design_type: 'factorial', task_brief: null,
+        design_spec: { factors: [], metrics: [] }, measurement_plan: null, dataset_ids: [], dataset_id: null,
+        locked_at: null, locked_protocol_revision_id: null, locked_design_spec: null, locked_measurement_plan: null,
+        created_at: '', updated_at: '', archived_at: null,
+      }
+      vi.spyOn(experimentsApi, 'get').mockImplementation(async () => experiment)
+      vi.spyOn(experimentsApi, 'update').mockImplementation(async (_id, patch) => {
+        Object.assign(experiment, patch)
+        return experiment
+      })
+      const fieldPath = kind === 'sub-agent' ? 'active' : 'config.enabled'
+      const nodeData = structuredClone(data)
+      if (kind === 'sub-agent') Object.assign(nodeData, { active: enabled })
+      else Object.assign(nodeData.config, { enabled })
+      const { client } = renderCanvas({
+        nodes: [{ id: 'subject', type, position: { x: 100, y: 100 }, data: nodeData }],
+        edges: [],
+      }, 'experiment-1')
+      await screen.findByText('Subject')
+      const assertState = async (name: string) => {
+        await waitFor(() => {
+          const node = client.getQueryData<ProtocolGraph>(protocolGraphQueryKey('protocol-1'))?.nodes[0]
+          expect(node?.data.factor_bindings).toEqual({ [fieldPath]: name })
+          if (kind === 'sub-agent') expect(node?.data.active).toBe(enabled ?? true)
+          else expect(node?.data.config).toMatchObject({ enabled: enabled ?? true })
+        })
+      }
+      fireEvent.click(screen.getByTitle('Make experimental factor'))
+      await user.click(await screen.findByRole('button', { name: `This ${kind} on/off` }))
+      await user.click(screen.getByRole('button', { name: 'Save factor' }))
+      await assertState('Subject:Enabled')
+
+      await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+      fireEvent.click(screen.getByTitle('Make experimental factor'))
+      fireEvent.change(await screen.findByLabelText('Factor name'), { target: { value: 'Renamed enabled' } })
+      await user.click(screen.getByRole('button', { name: 'Save factor' }))
+      await assertState('Renamed enabled')
+      expect(experiment.design_spec?.factors).toEqual([expect.objectContaining({
+        name: 'Renamed enabled', levels: [false, true], level_type: 'boolean',
+      })])
+    },
+  )
 
   it('keeps the Test Run label when a production replicate is running', async () => {
     const run = protocolRun()

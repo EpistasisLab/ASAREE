@@ -4,6 +4,7 @@ import { User } from 'lucide-react'
 import type { PersonaNodeData } from '@/types/protocols'
 import { boundFactorCount } from '../bindableFields'
 import { CircleNode } from './CircleNode'
+import { useProtocolCanvasActions } from '../ProtocolCanvasContext'
 
 // Configures an agent's personality traits (OCEAN framework) for experimental
 // manipulation. Three modes: Library (validated personas), Text (direct input),
@@ -15,6 +16,8 @@ import { CircleNode } from './CircleNode'
 const ACCENT = nodeAccent('persona')
 
 export function PersonaNode({ id, data, selected }: NodeProps & { data: PersonaNodeData }) {
+  const { requestPersonaFactor, experimentLocked } = useProtocolCanvasActions()
+
   // Determine warning based on mode
   let warning: string | undefined
   const mode = data.config?.mode || 'library'
@@ -39,6 +42,7 @@ export function PersonaNode({ id, data, selected }: NodeProps & { data: PersonaN
       handlePosition="bottom"
       warning={warning}
       factorCount={boundFactorCount(data)}
+      onMakeFactor={!experimentLocked && requestPersonaFactor ? () => requestPersonaFactor(id) : undefined}
     />
   )
 }

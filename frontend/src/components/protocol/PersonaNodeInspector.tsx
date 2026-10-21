@@ -331,10 +331,12 @@ export function PersonaNodeInspector({
           </div>
         </div>
 
-        {/* Persona text with factor binding - matches AgentNodeInspector pattern */}
+        {/* Persona text with factor binding - toolbar creation like AgentNodeInspector */}
         <FactorBindableField
           experimentId={experimentId}
+          nodeId={node.id}
           fieldPath="config.persona_text"
+          creationInToolbar
           defaultLabel="Persona text"
           nodeLabel={factorNodeLabel}
           levelType="persona_text"
@@ -343,22 +345,20 @@ export function PersonaNodeInspector({
           onBind={(name) => bindFactor('config.persona_text', name)}
           onUnbind={() => unbindFactor('config.persona_text')}
         >
-          {(trigger) => (
-            <div className="space-y-2">
-              <div className="flex items-center justify-between">
-                <Label htmlFor="persona-text">Persona text</Label>
-                {trigger}
-              </div>
-              <Textarea
-                id="persona-text"
-                value={config.persona_text || ''}
-                onChange={(e) => patchConfig({ persona_text: e.target.value })}
-                placeholder="You are extremely organized, very responsible, and very hardworking..."
-                className="min-h-32 font-mono text-sm"
-              />
-            </div>
-          )}
+          {(trigger) => trigger}
         </FactorBindableField>
+
+        {/* Persona text editor - all functionality preserved */}
+        <div className="space-y-2">
+          <Label htmlFor="persona-text">Persona text</Label>
+          <Textarea
+            id="persona-text"
+            value={config.persona_text || ''}
+            onChange={(e) => patchConfig({ persona_text: e.target.value })}
+            placeholder="You are extremely organized, very responsible, and very hardworking..."
+            className="min-h-32 font-mono text-sm"
+          />
+        </div>
 
         {/* Help text */}
         <div className="rounded-md bg-muted/50 p-3 text-xs text-muted-foreground space-y-1">

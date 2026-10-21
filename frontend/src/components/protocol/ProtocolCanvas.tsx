@@ -557,6 +557,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   const [scriptFactorNodeId, setScriptFactorNodeId] = useState<string | null>(null)
   const [skillFactorNodeId, setSkillFactorNodeId] = useState<string | null>(null)
   const [datasetFactorNodeId, setDatasetFactorNodeId] = useState<string | null>(null)
+  const [personaFactorNodeId, setPersonaFactorNodeId] = useState<string | null>(null)
   const [connectorFactorChoice, setConnectorFactorChoice] = useState<UnboundField['connectorFactor']>()
   const [addPanelOpen, setAddPanelOpen] = useState(false)
   // The second level of the add-node panel: AddNodePanel's "MCP Servers"
@@ -1516,6 +1517,11 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
     setConnectorFactorChoice(undefined)
     setDatasetFactorNodeId(nodeId)
   }, [experimentId, experimentLocked])
+  const requestPersonaFactor = useCallback((nodeId: string) => {
+    if (!experimentId || experimentLocked) return
+    setSelectedNodeId(null)
+    setPersonaFactorNodeId(nodeId)
+  }, [experimentId, experimentLocked])
   const metricsByNode = useMemo(() => {
     const definitions = new Map((experimentQuery.data?.measurement_plan?.metrics ?? []).map((metric) => [metric.id, metric]))
     const bindings = new Map<string, Map<string, { id: string; name: string }>>()
@@ -1609,6 +1615,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
       requestSkillFactor,
       requestKnowledgeFactor,
       requestDatasetFactor,
+      requestPersonaFactor,
       metricsForNode,
       convertLegacyOutputContract,
     }),
@@ -1630,6 +1637,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
       requestSkillFactor,
       requestKnowledgeFactor,
       requestDatasetFactor,
+      requestPersonaFactor,
       metricsForNode,
       convertLegacyOutputContract,
     ],
@@ -3050,6 +3058,60 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
           queryClient.invalidateQueries({ queryKey: ['experiments', experimentId, 'design-impact'] })
         }}
       />}
+      {personaFactorNodeId && (() => {
+        const personaNode = nodes.find((n) => n.id === personaFactorNodeId)
+        if (!personaNode) return null
+        const boundFactorName = (personaNode.data.factor_bindings as Record<string, string> | undefined)?.[
+          'config.persona_text'
+        ]
+        const existingFactor = factors.find((f) => f.name === boundFactorName)
+        return (
+          <FactorEditorDialog
+            key={personaFactorNodeId}
+            graph={toPersistedGraph(nodes, edges)}
+            open
+            onOpenChange={(open) => {
+              if (!open) setPersonaFactorNodeId(null)
+            }}
+            factor={
+              existingFactor || {
+                name: '',
+                levels: [],
+                level_type: 'persona_text',
+              }
+            }
+            nodeForDirectBinding={{
+              nodeId: personaFactorNodeId,
+              fieldPath: 'config.persona_text',
+              levelType: 'persona_text',
+            }}
+            canvasAgentCount={nodes.filter((node) => node.type === 'agent' || node.type === 'sub_agent').length}
+            onSave={async (factor) => {
+              const fresh = await experimentsApi.get(experimentId!)
+              if (
+                (fresh.design_spec?.factors ?? []).some(
+                  (existing) => existing.name === factor.name && existing.name !== boundFactorName,
+                )
+              )
+                throw new Error('A factor with this name already exists.')
+              await experimentsApi.update(experimentId!, {
+                design_spec: {
+                  ...fresh.design_spec,
+                  factors: [
+                    ...(fresh.design_spec?.factors ?? []).filter((existing) => existing.name !== boundFactorName),
+                    factor,
+                  ],
+                },
+              })
+              bindFactorOnNode(personaFactorNodeId, 'config.persona_text', factor.name)
+              queryClient.invalidateQueries({ queryKey: ['experiments', experimentId] })
+              queryClient.invalidateQueries({ queryKey: ['experiments', experimentId, 'design-impact'] })
+            }}
+            existingFactorNames={factors.map((f) => f.name).filter((name) => name !== boundFactorName)}
+            revealHiddenServers={revealsHiddenMcpServers(nodes)}
+          />
+        )
+      })()}
       {editingFactor && (
         <FactorEditorDialog
           graph={toPersistedGraph(nodes, edges)}

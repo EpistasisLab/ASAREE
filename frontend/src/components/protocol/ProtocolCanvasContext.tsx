@@ -76,6 +76,7 @@ interface ProtocolCanvasActions {
   requestScriptFactor?: (nodeId: string) => void
   requestToolFactor?: (nodeId: string) => void
   requestSkillFactor?: (nodeId: string) => void
+  requestPersonaFactor?: (nodeId: string) => void
   // Same idea for the main pipeline handle -- always creates and wires
   // another Agent node (see MainEdgeAddRequest's own comment).
   requestMainEdgeAdd: (request: MainEdgeAddRequest) => void

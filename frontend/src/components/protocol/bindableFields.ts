@@ -283,6 +283,9 @@ export function bindableFieldsForNode(node: Node): BindableFieldSpec[] {
       // Individual availability binds here; Knowledge connector choices are
       // listed by factorCreationFields and edited in the dedicated dialog.
       return [{ fieldPath: 'config.enabled', label: 'Enabled', levelType: 'boolean' }]
+    case 'persona':
+      // Persona text can vary across cells (e.g., High Openness vs Low Openness).
+      return [{ fieldPath: 'config.persona_text', label: 'Persona text', levelType: 'persona_text' }]
     case 'script':
       // Keep config discoverable for editing existing variant bindings.
       // New factors compare separate Script nodes through Script levels.

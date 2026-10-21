@@ -766,6 +766,17 @@ function PersonaLevelRow({ value, onChange }: { value: StructuredLevel; onChange
     return id ? [id] : ['']
   })
 
+  // Sync state when value changes (e.g., when loading an existing factor for editing)
+  useEffect(() => {
+    const ids = value.persona_ids as string[] | undefined
+    if (ids && Array.isArray(ids) && ids.length > 0) {
+      setSelectedPersonas(ids)
+    } else {
+      const id = value.persona_id as string | null
+      setSelectedPersonas(id ? [id] : [''])
+    }
+  }, [value.persona_ids, value.persona_id])
+
   function patch(patch: StructuredLevel) {
     onChange({ ...value, ...patch })
   }
@@ -857,15 +868,7 @@ function PersonaLevelRow({ value, onChange }: { value: StructuredLevel; onChange
               >
                 <SelectTrigger className="h-8 flex-1">
                   <SelectValue>
-                    {() => {
-                      const selected = PERSONA_LIBRARY.find(p => p.id === personaId)
-                      return selected ? (
-                        <div className="flex items-center gap-2">
-                          <Library className="size-3" />
-                          <span>{selected.label}</span>
-                        </div>
-                      ) : 'Select a persona...'
-                    }}
+                    {() => PERSONA_LIBRARY.find(p => p.id === personaId)?.label ?? 'Select a persona...'}
                   </SelectValue>
                 </SelectTrigger>
                 <SelectContent>

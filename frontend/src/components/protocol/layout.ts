@@ -27,6 +27,7 @@ const CONNECTOR_X: {
     knowledge: 0.9,
     model: 0.08,
     sub_agents: 0.32,
+    persona: 0.45,
     memory: 0.58,
     tool: 0.8,
     // Added after the other seven, and placed after Tool rather than among
@@ -146,7 +147,7 @@ const TIDY_COLUMN_WIDTH = 460
 const TIDY_ROW_HEIGHT = 440
 // Slots on the agent's TOP edge -- their nodes sit above the host, everything
 // else below. Mirrors addNode's own TOP_EDGE_SLOTS.
-const TIDY_TOP_SLOTS = new Set<ConnectorSlot>(['architectural_pattern', 'skill', 'dataset', 'knowledge'])
+const TIDY_TOP_SLOTS = new Set<ConnectorSlot>(['architectural_pattern', 'skill', 'persona', 'dataset', 'knowledge'])
 const TIDY_CHILD_OFFSET_Y = 160
 
 type TidyNode = { id: string; type?: string; position: XYPosition }

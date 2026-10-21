@@ -38,6 +38,7 @@ export interface ProtocolNode {
     | OkfDocumentNodeData
     | ReasonActPatternNodeData
     | SingleAgentBaselinePatternNodeData
+    | PersonaNodeData
 }
 
 /** What a main edge passes to the Agent it feeds (`edge.data.handoff`;
@@ -927,4 +928,41 @@ export interface SingleAgentBaselinePatternNodeData {
 
 export function defaultSingleAgentBaselinePatternNodeData(label = 'Single-Agent Baseline'): SingleAgentBaselinePatternNodeData {
   return { label, config: { max_iterations: 10, stop_on_first_success: true } }
+}
+
+// Persona nodes configure agent personality traits via OCEAN framework.
+// Unlike Memory (which is dashed/no runtime effect), Persona has real runtime
+// effect via _resolve_persona_config in protocol_execution.py.
+export interface PersonaNodeConfig {
+  // Which mode: library selection, direct text, or file upload
+  mode: 'library' | 'text' | 'file'
+  // Library mode: persona_id from registered personas (e.g., "analyst_v1")
+  persona_id?: string | null
+  // Text mode: direct persona prompt text
+  persona_text?: string | null
+  // File mode: path to uploaded .md file with persona definition
+  persona_file?: string | null
+  // Display metadata from library (cached to avoid fetch on render)
+  persona_label?: string | null
+  persona_description?: string | null
+  // Absent means enabled, matching other connector conventions
+  enabled?: boolean
+  [key: string]: unknown
+}
+
+export interface PersonaNodeData {
+  label: string
+  config: PersonaNodeConfig
+  factor_bindings?: Record<string, string>
+  [key: string]: unknown
+}
+
+export function defaultPersonaNodeData(label = 'Persona'): PersonaNodeData {
+  return {
+    label,
+    config: {
+      mode: 'text',
+      persona_text: '',
+    },
+  }
 }

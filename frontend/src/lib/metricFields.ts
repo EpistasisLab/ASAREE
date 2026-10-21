@@ -67,11 +67,11 @@ export function declaredAgentFields(graph: ProtocolGraph | undefined, agentNodeI
   if (parser) {
     const config = 'config' in parser.data ? parser.data.config : undefined
     if (config && 'enabled' in config && config.enabled === false) return []
-    return contractFields(config && 'output_contract' in config ? config.output_contract?.fields : undefined)
+    return contractFields(config && 'output_contract' in config ? (config.output_contract as any)?.fields : undefined)
   }
   const agent = graph.nodes.find((node) => node.id === agentNodeId)
   const config = agent && 'config' in agent.data ? agent.data.config : undefined
-  return contractFields(config && 'output_contract' in config ? config.output_contract?.fields : undefined)
+  return contractFields(config && 'output_contract' in config ? (config.output_contract as any)?.fields : undefined)
 }
 
 function flatten(value: unknown, segments: string[], into: MetricField[]) {

@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { ArrowRight, Atom, BookMarked, Bot, Braces, BrainCircuit, Cloud, Code2, Cog, Database, FileText, HardDrive, Repeat2, Route, ScrollText, ShieldCheck, Server, Sparkles, X } from 'lucide-react'
+import { ArrowRight, Atom, BookMarked, Bot, Braces, BrainCircuit, Cloud, Code2, Cog, Database, FileText, HardDrive, Repeat2, Route, ScrollText, ShieldCheck, Server, Sparkles, User, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { DATASET_BROWSE } from './datasetCatalog'
@@ -106,6 +106,13 @@ const NODE_CATALOG = [
     label: 'Memory',
     description: 'Not yet functional -- declares intent for a future phase',
     icon: BrainCircuit,
+  },
+  {
+    type: 'persona',
+    category: 'knowledge',
+    label: 'Persona',
+    description: 'OCEAN personality traits for experimental manipulation of agent behavior',
+    icon: User,
   },
   // Not a node type either -- picking this opens the dataset browser
   // (DatasetBrowserPanel), same reasoning as MCP Servers above and Skills

@@ -73,6 +73,7 @@ import {
   defaultOpenAiModelNodeData,
   defaultOpenRouterModelNodeData,
   defaultOutputParserNodeData,
+  defaultPersonaNodeData,
   defaultReasonActPatternNodeData,
   defaultScriptNodeData,
   defaultSingleAgentBaselinePatternNodeData,
@@ -89,6 +90,7 @@ import type {
   OkfBundleNodeData,
   OkfDocumentNodeData,
   OutputParserNodeData,
+  PersonaNodeData,
   Protocol,
   ProtocolEdge,
   ProtocolGraph,
@@ -136,6 +138,7 @@ import {
 import { McpToolNodeInspector } from './McpToolNodeInspector'
 import { MemoryNodeInspector } from './MemoryNodeInspector'
 import { OutputParserNodeInspector } from './OutputParserNodeInspector'
+import { PersonaNodeInspector } from './PersonaNodeInspector'
 import {
   ProtocolCanvasActionsProvider,
   type ConnectorAddRequest,
@@ -173,7 +176,7 @@ import {
 // The four connector slots that live on an Agent's TOP edge (see
 // AgentNode.tsx) -- a node feeding one of these is placed ABOVE its agent,
 // every other slot's source below it.
-const TOP_EDGE_SLOTS = new Set<ConnectorSlot>(['architectural_pattern', 'skill', 'dataset', 'knowledge'])
+const TOP_EDGE_SLOTS = new Set<ConnectorSlot>(['architectural_pattern', 'skill', 'persona', 'dataset', 'knowledge'])
 
 // Every edge (plain or connector) renders through InteractEdge -- no edge
 // ever has an explicit `type`, so overriding xyflow's own built-in
@@ -216,6 +219,7 @@ function defaultDataFor(nodeType: string): ProtocolNode['data'] {
   if (nodeType === 'memory') return defaultMemoryNodeData()
   if (nodeType === 'output_parser') return defaultOutputParserNodeData()
   if (nodeType === 'dataset') return defaultDatasetNodeData()
+  if (nodeType === 'persona') return defaultPersonaNodeData()
   if (nodeType === 'script') return defaultScriptNodeData()
   if (nodeType === 'pattern_reason_act') return defaultReasonActPatternNodeData()
   if (nodeType === 'pattern_single_agent_baseline') return defaultSingleAgentBaselinePatternNodeData()
@@ -279,6 +283,7 @@ const CONNECTOR_PANEL_INFO: Record<ConnectorSlot, { allowedTypes: string[]; titl
   model: { allowedTypes: MODEL_NODE_TYPES, title: 'Add Model' },
   tool: { allowedTypes: [MCP_SERVER_BROWSE, 'script'], title: 'Add Tool' },
   memory: { allowedTypes: ['memory'], title: 'Add Memory' },
+  persona: { allowedTypes: ['persona'], title: 'Add Persona' },
   output_parser: { allowedTypes: ['output_parser'], title: 'Add Output Parser' },
   architectural_pattern: { allowedTypes: PATTERN_NODE_TYPES, title: 'Add Architectural Pattern' },
   skill: { allowedTypes: [SKILL_BROWSE], title: 'Add Skill' },
@@ -2196,6 +2201,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
       | ToolStepNodeData
       | ModelNodeData
       | MemoryNodeData
+      | PersonaNodeData
       | OutputParserNodeData
       | DatasetNodeData
       | SkillNodeData
@@ -2528,6 +2534,15 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
             onDelete={requestDeleteNode}
             onClose={() => setSelectedNodeId(null)}
             connectorFactorName={datasetFactorOwner(toPersistedGraph(nodes, edges), selectedNode.id)}
+          />
+        ) : selectedNode?.type === 'persona' ? (
+          <PersonaNodeInspector
+            node={{ id: selectedNode.id, type: 'persona', position: selectedNode.position, data: selectedNode.data as PersonaNodeData }}
+            experimentId={experimentId}
+            factorNodeLabel={factorNodeLabel}
+            onChange={updateNodeData}
+            onDelete={requestDeleteNode}
+            onClose={() => setSelectedNodeId(null)}
           />
         ) : selectedNode?.type === 'skill' ? (
           <SkillNodeInspector

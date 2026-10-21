@@ -326,6 +326,11 @@ _SCRIPT_NODE_TYPES = frozenset({"script"})
 # normal case, since level-1 metadata is ~100 tokens each and a body only
 # loads when the model asks for it.
 _SKILL_NODE_TYPES = frozenset({"skill"})
+
+# Persona nodes are OCEAN personality trait configurations that prefix the
+# agent's system prompt. They are pure config sources, never executed.
+_PERSONA_NODE_TYPES = frozenset({"persona"})
+
 # An OKF Bundle node names one registered OKF bundle -- a directory of
 # markdown concepts the user pointed ASAREE at, served by its own MCP server
 # process (see asaree.services.okf_bundles for why it's a server per bundle
@@ -395,6 +400,7 @@ _PURE_CONFIG_SOURCE_TYPES = (
     | _DATASET_NODE_TYPES
     | _SCRIPT_NODE_TYPES
     | _SKILL_NODE_TYPES
+    | _PERSONA_NODE_TYPES
     | _KNOWLEDGE_NODE_TYPES
     | _OUTPUT_PARSER_NODE_TYPES
     | _SUB_AGENT_NODE_TYPES
@@ -2089,6 +2095,30 @@ def _resolve_skill_config(graph: dict[str, Any], node_id: str) -> dict[str, Any]
         if skill_id and str(skill_id) not in skill_ids:
             skill_ids.append(str(skill_id))
     return {"skill_ids": skill_ids} if skill_ids else {}
+
+
+def _resolve_persona_configs(graph: dict[str, Any], node_id: str) -> list[str]:
+    """Persona texts from every Persona node wired into this agent's Persona
+    connector, in canvas wiring order.
+
+    Unlike skills, personas are folded directly into the system prompt as a
+    prefix -- the persona text becomes part of the agent's instructions. Multiple
+    personas are concatenated with double newlines between them.
+
+    A node with ``enabled: False`` or no ``persona_text`` is skipped."""
+    nodes, _downstream, _upstream = _adjacency(graph)
+    persona_texts: list[str] = []
+    for edge in _edges_with_handle(graph, node_id, "persona", direction="incoming"):
+        source = nodes.get(edge["source"])
+        if source is None or source.get("type") != "persona":
+            continue
+        persona_config = (source.get("data") or {}).get("config") or {}
+        if not persona_config.get("enabled", True):
+            continue
+        persona_text = persona_config.get("persona_text")
+        if persona_text and str(persona_text).strip():
+            persona_texts.append(str(persona_text).strip())
+    return persona_texts
 
 
 def _is_peer_edge(edge: dict[str, Any], nodes: dict[str, dict[str, Any]]) -> bool:
@@ -4267,10 +4297,19 @@ async def _resolve_agent_fields(
             or any(name.startswith(server + ".") for name in tool_config["tool_names"])
         ]
     pattern = _resolve_pattern_config(graph, node["id"])
+
+    # Prepend persona texts to system prompt
+    persona_texts = _resolve_persona_configs(graph, node["id"])
+    base_system_prompt = system_prompt or config.get("system_prompt") or _default_system_prompt(label, "Agent")
+    final_system_prompt = base_system_prompt
+    if persona_texts:
+        persona_prefix = "\n\n".join(persona_texts)
+        final_system_prompt = f"{persona_prefix}\n\n{base_system_prompt}"
+
     return {
         "goal": config.get("goal") or "",
         "description": description,
-        "system_prompt": system_prompt or config.get("system_prompt") or _default_system_prompt(label, "Agent"),
+        "system_prompt": final_system_prompt,
         "model_config": model_config,
         "pattern_config": PatternConfig(
             execution_pattern=pattern.get("execution_pattern"), pattern_params=pattern.get("pattern_params") or {},

@@ -34,6 +34,7 @@ export interface DesignFactor {
   | 'dataset_toggle'
   | 'knowledge_selection'
   | 'knowledge_toggle'
+  | 'persona_text'
 }
 
 export interface DesignMetric {

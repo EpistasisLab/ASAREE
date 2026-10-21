@@ -33,6 +33,7 @@ import type { OkfBundle, OkfDocument } from '@/types/okf'
 import type { CellRunBatch, DatasetRowSchema, PromptPreview, Protocol, ProtocolGraph, ProtocolRevision, ProtocolRun, TestRun } from '@/types/protocols'
 import type { Run, RunStep } from '@/types/runs'
 import type { Skill, SkillListResponse, SkillUrlPreview } from '@/types/skills'
+import type { Persona } from '@/types/personas'
 import type { AttemptDetail, AttemptPage, CursorPage, ExecutionCell, ExecutionSlot, ExecutionSummary, ResultJob, UsageDistribution } from '@/types/executionResults'
 
 const ACCESS_TOKEN_KEY = 'asaree_access_token'
@@ -189,7 +190,7 @@ export interface ResultsScope {
   protocol_revision_id?: string
 }
 
-export interface RowSelection { row_index?: number | null; sub_agent_selections?: Record<string, string>; script_selections?: Record<string, string>; tool_selections?: Record<string, string>; skill_selections?: Record<string, string>; dataset_selections?: Record<string, string>; knowledge_selections?: Record<string, string> }
+export interface RowSelection { row_index?: number | null; sub_agent_selections?: Record<string, string>; script_selections?: Record<string, string>; tool_selections?: Record<string, string>; skill_selections?: Record<string, string>; persona_selections?: Record<string, string>; dataset_selections?: Record<string, string>; knowledge_selections?: Record<string, string> }
 
 function scopeQuery(scope?: ResultsScope): string {
   const params = new URLSearchParams()
@@ -498,6 +499,20 @@ export const mcpServersApi = {
   // while it happened to be down.
   reconnect: (id: string) => request<McpServer>(`/mcp-servers/${id}/reconnect`, { method: 'POST' }),
   remove: (id: string) => request<void>(`/mcp-servers/${id}`, { method: 'DELETE' }),
+}
+
+export const personasApi = {
+  list: () => request<Persona[]>('/personas'),
+  create: (data: { prompt: string; name?: string; description?: string | null; traits?: Record<string, unknown> }) =>
+    request<Persona>('/personas', { method: 'POST', body: data }),
+  upload: (file: File) => {
+    const form = new FormData()
+    form.set('file', file)
+    return request<Persona>('/personas/upload', { method: 'POST', body: form })
+  },
+  update: (id: string, data: { expected_revision: number; name?: string; prompt?: string; description?: string | null; traits?: Record<string, unknown> }) =>
+    request<Persona>(`/personas/${id}`, { method: 'PATCH', body: data }),
+  remove: (id: string) => request<void>(`/personas/${id}`, { method: 'DELETE' }),
 }
 
 export const skillsApi = {

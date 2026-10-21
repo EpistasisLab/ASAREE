@@ -91,6 +91,20 @@ docker compose up -d    # picks up the changed .env
 — five agents in series building a classifier on a public dataset. It picks up
 exactly where this step leaves off.
 
+## Persona library
+
+Add a Persona node and choose a built-in preset or a saved persona in its
+inspector. Uploading a plain `.md` file saves a reusable library entry named
+from the filename and copies its text into the node or factor level. No
+frontmatter, description, or personality metadata is required. The original
+local file is unchanged.
+
+Use **Manage personas / Save current** in the node inspector or persona factor
+editor to save typed instructions, edit library entries, or delete them.
+Existing nodes and factor levels retain their copied text; choose an entry
+again to use its latest revision. Published experiments keep their frozen
+persona text even if the library entry is later edited or deleted.
+
 ## Measurements and Results
 
 The Design panel offers built-in runtime and supervised-ML metrics with their

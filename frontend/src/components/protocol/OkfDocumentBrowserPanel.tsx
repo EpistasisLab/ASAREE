@@ -1,3 +1,6 @@
+import { Card } from '@/components/ui/card'
+import { nodeAccent } from '@/lib/nodeAccent'
+import { cardAccent } from '@/lib/utils'
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ArrowLeft, FileText, Plus, Trash2, X } from 'lucide-react'
@@ -42,7 +45,7 @@ export function OkfDocumentBrowserPanel({
   const documents = documentsQuery.data ?? []
 
   return (
-    <div className="flex min-h-0 w-80 shrink-0 flex-col gap-3 overflow-hidden border-l p-4">
+    <div className="flex min-h-0 min-w-0 w-full shrink-0 flex-col gap-3 overflow-hidden border-l p-4">
       <div className="flex shrink-0 items-center justify-between">
         <div className="flex min-w-0 items-center gap-1.5">
           <Button variant="ghost" size="icon-sm" aria-label="Back" onClick={onBack}>
@@ -84,9 +87,10 @@ export function OkfDocumentBrowserPanel({
             const label = document.title ?? filename ?? document.name
             const broken = document.status !== 'connected'
             return (
-              <div
+              <Card
                 key={document.id}
-                className="rounded-lg border bg-background px-3 py-2.5 text-sm shadow-[0_0_16px_-6px_var(--primary)] ring-1 ring-primary/20 transition-colors hover:bg-muted"
+                style={cardAccent(nodeAccent('okf_document'))}
+                className="gap-0 px-3 py-2.5 transition-colors hover:bg-muted"
               >
                 {confirmingDeleteId === document.id ? (
                   <div className="space-y-2">
@@ -115,7 +119,7 @@ export function OkfDocumentBrowserPanel({
                       onClick={() => onPick(document)}
                       className="flex min-w-0 flex-1 cursor-pointer items-start gap-2.5 text-left"
                     >
-                      <FileText className="mt-0.5 size-4 shrink-0 text-primary" />
+                      <FileText className="mt-0.5 size-4 shrink-0 text-[color:var(--card-accent,var(--primary))]" />
                       <div className="min-w-0 flex-1">
                         <p className="truncate font-medium">{label}</p>
                         <p className="truncate text-xs text-muted-foreground">
@@ -143,7 +147,7 @@ export function OkfDocumentBrowserPanel({
                     </div>
                   </div>
                 )}
-              </div>
+              </Card>
             )
           })}
         </div>

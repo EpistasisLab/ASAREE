@@ -27,6 +27,7 @@ const CONNECTOR_X: {
     knowledge: 0.9,
     model: 0.08,
     sub_agents: 0.32,
+    persona: 0.4,
     memory: 0.58,
     tool: 0.8,
     // Added after the other seven, and placed after Tool rather than among
@@ -59,8 +60,8 @@ export const SUB_AGENT_CHILD_OFFSET_Y = 320
 /** The `left` style for each of a host card's connectors, as a percentage
  * string — for the `<Handle>`, its caption and its "+" stub, which must all
  * sit at the same x. */
-export function connectorLefts(host: 'agent' | 'critic_gate' | 'tool_step'): Record<ConnectorSlot, string> {
-  const table = CONNECTOR_X[host]
+export function connectorLefts(host: 'agent' | 'sub_agent' | 'critic_gate' | 'tool_step'): Record<ConnectorSlot, string> {
+  const table = CONNECTOR_X[host === 'sub_agent' ? 'agent' : host]
   const slots = Object.keys(CONNECTOR_X.agent) as ConnectorSlot[]
   return Object.fromEntries(slots.map((slot) => [slot, `${(table[slot] ?? 0.5) * 100}%`])) as Record<ConnectorSlot, string>
 }
@@ -146,7 +147,7 @@ const TIDY_COLUMN_WIDTH = 460
 const TIDY_ROW_HEIGHT = 440
 // Slots on the agent's TOP edge -- their nodes sit above the host, everything
 // else below. Mirrors addNode's own TOP_EDGE_SLOTS.
-const TIDY_TOP_SLOTS = new Set<ConnectorSlot>(['architectural_pattern', 'skill', 'dataset', 'knowledge'])
+const TIDY_TOP_SLOTS = new Set<ConnectorSlot>(['architectural_pattern', 'skill', 'persona', 'dataset', 'knowledge'])
 const TIDY_CHILD_OFFSET_Y = 160
 
 type TidyNode = { id: string; type?: string; position: XYPosition }

@@ -34,6 +34,7 @@ from asaree.services.experiment_versions import publication_matches_experiment, 
 from asaree.services.experiments import get_experiment
 from asaree.services.factor_bindings import validate_factor_bindings
 from asaree.services.knowledge_factors import test_knowledge_factor_values
+from asaree.services.persona_factors import test_persona_factor_values
 from asaree.services.protocol_execution import (
     ProtocolValidationError,
     is_conversation_strategy,
@@ -287,6 +288,7 @@ class TestRunRequest(BaseModel):
     script_selections: dict[str, str] | None = None
     tool_selections: dict[str, str] | None = None
     skill_selections: dict[str, str] | None = None
+    persona_selections: dict[str, str] | None = None
     dataset_selections: dict[str, str] | None = None
 
 
@@ -299,6 +301,7 @@ class NodePlayRequest(BaseModel):
     script_selections: dict[str, str] | None = None
     tool_selections: dict[str, str] | None = None
     skill_selections: dict[str, str] | None = None
+    persona_selections: dict[str, str] | None = None
     dataset_selections: dict[str, str] | None = None
 
 
@@ -311,6 +314,7 @@ async def _node_test_factor_values(
             **await test_script_factor_values(graph, body.script_selections if body else None, node_id),
             **await test_tool_factor_values(graph, body.tool_selections if body else None, owner_id, node_id),
             **await test_skill_factor_values(graph, body.skill_selections if body else None, owner_id, node_id),
+            **await test_persona_factor_values(graph, body.persona_selections if body else None, owner_id, node_id),
             **await test_knowledge_factor_values(graph, body.knowledge_selections if body else None, owner_id, node_id),
             **await test_dataset_factor_values(graph, body.dataset_selections if body else None, owner_id, db, node_id),
         }
@@ -708,6 +712,7 @@ async def create_test_run_endpoint(
                 **await test_script_factor_values(revision.graph, body.script_selections if body else None),
                 **await test_tool_factor_values(revision.graph, body.tool_selections if body else None, user.id),
                 **await test_skill_factor_values(revision.graph, body.skill_selections if body else None, user.id),
+                **await test_persona_factor_values(revision.graph, body.persona_selections if body else None, user.id),
                 **await test_knowledge_factor_values(
                     revision.graph, body.knowledge_selections if body else None, user.id
                 ),

@@ -1,4 +1,5 @@
 import type { ModelCapabilities } from './llmSettings'
+import type { PersonaSource } from './personas'
 import type { EvaluationArtifact, MetricObservation } from './experiments'
 
 export interface Protocol {
@@ -38,6 +39,7 @@ export interface ProtocolNode {
     | OkfDocumentNodeData
     | ReasonActPatternNodeData
     | SingleAgentBaselinePatternNodeData
+    | PersonaNodeData
 }
 
 /** What a main edge passes to the Agent it feeds (`edge.data.handoff`;
@@ -373,6 +375,8 @@ export interface AgentNodeData {
   script_factor_mode?: 'script_selection' | 'script_toggle'
   tool_selection?: string[]
   tool_factor_mode?: 'tool_selection' | 'tool_toggle'
+  persona_selection?: string[]
+  persona_factor_mode?: 'persona_selection' | 'persona_toggle'
   skill_selection?: string[]
   skill_factor_mode?: 'skill_selection' | 'skill_toggle'
   label: string
@@ -927,4 +931,44 @@ export interface SingleAgentBaselinePatternNodeData {
 
 export function defaultSingleAgentBaselinePatternNodeData(label = 'Single-Agent Baseline'): SingleAgentBaselinePatternNodeData {
   return { label, config: { max_iterations: 10, stop_on_first_success: true } }
+}
+
+// Persona nodes configure agent personality traits via OCEAN framework.
+// Unlike Memory (which is dashed/no runtime effect), Persona has real runtime
+// effect via _resolve_persona_config in protocol_execution.py.
+export interface PersonaNodeConfig {
+  // Which mode: library selection, direct text, or file upload
+  mode: 'library' | 'text' | 'file'
+  // Library mode: persona_id from registered personas (e.g., "analyst_v1")
+  persona_id?: string | null
+  // Library mode, multi-select: every chosen persona (persona_id is the first)
+  persona_ids?: string[] | null
+  // Provenance only: runs always use the snapshotted persona_text below.
+  persona_sources?: PersonaSource[]
+  // Text mode: direct persona prompt text
+  persona_text?: string | null
+  // Original upload filename for display; the prompt is stored inline.
+  persona_file?: string | null
+  // Display metadata from library (cached to avoid fetch on render)
+  persona_label?: string | null
+  persona_description?: string | null
+  // Absent means enabled, matching other connector conventions
+  enabled?: boolean
+}
+
+export interface PersonaNodeData {
+  label: string
+  config: PersonaNodeConfig
+  factor_bindings?: Record<string, string>
+  [key: string]: unknown
+}
+
+export function defaultPersonaNodeData(label = 'Persona'): PersonaNodeData {
+  return {
+    label,
+    config: {
+      mode: 'text',
+      persona_text: '',
+    },
+  }
 }

@@ -1,3 +1,6 @@
+import { Card } from '@/components/ui/card'
+import { nodeAccent } from '@/lib/nodeAccent'
+import { cardAccent } from '@/lib/utils'
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ArrowLeft, Plus, ScrollText, Trash2, X } from 'lucide-react'
@@ -56,7 +59,7 @@ export function SkillBrowserPanel({
   )
 
   return (
-    <div className="flex min-h-0 w-80 shrink-0 flex-col gap-3 overflow-hidden border-l p-4">
+    <div className="flex min-h-0 min-w-0 w-full shrink-0 flex-col gap-3 overflow-hidden border-l p-4">
       <div className="flex shrink-0 items-center justify-between">
         <div className="flex min-w-0 items-center gap-1.5">
           <Button variant="ghost" size="icon-sm" aria-label="Back" onClick={onBack}>
@@ -91,14 +94,10 @@ export function SkillBrowserPanel({
       ) : (
         <div className="min-h-0 flex-1 space-y-1.5 overflow-y-auto p-1">
           {filtered.map((skill) => (
-            // Same metrics as McpServerBrowserPanel's rows (px-3 py-2.5,
-            // text-sm, three single-line rows) so the two browsers read as one
-            // list style. The card is a div rather than that panel's single
-            // <button> only because it also holds the delete control -- a
-            // button can't nest a button -- hence hover: here instead.
-            <div
+            <Card
               key={skill.id}
-              className="rounded-lg border bg-background px-3 py-2.5 text-sm shadow-[0_0_16px_-6px_var(--primary)] ring-1 ring-primary/20 transition-colors hover:bg-muted"
+              style={cardAccent(nodeAccent('skill'))}
+              className="gap-0 px-3 py-2.5 transition-colors hover:bg-muted"
             >
               {confirmingDeleteId === skill.id ? (
                 <div className="space-y-2">
@@ -127,7 +126,7 @@ export function SkillBrowserPanel({
                     onClick={() => onPick(skill)}
                     className="flex min-w-0 flex-1 cursor-pointer items-start gap-2.5 text-left"
                   >
-                    <ScrollText className="mt-0.5 size-4 shrink-0 text-primary" />
+                    <ScrollText className="mt-0.5 size-4 shrink-0 text-[color:var(--card-accent,var(--primary))]" />
                     <div className="min-w-0 flex-1">
                       <p className="truncate font-mono font-medium">{skill.name}</p>
                       {/* Truncated to one line, same as McpServerBrowserPanel's
@@ -166,7 +165,7 @@ export function SkillBrowserPanel({
                   )}
                 </div>
               )}
-            </div>
+            </Card>
           ))}
         </div>
       )}

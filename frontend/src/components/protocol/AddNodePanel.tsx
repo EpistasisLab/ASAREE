@@ -1,7 +1,11 @@
+import { PERSONA_BROWSE } from './personaCatalog'
 import { useState } from 'react'
-import { ArrowRight, Atom, BookMarked, Bot, Braces, BrainCircuit, Cloud, Code2, Cog, Database, FileText, HardDrive, Repeat2, Route, ScrollText, ShieldCheck, Server, Sparkles, X } from 'lucide-react'
+import { ArrowRight, Atom, BookMarked, Bot, Braces, BrainCircuit, Cloud, Code2, Cog, Database, FileText, HardDrive, Repeat2, Route, ScrollText, ShieldCheck, Server, Sparkles, User, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { Card } from '@/components/ui/card'
+import { nodeAccent } from '@/lib/nodeAccent'
+import { cardAccent } from '@/lib/utils'
 import { DATASET_BROWSE } from './datasetCatalog'
 import { MCP_SERVER_BROWSE } from './mcpServerCatalog'
 import { OKF_BUNDLE_BROWSE, OKF_DOCUMENT_BROWSE } from './okfCatalog'
@@ -16,6 +20,16 @@ const NODE_CATEGORIES = [
 ] as const
 
 type NodeCategory = (typeof NODE_CATEGORIES)[number]['id']
+
+// Library entries create nodes of these kinds; all model providers share a hue.
+const CATALOG_ACCENT_KINDS: Record<string, string> = {
+  [PERSONA_BROWSE]: 'persona',
+  [DATASET_BROWSE]: 'dataset',
+  [MCP_SERVER_BROWSE]: 'mcp_tool',
+  [SKILL_BROWSE]: 'skill',
+  [OKF_BUNDLE_BROWSE]: 'okf_bundle',
+  [OKF_DOCUMENT_BROWSE]: 'okf_document',
+}
 
 // Every entry here earns its place: GET /api/mcp-servers already backs the
 // tool picker, GET /datasets already backs the dataset picker,
@@ -106,6 +120,13 @@ const NODE_CATALOG = [
     label: 'Memory',
     description: 'Not yet functional -- declares intent for a future phase',
     icon: BrainCircuit,
+  },
+  {
+    type: PERSONA_BROWSE,
+    category: 'knowledge',
+    label: 'Personas',
+    description: 'Browse persona instructions for an Agent',
+    icon: User,
   },
   // Not a node type either -- picking this opens the dataset browser
   // (DatasetBrowserPanel), same reasoning as MCP Servers above and Skills
@@ -200,7 +221,7 @@ export function AddNodePanel({
   })
 
   return (
-    <div className="flex min-h-0 w-80 shrink-0 flex-col gap-3 overflow-hidden border-l p-4">
+    <div className="flex min-h-0 min-w-0 w-full shrink-0 flex-col gap-3 overflow-hidden border-l p-4">
       <div className="flex items-center justify-between">
         <p className="text-sm font-semibold">{title}</p>
         <Button variant="ghost" size="icon-sm" aria-label="Close" onClick={onClose}>
@@ -208,7 +229,7 @@ export function AddNodePanel({
         </Button>
       </div>
       <Input autoFocus placeholder="Search node types…" value={query} onChange={(e) => setQuery(e.target.value)} />
-      <div className="min-h-0 flex-1 overflow-y-auto pr-1">
+      <div className="min-h-0 flex-1 overflow-y-auto p-1">
         {filtered.length === 0 && <p className="py-4 text-center text-sm text-muted-foreground">No matching node types.</p>}
         <div className="flex flex-col gap-4">
           {groups.map((group) => (
@@ -218,23 +239,28 @@ export function AddNodePanel({
               </h3>
               <div className="flex flex-col gap-1.5">
                 {group.items.map((item) => (
-                  <button
+                  <Card
                     key={item.type}
-                    type="button"
-                    disabled={!allowedTypes && item.type === 'sub_agent'}
-                    onClick={() => onAdd(item.type)}
-                    className="flex cursor-pointer items-center gap-2.5 rounded-lg border bg-background px-3 py-2.5 text-left text-sm shadow-[0_0_16px_-6px_var(--primary)] ring-1 ring-primary/20 transition-colors hover:bg-muted disabled:cursor-not-allowed disabled:opacity-55 disabled:hover:bg-background"
+                    style={cardAccent(nodeAccent(CATALOG_ACCENT_KINDS[item.type] ?? (item.type.startsWith('model_') ? 'model' : item.type)))}
+                    className="gap-0 p-0"
                   >
-                    <item.icon className="size-4 shrink-0 text-primary" />
-                    <div className="min-w-0">
-                      <p className="font-medium">{item.label}</p>
-                      <p className="truncate text-xs text-muted-foreground">
-                        {!allowedTypes && item.type === 'sub_agent'
-                          ? "Add from an Agent's Sub-Agents connector"
-                          : item.description}
-                      </p>
-                    </div>
-                  </button>
+                    <button
+                      type="button"
+                      disabled={!allowedTypes && item.type === 'sub_agent'}
+                      onClick={() => onAdd(item.type)}
+                      className="flex w-full cursor-pointer items-center gap-2.5 rounded-lg px-3 py-2.5 text-left text-sm transition-colors hover:bg-muted disabled:cursor-not-allowed disabled:opacity-55 disabled:hover:bg-background"
+                    >
+                      <item.icon className="size-4 shrink-0 text-[color:var(--card-accent,var(--primary))]" />
+                      <div className="min-w-0">
+                        <p className="font-medium">{item.label}</p>
+                        <p className="truncate text-xs text-muted-foreground">
+                          {!allowedTypes && item.type === 'sub_agent'
+                            ? "Add from an Agent's Sub-Agents connector"
+                            : item.description}
+                        </p>
+                      </div>
+                    </button>
+                  </Card>
                 ))}
               </div>
             </section>

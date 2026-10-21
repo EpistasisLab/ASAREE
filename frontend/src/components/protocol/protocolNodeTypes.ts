@@ -7,6 +7,7 @@ import { McpClientToolNode } from './nodes/McpClientToolNode'
 import { McpToolNode } from './nodes/McpToolNode'
 import { MemoryNode } from './nodes/MemoryNode'
 import { OutputParserNode } from './nodes/OutputParserNode'
+import { PersonaNode } from './nodes/PersonaNode'
 import { ReasonActPatternNode } from './nodes/ReasonActPatternNode'
 import { ScriptNode } from './nodes/ScriptNode'
 import { SingleAgentBaselinePatternNode } from './nodes/SingleAgentBaselinePatternNode'
@@ -21,6 +22,7 @@ export const NODE_TYPES = {
   model_anthropic: ModelNode, model_openai: ModelNode, model_azure_foundry: ModelNode,
   model_openrouter: ModelNode, model_local: ModelNode,
   memory: MemoryNode, output_parser: OutputParserNode, dataset: DatasetNode,
+  persona: PersonaNode,
   skill: SkillNode, okf_bundle: OkfBundleNode, okf_document: OkfDocumentNode,
   script: ScriptNode, pattern_reason_act: ReasonActPatternNode,
   pattern_single_agent_baseline: SingleAgentBaselinePatternNode,

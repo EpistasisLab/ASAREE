@@ -163,6 +163,11 @@
        deterministic, model-free step. A dimmer steel (0.86/0.025) was tried
        first and read as washed-out rather than distinct. */
     --node-11: oklch(0.95 0.015 240);
+    /* Persona (kind sixteen) -- a bright pink-magenta (320 hue) sitting between
+       Memory's 307 and OKF Document's 333, with higher chroma (0.22) and
+       lightness (0.76) to distinguish from its neighbors while staying in the
+       pink/magenta family. OCEAN personality trait configuration for agents. */
+    --node-12: oklch(0.76 0.22 320);
     /* Connector captions (Pattern/Skill/Dataset/Knowledge/Model/Memory/Tool on
        AgentNode and CriticGateNode). One fixed yellow rather than the host
        node's own accent: these sit outside the card on the canvas backdrop,

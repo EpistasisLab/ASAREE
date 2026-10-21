@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 GROUP_SPECS = {
+    "persona": ({"persona"}, {"persona"}, "persona_selection"),
     "skill": ({"skill"}, {"skill"}, "skill_selection"),
     "dataset": ({"dataset"}, {"dataset", "resource", "tool"}, "dataset_selection"),
     "knowledge": ({"okf_bundle", "okf_document"}, {"knowledge"}, "knowledge_selection"),

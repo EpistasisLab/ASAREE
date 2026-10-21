@@ -1,3 +1,4 @@
+import { personaFactorIssues } from '@/lib/personaFactors'
 import { subAgentFactorIssues } from '@/lib/subAgentFactors'
 import { sharedGroupIssues } from '@/lib/sharedFactors'
 import { knowledgeFactorIssues, isKnowledgeFactor } from '@/lib/knowledgeFactors'
@@ -504,6 +505,8 @@ export function DesignTab({
       // too -- not just the cell rows.
       queryClient.invalidateQueries({ queryKey: ['experiments', experiment.id, 'design-revisions'] })
       queryClient.invalidateQueries({ queryKey: ['experiments', experiment.id, 'design-impact'] })
+      // Invalidate runs list which shows cell labels
+      queryClient.invalidateQueries({ queryKey: ['protocol-runs'] })
     },
   })
 
@@ -525,6 +528,7 @@ export function DesignTab({
   const toolLibrary = useQuery({ queryKey: ['mcp-servers'], queryFn: () => mcpServersApi.list(), enabled: factors.some((factor) => factor.level_type === 'tool_selection' || factor.level_type === 'tool_toggle') })
   const scriptIssues = scriptFactorIssues(draftGraph, factors)
   const toolIssues = toolFactorIssues(draftGraph, factors, toolLibrary.data ? new Set(toolLibrary.data.map((server) => server.id)) : undefined)
+  const personaIssues = personaFactorIssues(draftGraph, factors)
   const skillIssues = skillFactorIssues(draftGraph, factors, skillLibrary.data ? new Set(skillLibrary.data.map((skill) => skill.id)) : undefined)
   const impact = impactQuery.data
 
@@ -894,14 +898,14 @@ export function DesignTab({
             Unbound factor{unboundFactors.length === 1 ? '' : 's'}: {unboundFactors.join(', ')}. Rebind on the canvas or remove from this design.
           </p>
         )}
-        {[...patternIssues, ...scriptIssues, ...toolIssues, ...subAgentIssues, ...skillIssues, ...datasetIssues, ...knowledgeIssues].map((issue) => <p key={issue} className="text-xs text-destructive">{issue}</p>)}
+        {[...patternIssues, ...scriptIssues, ...toolIssues, ...subAgentIssues, ...skillIssues, ...personaIssues, ...datasetIssues, ...knowledgeIssues].map((issue) => <p key={issue} className="text-xs text-destructive">{issue}</p>)}
         <Button
           size="sm"
           disabled={
             generateMutation.isPending ||
             isAutosavingMetadata ||
             !canGenerate ||
-            patternIssues.length > 0 || scriptIssues.length > 0 || toolIssues.length > 0 || (factors.some((factor) => factor.level_type === 'tool_selection' || factor.level_type === 'tool_toggle') && !toolLibrary.isSuccess) || unboundFactors.length > 0 || subAgentIssues.length > 0 || knowledgeIssues.length > 0 || (factors.some(isKnowledgeFactor) && !knowledgeLibrary.isSuccess) || skillIssues.length > 0 || datasetIssues.length > 0 || (factors.some((factor) => factor.level_type === 'dataset_selection' || factor.level_type === 'dataset_toggle') && !datasetLibrary.isSuccess) || (factors.some((factor) => (factor.level_type === 'skill_selection' || factor.level_type === 'skill_toggle')) && !skillLibrary.isSuccess)
+            patternIssues.length > 0 || scriptIssues.length > 0 || toolIssues.length > 0 || (factors.some((factor) => factor.level_type === 'tool_selection' || factor.level_type === 'tool_toggle') && !toolLibrary.isSuccess) || unboundFactors.length > 0 || subAgentIssues.length > 0 || knowledgeIssues.length > 0 || (factors.some(isKnowledgeFactor) && !knowledgeLibrary.isSuccess) || personaIssues.length > 0 || skillIssues.length > 0 || datasetIssues.length > 0 || (factors.some((factor) => factor.level_type === 'dataset_selection' || factor.level_type === 'dataset_toggle') && !datasetLibrary.isSuccess) || (factors.some((factor) => (factor.level_type === 'skill_selection' || factor.level_type === 'skill_toggle')) && !skillLibrary.isSuccess)
           }
           onClick={() => generateMutation.mutate()}
         >

@@ -1,9 +1,10 @@
+import { PersonaFactorEditor } from './PersonaFactorEditor'
 import type { ModelCapabilities } from '@/types/llmSettings'
 import { modelCapabilities } from '@/lib/modelCapabilities'
 import { SubAgentFactorEditor } from './SubAgentFactorEditor'
 import type { ProtocolGraph } from '@/types/protocols'
-import { useEffect, useMemo, useState, type SetStateAction } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useEffect, useId, useMemo, useState, type SetStateAction } from 'react'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Plus, Split, X } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -39,7 +40,12 @@ import { PythonCodeEditor } from './PythonCodeEditor'
 import { useDialogAutosave } from './useDialogAutosave'
 import { useDialogDraft } from './useDialogDraft'
 import type { DesignFactor } from '@/types/experiments'
+import { Upload } from 'lucide-react'
 import { DatasetFactorEditor } from './DatasetFactorEditor'
+import { PersonaLibraryPicker } from './PersonaLibraryPicker'
+import { configForSavedPersona } from './usePersonaLibrary'
+import { personasApi } from '@/api/client'
+import type { PersonaNodeConfig } from '@/types/protocols'
 import { KnowledgeFactorEditor } from './KnowledgeFactorEditor'
 import { ScriptFactorEditor } from './ScriptFactorEditor'
 import { ToolFactorEditor } from './ToolFactorEditor'
@@ -419,6 +425,39 @@ function DatasetConfigLevelRow({
   )
 }
 
+function PersonaLevelRow({ value, onChange }: { value: StructuredLevel; onChange: (next: StructuredLevel) => void }) {
+  const uploadId = useId()
+  const client = useQueryClient()
+  const upload = useMutation({
+    mutationFn: personasApi.upload,
+    onSuccess: () => client.invalidateQueries({ queryKey: ['personas'] }),
+  })
+  return (
+    <div className="space-y-2 rounded-lg border p-2">
+      <PersonaLibraryPicker value={value as unknown as PersonaNodeConfig} onChange={next => onChange({ ...value, ...next })} />
+      <div className="space-y-1">
+        <Label htmlFor={uploadId} className="text-xs">Upload persona (.md)</Label>
+        <Button variant="outline" size="sm" type="button" disabled={upload.isPending} className="h-8 w-full text-xs" onClick={() => document.getElementById(uploadId)?.click()}>
+          <Upload className="mr-1.5 size-3" />{upload.isPending ? 'Saving persona…' : (value.persona_file as string) || 'Choose .md file'}
+        </Button>
+        <input id={uploadId} type="file" accept=".md" className="hidden" onChange={event => {
+          const file = event.target.files?.[0]
+          if (file) upload.mutate(file, { onSuccess: persona => onChange({ ...value, ...configForSavedPersona(persona), mode: 'file' }) })
+          event.target.value = ''
+        }} />
+        <p className="text-xs text-muted-foreground">Upload plain Markdown; no frontmatter is required. The persona is saved to your library and its text is copied into this level.</p>
+        {upload.error && <p role="alert" className="text-xs text-destructive">{upload.error.message}</p>}
+      </div>
+      <div className="space-y-1">
+        <Label htmlFor={`${uploadId}-text`} className="text-xs">Persona text</Label>
+        <Textarea id={`${uploadId}-text`} value={(value.persona_text as string) ?? ''} onChange={event => onChange({
+          ...value, persona_text: event.target.value, mode: 'text', persona_id: null, persona_ids: [], persona_sources: [], persona_label: null, persona_file: null,
+        })} placeholder="Describe the agent's personality and behavior…" className="h-20 font-mono text-xs" />
+      </div>
+    </div>
+  )
+}
+
 // One row of a "tool_names" factor's levels -- an allow-list of BARE tool
 // names for one MCP node, i.e. exactly what McpToolNodeInspector's own "Tools
 // allowed" toggle list writes into config.tool_names (protocol_execution.py's
@@ -519,6 +558,7 @@ export function FactorEditorDialog(props: Parameters<typeof StandardFactorEditor
   if (props.factor.level_type === 'sub_agent_selection' || props.factor.level_type === 'sub_agent_toggle') return <SubAgentFactorEditor {...props} />
   if (props.factor.level_type === 'knowledge_selection' || props.factor.level_type === 'knowledge_toggle') return <KnowledgeFactorEditor {...props} />
   if (props.factor.level_type === 'dataset_selection' || props.factor.level_type === 'dataset_toggle') return <DatasetFactorEditor {...props} />
+  if (props.factor.level_type === 'persona_selection' || props.factor.level_type === 'persona_toggle') return <PersonaFactorEditor {...props} />
   if ((props.factor.level_type === 'skill_selection' || props.factor.level_type === 'skill_toggle')) return <SkillFactorEditor {...props} />
   if (props.factor.level_type === 'tool_selection' || props.factor.level_type === 'tool_toggle') return <ToolFactorEditor {...props} />
   if (props.factor.level_type === 'script_selection' || props.factor.level_type === 'script_toggle') return <ScriptFactorEditor {...props} />
@@ -665,7 +705,18 @@ function StandardFactorEditorDialog({
           ? [false, true]
           : selectedIndexes.map((index) => parseLevelValue((draftLevels as string[])[index], draftLevelType))
     const defaults = defaultFactorLevelLabels(draftName, parsedLevels.length, draftLevelType)
-    const labels = selectedIndexes.map((index, outputIndex) => draftLevelLabels[index]?.trim() || defaults[outputIndex])
+    const labels =
+      draftLevelType === 'persona_text'
+        ? draftLevels.map((level, index) => {
+            if (typeof level === 'object' && level !== null && 'persona_label' in level) {
+              const personaLabel = (level as Record<string, unknown>).persona_label
+              if (typeof personaLabel === 'string' && personaLabel.trim()) {
+                return personaLabel.trim()
+              }
+            }
+            return defaults[index]
+          })
+        : selectedIndexes.map((index, outputIndex) => draftLevelLabels[index]?.trim() || defaults[outputIndex])
     return { factor: { name: draftName, levels: parsedLevels, level_labels: labels, level_type: draftLevelType } satisfies DesignFactor, field }
   }
 
@@ -892,6 +943,11 @@ function StandardFactorEditorDialog({
                                     .filter((id): id is string => typeof id === 'string'),
                                 )
                               }
+                              onChange={(next) => setLevels((ls) => ls.map((l, j) => (j === i ? next : l)))}
+                            />
+                          ) : levelType === 'persona_text' ? (
+                            <PersonaLevelRow
+                              value={level as StructuredLevel}
                               onChange={(next) => setLevels((ls) => ls.map((l, j) => (j === i ? next : l)))}
                             />
                           ) : (

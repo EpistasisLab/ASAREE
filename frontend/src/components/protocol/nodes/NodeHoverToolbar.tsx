@@ -50,8 +50,10 @@ export function NodeHoverToolbar({
   runAlone,
   swap,
   onMakeFactor,
+  hoverClassName = 'group-hover:opacity-100',
 }: {
   nodeId: string
+  hoverClassName?: string
   // Absent for pure config-source nodes (llm/memory/pattern) -- "deactivate"
   // has no meaning for something that isn't ever "run" in the first place,
   // so those node types only get Delete, not the power icon.
@@ -88,7 +90,7 @@ export function NodeHoverToolbar({
   const { deleteElements } = useReactFlow()
 
   return (
-    <div className="absolute bottom-full left-1/2 z-10 mb-1 flex -translate-x-1/2 items-center gap-0.5 rounded-md border bg-card px-1 py-0.5 opacity-0 shadow-[0_0_10px_-4px_var(--primary)] ring-1 ring-primary/20 transition-opacity group-hover:opacity-100">
+    <div className={`absolute bottom-full left-1/2 z-10 mb-1 flex -translate-x-1/2 items-center gap-0.5 rounded-md border bg-card p-0.5 opacity-0 shadow-[0_0_10px_-4px_var(--primary)] ring-1 ring-primary/20 transition-opacity ${hoverClassName}`}>
       {runAlone && (
         // A disabled Button gets `pointer-events-none`, which would also
         // swallow its own `title` tooltip -- wrapping it in a span that
@@ -97,7 +99,7 @@ export function NodeHoverToolbar({
         // ProtocolCanvasPage.tsx).
         <span title={runAlone.canRun ? undefined : "Has upstream input -- can't run alone yet"}>
           <ToolbarIconButton
-            label="Run this node's configuration; choose a skill level in the run dialog"
+            label="Run this node's configuration; choose connector factor levels in the run dialog"
             disabled={!runAlone.canRun}
             onClick={() => runAlone.canRun && runAlone.onRun()}
           >

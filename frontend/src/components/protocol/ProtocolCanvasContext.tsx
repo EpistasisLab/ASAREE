@@ -5,6 +5,7 @@ export type ConnectorSlot =
   | 'model'
   | 'tool'
   | 'memory'
+  | 'persona'
   | 'architectural_pattern'
   | 'skill'
   | 'dataset'
@@ -21,6 +22,7 @@ export const CONNECTOR_SLOT_LABELS: Record<ConnectorSlot, string> = {
   model: 'Model',
   tool: 'Tool',
   memory: 'Memory',
+  persona: 'Persona',
   architectural_pattern: 'Architectural Pattern',
   skill: 'Skill',
   dataset: 'Dataset',
@@ -74,6 +76,7 @@ interface ProtocolCanvasActions {
   requestScriptFactor?: (nodeId: string) => void
   requestToolFactor?: (nodeId: string) => void
   requestSkillFactor?: (nodeId: string) => void
+  requestPersonaFactor?: (nodeId: string) => void
   // Same idea for the main pipeline handle -- always creates and wires
   // another Agent node (see MainEdgeAddRequest's own comment).
   requestMainEdgeAdd: (request: MainEdgeAddRequest) => void

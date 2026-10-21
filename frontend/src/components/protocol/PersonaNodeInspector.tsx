@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useId, useState } from 'react'
 import { nodeAccent } from '@/lib/nodeAccent'
 import { User, Upload, Library, Plus, X } from 'lucide-react'
 import { Label } from '@/components/ui/label'
@@ -29,6 +29,7 @@ export function PersonaNodeInspector({
   onDelete: (nodeId: string) => void
   onClose: () => void
 }) {
+  const uploadId = useId()
   // Track multiple selected personas for combination (can include empty strings for unfilled slots)
   const [selectedPersonas, setSelectedPersonas] = useState<string[]>(() => {
     if (!node) return []
@@ -231,27 +232,28 @@ export function PersonaNodeInspector({
           )}
         </div>
 
-        {/* File upload for skill.md */}
+        {/* Persona Markdown upload */}
         <div className="space-y-2">
-          <Label>Upload skill.md file</Label>
+          <Label htmlFor={uploadId}>Upload persona (.md)</Label>
           <div className="flex gap-2">
             <Button
               variant="outline"
               size="sm"
               className="w-full"
-              onClick={() => document.getElementById('persona-file-upload')?.click()}
+              onClick={() => document.getElementById(uploadId)?.click()}
             >
               <Upload className="size-4 mr-2" />
               {config.persona_file || 'Choose .md file'}
             </Button>
             <input
-              id="persona-file-upload"
+              id={uploadId}
               type="file"
               accept=".md"
               className="hidden"
               onChange={handleFileUpload}
             />
           </div>
+          <p className="text-xs text-muted-foreground">Upload any .md file containing personality or behavior instructions to prepend to the agent's system prompt.</p>
         </div>
 
         {/* Persona text with factor binding - toolbar creation like AgentNodeInspector */}

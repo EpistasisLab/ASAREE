@@ -2,7 +2,7 @@ import type { ModelCapabilities } from '@/types/llmSettings'
 import { modelCapabilities } from '@/lib/modelCapabilities'
 import { SubAgentFactorEditor } from './SubAgentFactorEditor'
 import type { ProtocolGraph } from '@/types/protocols'
-import { useEffect, useMemo, useState, type SetStateAction } from 'react'
+import { useEffect, useId, useMemo, useState, type SetStateAction } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Plus, Split, X } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
@@ -422,6 +422,7 @@ function DatasetConfigLevelRow({
 }
 
 function PersonaLevelRow({ value, onChange }: { value: StructuredLevel; onChange: (next: StructuredLevel) => void }) {
+  const uploadId = useId()
   const [selectedPersonas, setSelectedPersonas] = useState<string[]>(() => {
     const ids = value.persona_ids as string[] | undefined
     if (ids && Array.isArray(ids) && ids.length > 0) return ids
@@ -576,26 +577,27 @@ function PersonaLevelRow({ value, onChange }: { value: StructuredLevel; onChange
         )}
       </div>
       <div className="space-y-1">
-        <Label className="text-xs">Upload .md file</Label>
+        <Label htmlFor={uploadId} className="text-xs">Upload persona (.md)</Label>
         <div className="flex gap-2">
           <Button
             variant="outline"
             size="sm"
             type="button"
             className="h-8 w-full text-xs"
-            onClick={() => document.getElementById(`persona-upload-${String(value.persona_id || 'custom')}`)?.click()}
+            onClick={() => document.getElementById(uploadId)?.click()}
           >
             <Upload className="size-3 mr-1.5" />
             {(value.persona_file as string) || 'Choose .md file'}
           </Button>
           <input
-            id={`persona-upload-${String(value.persona_id || 'custom')}`}
+            id={uploadId}
             type="file"
             accept=".md"
             className="hidden"
             onChange={handleFileUpload}
           />
         </div>
+        <p className="text-xs text-muted-foreground">Upload any .md file containing personality or behavior instructions to prepend to the agent's system prompt.</p>
       </div>
       <div className="space-y-1">
         <Label className="text-xs">Persona text</Label>

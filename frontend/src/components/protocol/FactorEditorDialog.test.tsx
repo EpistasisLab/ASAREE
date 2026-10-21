@@ -7,6 +7,39 @@ import { FactorEditorDialog } from './FactorEditorDialog'
 const factorA: DesignFactor = { name: 'Model parameter', level_type: 'number', levels: [2048, 1024], level_labels: ['high', 'low'] }
 const factorB: DesignFactor = { ...factorA, levels: [1024, 2048], level_labels: ['low', 'high'] }
 
+it.each([null, '01-analyst'])('uploads to the intended persona level when both levels share persona_id %s', async (personaId) => {
+  const save = vi.fn().mockResolvedValue(undefined)
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  render(
+    <QueryClientProvider client={client}>
+      <FactorEditorDialog open onOpenChange={vi.fn()} onSave={save} factor={{
+        name: 'Persona', level_type: 'persona_text', levels: [
+          { mode: 'text', persona_text: 'First treatment', persona_id: personaId },
+          { mode: 'text', persona_text: 'Second treatment', persona_id: personaId },
+        ],
+      }} />
+    </QueryClientProvider>,
+  )
+  const inputs = screen.getAllByLabelText<HTMLInputElement>('Upload persona (.md)')
+  const firstClick = vi.spyOn(inputs[0], 'click')
+  const secondClick = vi.spyOn(inputs[1], 'click')
+  fireEvent.click(screen.getAllByRole('button', { name: 'Choose .md file' })[1])
+  expect(secondClick).toHaveBeenCalledOnce()
+  expect(firstClick).not.toHaveBeenCalled()
+
+  const file = new File(['You are methodical.'], 'methodical.md', { type: 'text/markdown' })
+  Object.defineProperty(file, 'text', { value: vi.fn().mockResolvedValue('You are methodical.') })
+  fireEvent.change(inputs[1], { target: { files: [file] } })
+  await waitFor(() => expect(screen.getByRole('button', { name: 'methodical.md' })).toBeInTheDocument())
+  fireEvent.click(screen.getByRole('button', { name: 'Close' }))
+  await waitFor(() => expect(save).toHaveBeenCalledWith(expect.objectContaining({
+    levels: [
+      expect.objectContaining({ persona_text: 'First treatment' }),
+      expect.objectContaining({ persona_text: 'You are methodical.', persona_file: 'methodical.md', mode: 'file' }),
+    ],
+  }), undefined))
+})
+
 it.each(['tool_selection', 'dataset_selection', 'skill_selection', 'knowledge_selection', 'script_selection', 'sub_agent_selection'] as const)(
   'refreshes untouched %s editors and preserves level-label pairs', async (level_type) => {
     const save = vi.fn().mockResolvedValue(undefined)

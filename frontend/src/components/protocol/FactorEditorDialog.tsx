@@ -759,8 +759,71 @@ function DatasetConfigLevelRow({
 }
 
 function PersonaLevelRow({ value, onChange }: { value: StructuredLevel; onChange: (next: StructuredLevel) => void }) {
+  const [selectedPersonas, setSelectedPersonas] = useState<string[]>(() => {
+    const ids = value.persona_ids as string[] | undefined
+    if (ids && Array.isArray(ids) && ids.length > 0) return ids
+    const id = value.persona_id as string | null
+    return id ? [id] : ['']
+  })
+
   function patch(patch: StructuredLevel) {
     onChange({ ...value, ...patch })
+  }
+
+  function updatePersona(index: number, newId: string | null) {
+    const newSelected = [...selectedPersonas]
+    newSelected[index] = newId || ''
+    const filtered = newSelected.filter(id => id !== '')
+    setSelectedPersonas(filtered.length > 0 ? filtered : [''])
+
+    const combinedText = filtered
+      .map(id => PERSONA_LIBRARY.find(p => p.id === id)?.prompt ?? '')
+      .filter(Boolean)
+      .join('\n\n')
+
+    const allLabels = filtered
+      .map(id => PERSONA_LIBRARY.find(p => p.id === id)?.label)
+      .filter(Boolean)
+      .join(' + ')
+
+    patch({
+      persona_text: combinedText,
+      persona_id: filtered[0] || null,
+      persona_ids: filtered,
+      persona_label: allLabels || null,
+      mode: 'library',
+      persona_file: null
+    })
+  }
+
+  function addPersona() {
+    if (selectedPersonas.length < 5) {
+      setSelectedPersonas([...selectedPersonas, ''])
+    }
+  }
+
+  function removePersona(index: number) {
+    const newSelected = selectedPersonas.filter((_, i) => i !== index)
+    setSelectedPersonas(newSelected.length > 0 ? newSelected : [''])
+
+    const combinedText = newSelected
+      .map(id => PERSONA_LIBRARY.find(p => p.id === id)?.prompt ?? '')
+      .filter(Boolean)
+      .join('\n\n')
+
+    const allLabels = newSelected
+      .map(id => PERSONA_LIBRARY.find(p => p.id === id)?.label)
+      .filter(Boolean)
+      .join(' + ')
+
+    patch({
+      persona_text: combinedText,
+      persona_id: newSelected[0] || null,
+      persona_ids: newSelected,
+      persona_label: allLabels || null,
+      mode: newSelected.length > 0 ? 'library' : 'custom',
+      persona_file: null
+    })
   }
 
   async function handleFileUpload(e: React.ChangeEvent<HTMLInputElement>) {
@@ -772,57 +835,79 @@ function PersonaLevelRow({ value, onChange }: { value: StructuredLevel; onChange
       persona_file: file.name,
       mode: 'file',
       persona_id: null,
+      persona_ids: [],
       persona_label: null
     })
+    setSelectedPersonas([''])
   }
 
   return (
     <div className="space-y-2 rounded-lg border p-2">
-      <div className="space-y-1">
+      <div className="space-y-1.5">
         <Label className="text-xs">Choose from library</Label>
-        <Select
-          value={(value.persona_id as string) || '__none__'}
-          onValueChange={(personaId) => {
-            if (personaId === '__none__') return
-            const persona = PERSONA_LIBRARY.find(p => p.id === personaId)
-            if (persona) {
-              patch({
-                persona_text: persona.prompt,
-                persona_id: persona.id,
-                persona_label: persona.label,
-                mode: 'library',
-                persona_file: null
-              })
-            }
-          }}
-        >
-          <SelectTrigger className="h-8 w-full">
-            <SelectValue>
-              {() => {
-                const selected = PERSONA_LIBRARY.find(p => p.id === value.persona_id)
-                return selected ? (
-                  <div className="flex items-center gap-2">
-                    <Library className="size-3" />
-                    <span>{selected.label}</span>
-                  </div>
-                ) : 'Select a persona...'
-              }}
-            </SelectValue>
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="__none__" disabled>
-              Select a persona...
-            </SelectItem>
-            {PERSONA_LIBRARY.map(p => (
-              <SelectItem key={p.id} value={p.id}>
-                <div className="flex items-center gap-2">
-                  <Library className="size-4" />
-                  {p.label}
-                </div>
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+        <div className="space-y-1.5">
+          {selectedPersonas.map((personaId, index) => (
+            <div key={index} className="flex gap-1.5">
+              <Select
+                value={personaId || '__none__'}
+                onValueChange={(newId) => {
+                  if (newId === '__none__') return
+                  updatePersona(index, newId)
+                }}
+              >
+                <SelectTrigger className="h-8 flex-1">
+                  <SelectValue>
+                    {() => {
+                      const selected = PERSONA_LIBRARY.find(p => p.id === personaId)
+                      return selected ? (
+                        <div className="flex items-center gap-2">
+                          <Library className="size-3" />
+                          <span>{selected.label}</span>
+                        </div>
+                      ) : 'Select a persona...'
+                    }}
+                  </SelectValue>
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__none__" disabled>
+                    Select a persona...
+                  </SelectItem>
+                  {PERSONA_LIBRARY.map(p => (
+                    <SelectItem key={p.id} value={p.id}>
+                      <div className="flex items-center gap-2">
+                        <Library className="size-4" />
+                        {p.label}
+                      </div>
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {selectedPersonas.length > 1 && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  type="button"
+                  className="h-8 w-8 p-0"
+                  onClick={() => removePersona(index)}
+                >
+                  <X className="size-3.5" />
+                </Button>
+              )}
+            </div>
+          ))}
+        </div>
+        {selectedPersonas.length < 5 && (
+          <Button
+            variant="outline"
+            size="sm"
+            type="button"
+            className="h-7 w-full text-xs"
+            onClick={addPersona}
+          >
+            <Plus className="size-3 mr-1" />
+            Add another (max 5)
+          </Button>
+        )}
       </div>
       <div className="space-y-1">
         <Label className="text-xs">Upload .md file</Label>

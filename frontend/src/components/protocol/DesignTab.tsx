@@ -39,6 +39,7 @@ import { MetricsEditor } from './MetricsEditor'
 import { DatasetExecutionSummary } from './DatasetExecutionSummary'
 export { MetricsEditor } from './MetricsEditor'
 import { normalizeDesignMetrics } from '@/lib/metricCatalog'
+import { DesignMetadataConflictError, designMetadataOf, designMetadataPatch, type DesignMetadata } from '@/lib/designMetadata'
 import type { ProtocolCanvasHandle } from './ProtocolCanvas'
 import type { Protocol, ProtocolEdge, ProtocolGraph, ProtocolNode } from '@/types/protocols'
 import {
@@ -67,16 +68,13 @@ const REGENERATION_REASON_LABELS: Record<string, string> = {
 // date. The demand for a regenerate comes from the materialized data rather
 // than from a local draft diff -- which is also what makes it work on an
 // experiment with no factorial matrix at all.
-type MetadataDraft = {
-  hypothesis: string
-  randomizationSeed: number | null
-  metrics: DesignMetric[]
-  measurementPlan: MeasurementPlan | null
-  coordinationSlug: CoordinationStrategySlug
-}
+type MetadataDraft = DesignMetadata
 
 type MetadataSave = {
   draft: MetadataDraft
+  // The server state `draft` was seeded from, so a save sends only what was
+  // actually edited here (see designMetadataPatch).
+  baseline: DesignMetadata
   metadataKey: string
   matrixKey: string
   key: string
@@ -398,29 +396,37 @@ export function DesignTab({
   const pendingMetadataSaveRef = useRef<MetadataSave | null>(null)
   const lastScheduledMetadataSaveKeyRef = useRef<string | null>(null)
   const metadataSaveQueueRef = useRef(Promise.resolve())
+  const seededMetadataRef = useRef<DesignMetadata>(designMetadataOf(experiment))
   latestMetadataDraftKey.current = metadataDraftKey
   latestMatrixDraftKey.current = matrixDraftKey
 
-  function persistMetadataDraft(draft: MetadataDraft) {
+  function persistMetadataDraft(draft: MetadataDraft, baseline: DesignMetadata) {
     // Every metadata write shares one queue because each PATCH replaces nested
     // design fields. A later transaction must read only after the preceding
     // write settles or an older response can restore stale metric selections.
     const save = metadataSaveQueueRef.current.then(async () => {
       const fresh = await experimentsApi.get(experiment.id)
-      return experimentsApi.update(experiment.id, {
-        hypothesis: draft.hypothesis.trim() || null,
-        measurement_plan: draft.measurementPlan,
-        measurement_validation_protocol_id: protocolId ?? null,
-        design_spec: {
-          ...fresh.design_spec,
-          randomization_seed: draft.randomizationSeed,
-          metrics: draft.metrics.filter((metric) => metric.name.trim() !== ''),
-          coordination_strategy: {
-            slug: draft.coordinationSlug,
-            params: fresh.design_spec?.coordination_strategy?.params ?? {},
-          },
-        },
-      })
+      let patch: ReturnType<typeof designMetadataPatch>
+      try {
+        patch = designMetadataPatch(draft, baseline, fresh, protocolId ?? null)
+      } catch (error) {
+        // Reload rather than overwrite: the reseed effect replaces this
+        // panel's draft with what the other writer saved.
+        if (error instanceof DesignMetadataConflictError) queryClient.setQueryData(['experiments', experiment.id], fresh)
+        throw error
+      }
+      if (patch === null) return fresh
+      const updated = await experimentsApi.update(experiment.id, patch)
+      // Our own write is not an outside change. Advance the baseline for the
+      // fields just saved even if a newer local edit keeps onSuccess from
+      // refreshing the experiment, or the next save would see a conflict.
+      const saved = designMetadataOf(updated)
+      const next = { ...seededMetadataRef.current }
+      for (const key of Object.keys(draft) as Array<keyof DesignMetadata>) {
+        if (JSON.stringify(draft[key]) !== JSON.stringify(baseline[key])) Object.assign(next, { [key]: saved[key] })
+      }
+      seededMetadataRef.current = next
+      return updated
     })
     metadataSaveQueueRef.current = save.then(() => undefined, () => undefined)
     return save
@@ -436,6 +442,7 @@ export function DesignTab({
     setMetrics(normalizeDesignMetrics(experiment.design_spec?.metrics))
     setMeasurementPlan(experiment.measurement_plan)
     setCoordinationSlug(experiment.design_spec?.coordination_strategy?.slug ?? 'sequential')
+    seededMetadataRef.current = designMetadataOf(experiment)
   }, [experiment])
 
   function designDraft() {
@@ -465,7 +472,7 @@ export function DesignTab({
   // save click. Read the experiment fresh before patching so this cannot put a
   // locally pending factors/replicates change onto the server early.
   const metadataSaveMutation = useMutation({
-    mutationFn: ({ draft }: MetadataSave) => persistMetadataDraft(draft),
+    mutationFn: ({ draft, baseline }: MetadataSave) => persistMetadataDraft(draft, baseline),
     onSuccess: (updated, saved) => {
       // An older response must not reset a newer local edit (including a
       // pending factors/replicates update). The next quiet pause will persist
@@ -595,7 +602,7 @@ export function DesignTab({
       metrics: nextMetrics,
       measurementPlan: nextPlan,
       coordinationSlug,
-    })
+    }, seededMetadataRef.current)
     let updated: Experiment
     try {
       updated = await save
@@ -646,7 +653,7 @@ export function DesignTab({
   // switching to Runs) can flush it immediately. Once a snapshot has been
   // handed to the mutation, do not schedule the identical snapshot again.
   if (metadataDraftChanged && !matrixDraftChanged && lastScheduledMetadataSaveKeyRef.current !== metadataSaveKey) {
-    pendingMetadataSaveRef.current = { draft: metadataDraft, metadataKey: metadataDraftKey, matrixKey: matrixDraftKey, key: metadataSaveKey }
+    pendingMetadataSaveRef.current = { draft: metadataDraft, baseline: seededMetadataRef.current, metadataKey: metadataDraftKey, matrixKey: matrixDraftKey, key: metadataSaveKey }
   } else if (!metadataDraftChanged || matrixDraftChanged) {
     pendingMetadataSaveRef.current = null
   }
@@ -921,6 +928,9 @@ export function DesignTab({
           <p role="alert" className="text-xs text-destructive">
             Could not generate cells: {generateError}
           </p>
+        )}
+        {metadataSaveMutation.error instanceof DesignMetadataConflictError && (
+          <p role="alert" className="text-xs text-destructive">{metadataSaveMutation.error.message}</p>
         )}
       </div>
     </div>

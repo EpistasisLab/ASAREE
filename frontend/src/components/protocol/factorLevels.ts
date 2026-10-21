@@ -33,6 +33,7 @@ export type LevelType =
   | 'dataset_toggle'
   | 'knowledge_selection'
   | 'knowledge_toggle'
+  | 'persona_text'
 
 export const LEVEL_TYPE_LABELS: Record<LevelType, string> = {
   string: 'String',
@@ -57,6 +58,7 @@ export const LEVEL_TYPE_LABELS: Record<LevelType, string> = {
   dataset_toggle: 'All datasets on/off',
   knowledge_selection: 'Knowledge levels',
   knowledge_toggle: 'All knowledge on/off',
+  persona_text: 'Persona text',
 }
 
 // Whether a level of this kind is a structured value (an object, or -- for
@@ -83,7 +85,8 @@ export function isStructuredLevelType(type: LevelType): boolean {
     type === 'dataset_selection' ||
     type === 'dataset_toggle' ||
     type === 'knowledge_selection' ||
-    type === 'knowledge_toggle'
+    type === 'knowledge_toggle' ||
+    type === 'persona_text'
   )
 }
 
@@ -99,6 +102,19 @@ export function defaultFactorLevelLabels(_factorName: string, count: number, typ
 
 export function factorLevelLabels(factor: DesignFactor): string[] {
   const type = levelTypeOf(factor)
+
+  // For persona_text factors, extract labels from persona_label in each level
+  if (type === 'persona_text') {
+    const personaLabels = factor.levels.map((level, index) => {
+      if (typeof level === 'object' && level !== null && 'persona_label' in level) {
+        const label = (level as { persona_label?: string | null }).persona_label
+        return label && label.trim() ? label.trim() : `level${index + 1}`
+      }
+      return `level${index + 1}`
+    })
+    return personaLabels
+  }
+
   const defaults =
     type === 'boolean'
       ? factor.levels.map((level, index) => (typeof level === 'boolean' ? String(level) : `level${index + 1}`))
@@ -158,6 +174,8 @@ export function emptyStructuredLevel(type: LevelType): unknown {
     // rather than an unconfigured placeholder.
     case 'tool_names':
       return []
+    case 'persona_text':
+      return { mode: 'text', persona_text: '', persona_id: null, persona_file: null, persona_label: null }
     default:
       return ''
   }

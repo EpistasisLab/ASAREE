@@ -258,6 +258,7 @@ _CONNECTOR_HANDLES = frozenset(
         "resource",
         "skill",
         "knowledge",
+        "persona",
         "output_parser",
         "sub_agents",
     }
@@ -326,6 +327,11 @@ _SCRIPT_NODE_TYPES = frozenset({"script"})
 # normal case, since level-1 metadata is ~100 tokens each and a body only
 # loads when the model asks for it.
 _SKILL_NODE_TYPES = frozenset({"skill"})
+
+# Persona nodes are OCEAN personality trait configurations that prefix the
+# agent's system prompt. They are pure config sources, never executed.
+_PERSONA_NODE_TYPES = frozenset({"persona"})
+
 # An OKF Bundle node names one registered OKF bundle -- a directory of
 # markdown concepts the user pointed ASAREE at, served by its own MCP server
 # process (see asaree.services.okf_bundles for why it's a server per bundle
@@ -395,6 +401,7 @@ _PURE_CONFIG_SOURCE_TYPES = (
     | _DATASET_NODE_TYPES
     | _SCRIPT_NODE_TYPES
     | _SKILL_NODE_TYPES
+    | _PERSONA_NODE_TYPES
     | _KNOWLEDGE_NODE_TYPES
     | _OUTPUT_PARSER_NODE_TYPES
     | _SUB_AGENT_NODE_TYPES
@@ -425,6 +432,7 @@ _NODE_TYPE_TO_HANDLE: dict[str, str] = {
     **{t: "dataset" for t in _DATASET_NODE_TYPES},
     **{t: "tool" for t in _SCRIPT_NODE_TYPES},
     **{t: "skill" for t in _SKILL_NODE_TYPES},
+    **{t: "persona" for t in _PERSONA_NODE_TYPES},
     **{t: "knowledge" for t in _KNOWLEDGE_NODE_TYPES},
     **{t: "output_parser" for t in _OUTPUT_PARSER_NODE_TYPES},
     **{t: "sub_agents" for t in _SUB_AGENT_NODE_TYPES},
@@ -443,6 +451,7 @@ _HANDLE_LABELS: dict[str, str] = {
     "resource": "Dataset",  # pre-rename spelling, same slot -- see _LEGACY_DATASET_HANDLES
     "skill": "Skill",
     "knowledge": "Knowledge",
+    "persona": "Persona",
     "output_parser": "Output Parser",
     "sub_agents": "Sub-Agents",
 }
@@ -955,6 +964,7 @@ def resolve_conversation_entry_id(graph: dict[str, Any]) -> str:
 
 
 _NODE_TYPE_DISPLAY_NAMES: dict[str, str] = {
+    "persona": "Persona",
     "agent": "Agent",
     "sub_agent": "Sub-Agent",
     "critic_gate": "Critic Gate",
@@ -1153,6 +1163,7 @@ def topological_order(
         pattern_edges = _edges_with_handle(graph, nid, "architectural_pattern", direction="incoming")
         dataset_slot_edges = _edges_with_handle(graph, nid, "dataset", direction="incoming")
         skill_edges = _edges_with_handle(graph, nid, "skill", direction="incoming")
+        persona_edges = _edges_with_handle(graph, nid, "persona", direction="incoming")
         knowledge_edges = _edges_with_handle(graph, nid, "knowledge", direction="incoming")
         parser_edges = _edges_with_handle(graph, nid, "output_parser", direction="incoming")
         sub_agent_edges = _edges_with_handle(graph, nid, "sub_agents", direction="incoming")
@@ -1187,6 +1198,12 @@ def topological_order(
                 skill_source = nodes.get(edge["source"])
                 if skill_source is None or skill_source.get("type") not in _SKILL_NODE_TYPES:
                     raise ProtocolValidationError(f"Node {name!r}'s Skill connection must come from a Skill node.")
+            # Uncapped like Skill: several personas concatenate into one system
+            # prompt prefix (see _resolve_persona_configs), in wiring order.
+            for edge in persona_edges:
+                persona_source = nodes.get(edge["source"])
+                if persona_source is None or persona_source.get("type") not in _PERSONA_NODE_TYPES:
+                    raise ProtocolValidationError(f"Node {name!r}'s Persona connection must come from a Persona node.")
             # Uncapped for the same reason as Skill: reading a shared team
             # bundle while writing to a personal one is a normal setup, not an
             # ambiguity. _resolve_knowledge_config de-dupes by server name, so
@@ -1274,6 +1291,7 @@ def topological_order(
                 or pattern_edges
                 or dataset_slot_edges
                 or skill_edges
+                or persona_edges
                 or knowledge_edges
                 or parser_edges
                 or sub_agent_edges
@@ -1289,13 +1307,14 @@ def topological_order(
             or pattern_edges
             or dataset_slot_edges
             or skill_edges
+            or persona_edges
             or knowledge_edges
             or parser_edges
             or sub_agent_edges
         ):
             raise ProtocolValidationError(
                 f"Only Agent nodes can have a Tool, Memory, Architectural Pattern, Skill, Dataset, "
-                f"Knowledge, or Output Parser connection (node {name!r})."
+                f"Knowledge, Persona, or Output Parser connection (node {name!r})."
             )
 
         if node_type == "sub_agent":
@@ -2089,6 +2108,30 @@ def _resolve_skill_config(graph: dict[str, Any], node_id: str) -> dict[str, Any]
         if skill_id and str(skill_id) not in skill_ids:
             skill_ids.append(str(skill_id))
     return {"skill_ids": skill_ids} if skill_ids else {}
+
+
+def _resolve_persona_configs(graph: dict[str, Any], node_id: str) -> list[str]:
+    """Persona texts from every Persona node wired into this agent's Persona
+    connector, in canvas wiring order.
+
+    Unlike skills, personas are folded directly into the system prompt as a
+    prefix -- the persona text becomes part of the agent's instructions. Multiple
+    personas are concatenated with double newlines between them.
+
+    A node with ``enabled: False`` or no ``persona_text`` is skipped."""
+    nodes, _downstream, _upstream = _adjacency(graph)
+    persona_texts: list[str] = []
+    for edge in _edges_with_handle(graph, node_id, "persona", direction="incoming"):
+        source = nodes.get(edge["source"])
+        if source is None or source.get("type") != "persona":
+            continue
+        persona_config = (source.get("data") or {}).get("config") or {}
+        if not persona_config.get("enabled", True):
+            continue
+        persona_text = persona_config.get("persona_text")
+        if persona_text and str(persona_text).strip():
+            persona_texts.append(str(persona_text).strip())
+    return persona_texts
 
 
 def _is_peer_edge(edge: dict[str, Any], nodes: dict[str, dict[str, Any]]) -> bool:
@@ -4267,10 +4310,19 @@ async def _resolve_agent_fields(
             or any(name.startswith(server + ".") for name in tool_config["tool_names"])
         ]
     pattern = _resolve_pattern_config(graph, node["id"])
+
+    # Prepend persona texts to system prompt
+    persona_texts = _resolve_persona_configs(graph, node["id"])
+    base_system_prompt = system_prompt or config.get("system_prompt") or _default_system_prompt(label, "Agent")
+    final_system_prompt = base_system_prompt
+    if persona_texts:
+        persona_prefix = "\n\n".join(persona_texts)
+        final_system_prompt = f"{persona_prefix}\n\n{base_system_prompt}"
+
     return {
         "goal": config.get("goal") or "",
         "description": description,
-        "system_prompt": system_prompt or config.get("system_prompt") or _default_system_prompt(label, "Agent"),
+        "system_prompt": final_system_prompt,
         "model_config": model_config,
         "pattern_config": PatternConfig(
             execution_pattern=pattern.get("execution_pattern"), pattern_params=pattern.get("pattern_params") or {},

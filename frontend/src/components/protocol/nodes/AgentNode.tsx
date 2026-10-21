@@ -288,6 +288,20 @@ export function AgentNode({
       />
       <ConnectorHandleLabel left={CONNECTOR_LEFT.skill} side="top">Skill</ConnectorHandleLabel>
       <ConnectorAddStub nodeId={id} slot="skill" left={CONNECTOR_LEFT.skill} side="top" alwaysVisible factorName={data.factor_bindings?.skill_selection} factorLevelCount={data.skillFactorLevelCount as number | undefined} factorOnOff={data.skill_factor_mode === 'skill_toggle'} />
+      {/* Persona -- OCEAN personality traits for experimental manipulation of
+          agent behavior. Uncapped like Skill: multiple personas can be wired,
+          though typically only one is used. Sits between Skill and Dataset on
+          the top edge. */}
+      <Handle
+        type="target"
+        id="persona"
+        position={Position.Top}
+        style={{ left: CONNECTOR_LEFT.persona }}
+        title="Persona -- OCEAN personality traits for experimental manipulation"
+        className="!size-2 !border-2 !bg-background !border-[color:var(--card-accent)]"
+      />
+      <ConnectorHandleLabel left={CONNECTOR_LEFT.persona} side="top">Persona</ConnectorHandleLabel>
+      <ConnectorAddStub nodeId={id} slot="persona" left={CONNECTOR_LEFT.persona} side="top" />
       {/* Dataset -- the data an agent works ON, as opposed to the Tool
           connector's "capabilities it works WITH". UNCAPPED, like
           Skill/Knowledge/Tool: a cell's workspace holds one dataset per named

@@ -73,6 +73,7 @@ import {
   defaultOpenAiModelNodeData,
   defaultOpenRouterModelNodeData,
   defaultOutputParserNodeData,
+  defaultPersonaNodeData,
   defaultReasonActPatternNodeData,
   defaultScriptNodeData,
   defaultSingleAgentBaselinePatternNodeData,
@@ -89,6 +90,7 @@ import type {
   OkfBundleNodeData,
   OkfDocumentNodeData,
   OutputParserNodeData,
+  PersonaNodeData,
   Protocol,
   ProtocolEdge,
   ProtocolGraph,
@@ -107,6 +109,7 @@ import type { Skill } from '@/types/skills'
 import { AddNodePanel } from './AddNodePanel'
 import { AgentNodeInspector } from './AgentNodeInspector'
 import { agentTracedLabel, factorBoundField, factorCreationFields, revealsHiddenMcpServers, toolFactorServerId, type UnboundField } from './bindableFields'
+import { computeFactorName, seedStructuredLevels } from './factorLevels'
 import { CanvasControls } from './CanvasControls'
 import { CriticGateNodeInspector } from './CriticGateNodeInspector'
 import { ToolStepNodeInspector } from './ToolStepNodeInspector'
@@ -136,6 +139,7 @@ import {
 import { McpToolNodeInspector } from './McpToolNodeInspector'
 import { MemoryNodeInspector } from './MemoryNodeInspector'
 import { OutputParserNodeInspector } from './OutputParserNodeInspector'
+import { PersonaNodeInspector } from './PersonaNodeInspector'
 import {
   ProtocolCanvasActionsProvider,
   type ConnectorAddRequest,
@@ -173,7 +177,7 @@ import {
 // The four connector slots that live on an Agent's TOP edge (see
 // AgentNode.tsx) -- a node feeding one of these is placed ABOVE its agent,
 // every other slot's source below it.
-const TOP_EDGE_SLOTS = new Set<ConnectorSlot>(['architectural_pattern', 'skill', 'dataset', 'knowledge'])
+const TOP_EDGE_SLOTS = new Set<ConnectorSlot>(['architectural_pattern', 'skill', 'persona', 'dataset', 'knowledge'])
 
 // Every edge (plain or connector) renders through InteractEdge -- no edge
 // ever has an explicit `type`, so overriding xyflow's own built-in
@@ -216,6 +220,7 @@ function defaultDataFor(nodeType: string): ProtocolNode['data'] {
   if (nodeType === 'memory') return defaultMemoryNodeData()
   if (nodeType === 'output_parser') return defaultOutputParserNodeData()
   if (nodeType === 'dataset') return defaultDatasetNodeData()
+  if (nodeType === 'persona') return defaultPersonaNodeData()
   if (nodeType === 'script') return defaultScriptNodeData()
   if (nodeType === 'pattern_reason_act') return defaultReasonActPatternNodeData()
   if (nodeType === 'pattern_single_agent_baseline') return defaultSingleAgentBaselinePatternNodeData()
@@ -279,6 +284,7 @@ const CONNECTOR_PANEL_INFO: Record<ConnectorSlot, { allowedTypes: string[]; titl
   model: { allowedTypes: MODEL_NODE_TYPES, title: 'Add Model' },
   tool: { allowedTypes: [MCP_SERVER_BROWSE, 'script'], title: 'Add Tool' },
   memory: { allowedTypes: ['memory'], title: 'Add Memory' },
+  persona: { allowedTypes: ['persona'], title: 'Add Persona' },
   output_parser: { allowedTypes: ['output_parser'], title: 'Add Output Parser' },
   architectural_pattern: { allowedTypes: PATTERN_NODE_TYPES, title: 'Add Architectural Pattern' },
   skill: { allowedTypes: [SKILL_BROWSE], title: 'Add Skill' },
@@ -552,6 +558,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   const [scriptFactorNodeId, setScriptFactorNodeId] = useState<string | null>(null)
   const [skillFactorNodeId, setSkillFactorNodeId] = useState<string | null>(null)
   const [datasetFactorNodeId, setDatasetFactorNodeId] = useState<string | null>(null)
+  const [personaFactorNodeId, setPersonaFactorNodeId] = useState<string | null>(null)
   const [connectorFactorChoice, setConnectorFactorChoice] = useState<UnboundField['connectorFactor']>()
   const [addPanelOpen, setAddPanelOpen] = useState(false)
   // The second level of the add-node panel: AddNodePanel's "MCP Servers"
@@ -1511,6 +1518,11 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
     setConnectorFactorChoice(undefined)
     setDatasetFactorNodeId(nodeId)
   }, [experimentId, experimentLocked])
+  const requestPersonaFactor = useCallback((nodeId: string) => {
+    if (!experimentId || experimentLocked) return
+    setSelectedNodeId(null)
+    setPersonaFactorNodeId(nodeId)
+  }, [experimentId, experimentLocked])
   const metricsByNode = useMemo(() => {
     const definitions = new Map((experimentQuery.data?.measurement_plan?.metrics ?? []).map((metric) => [metric.id, metric]))
     const bindings = new Map<string, Map<string, { id: string; name: string }>>()
@@ -1604,6 +1616,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
       requestSkillFactor,
       requestKnowledgeFactor,
       requestDatasetFactor,
+      requestPersonaFactor,
       metricsForNode,
       convertLegacyOutputContract,
     }),
@@ -1625,6 +1638,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
       requestSkillFactor,
       requestKnowledgeFactor,
       requestDatasetFactor,
+      requestPersonaFactor,
       metricsForNode,
       convertLegacyOutputContract,
     ],
@@ -2196,6 +2210,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
       | ToolStepNodeData
       | ModelNodeData
       | MemoryNodeData
+      | PersonaNodeData
       | OutputParserNodeData
       | DatasetNodeData
       | SkillNodeData
@@ -2528,6 +2543,15 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
             onDelete={requestDeleteNode}
             onClose={() => setSelectedNodeId(null)}
             connectorFactorName={datasetFactorOwner(toPersistedGraph(nodes, edges), selectedNode.id)}
+          />
+        ) : selectedNode?.type === 'persona' ? (
+          <PersonaNodeInspector
+            node={{ id: selectedNode.id, type: 'persona', position: selectedNode.position, data: selectedNode.data as PersonaNodeData }}
+            experimentId={experimentId}
+            factorNodeLabel={factorNodeLabel}
+            onChange={updateNodeData}
+            onDelete={requestDeleteNode}
+            onClose={() => setSelectedNodeId(null)}
           />
         ) : selectedNode?.type === 'skill' ? (
           <SkillNodeInspector
@@ -3035,6 +3059,56 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
           queryClient.invalidateQueries({ queryKey: ['experiments', experimentId, 'design-impact'] })
         }}
       />}
+      {personaFactorNodeId && (() => {
+        const personaNode = nodes.find((n) => n.id === personaFactorNodeId)
+        if (!personaNode) return null
+        const boundFactorName = (personaNode.data.factor_bindings as Record<string, string> | undefined)?.config
+        const existingFactor = factors.find((f) => f.name === boundFactorName)
+        return (
+          <FactorEditorDialog
+            key={personaFactorNodeId}
+            graph={toPersistedGraph(nodes, edges)}
+            open
+            onOpenChange={(open) => {
+              if (!open) setPersonaFactorNodeId(null)
+            }}
+            factor={
+              existingFactor || {
+                name: computeFactorName(agentTracedLabel(personaNode, edges, nodes), 'Persona', factors.map((f) => f.name)),
+                levels: seedStructuredLevels(personaNode.data.config, 'persona_text'),
+                level_type: 'persona_text',
+              }
+            }
+            boundField={{ nodeId: personaFactorNodeId, fieldPath: 'config' }}
+            canvasAgentCount={nodes.filter((node) => node.type === 'agent' || node.type === 'sub_agent').length}
+            onSave={async (factor) => {
+              const fresh = await experimentsApi.get(experimentId!)
+              if (
+                (fresh.design_spec?.factors ?? []).some(
+                  (existing) => existing.name === factor.name && existing.name !== boundFactorName,
+                )
+              )
+                throw new Error('A factor with this name already exists.')
+              await experimentsApi.update(experimentId!, {
+                design_spec: {
+                  ...fresh.design_spec,
+                  factors: [
+                    ...(fresh.design_spec?.factors ?? []).filter((existing) => existing.name !== boundFactorName),
+                    factor,
+                  ],
+                },
+              })
+              bindFactorOnNode(personaFactorNodeId, 'config', factor.name)
+              // Mirror level 1 into the node so reconcileFactorBaselines sees
+              // canvas == baseline and doesn't rewrite the level back.
+              setNodes((current) => graphWithFactorBaseline({ nodes: current as unknown as ProtocolNode[], edges: [] }, factor.name, factor.levels[0]).nodes as unknown as Node[])
+              queryClient.invalidateQueries({ queryKey: ['experiments', experimentId] })
+              queryClient.invalidateQueries({ queryKey: ['experiments', experimentId, 'design-impact'] })
+            }}
+            revealHiddenServers={revealsHiddenMcpServers(nodes)}
+          />
+        )
+      })()}
       {editingFactor && (
         <FactorEditorDialog
           graph={toPersistedGraph(nodes, edges)}

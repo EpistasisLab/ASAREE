@@ -78,6 +78,8 @@ export function isProtocolConnectionValid(
       return sourceNode.type === 'dataset' && targetIsAgentLike
     case 'knowledge':
       return KNOWLEDGE_NODE_TYPES.includes(sourceNode.type ?? '') && targetIsAgentLike
+    case 'persona':
+      return sourceNode.type === 'persona' && targetIsAgentLike
     case 'sub_agents':
       return (
         sourceNode.type === 'sub_agent' &&
@@ -87,6 +89,7 @@ export function isProtocolConnectionValid(
       const sourceCanFeedMainFlow =
         !MODEL_NODE_TYPES.includes(sourceNode.type ?? '') &&
         sourceNode.type !== 'memory' &&
+        sourceNode.type !== 'persona' &&
         sourceNode.type !== 'output_parser' &&
         !MCP_TOOL_NODE_TYPES.includes(sourceNode.type ?? '') &&
         sourceNode.type !== 'dataset' &&

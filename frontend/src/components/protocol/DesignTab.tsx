@@ -504,6 +504,8 @@ export function DesignTab({
       // too -- not just the cell rows.
       queryClient.invalidateQueries({ queryKey: ['experiments', experiment.id, 'design-revisions'] })
       queryClient.invalidateQueries({ queryKey: ['experiments', experiment.id, 'design-impact'] })
+      // Invalidate runs list which shows cell labels
+      queryClient.invalidateQueries({ queryKey: ['protocol-runs'] })
     },
   })
 

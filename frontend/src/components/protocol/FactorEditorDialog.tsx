@@ -39,7 +39,9 @@ import { PythonCodeEditor } from './PythonCodeEditor'
 import { useDialogAutosave } from './useDialogAutosave'
 import { useDialogDraft } from './useDialogDraft'
 import type { DesignFactor } from '@/types/experiments'
+import { Library, Upload } from 'lucide-react'
 import { DatasetFactorEditor } from './DatasetFactorEditor'
+import { PERSONA_LIBRARY } from './personaLibrary'
 import { KnowledgeFactorEditor } from './KnowledgeFactorEditor'
 import { ScriptFactorEditor } from './ScriptFactorEditor'
 import { ToolFactorEditor } from './ToolFactorEditor'
@@ -419,6 +421,195 @@ function DatasetConfigLevelRow({
   )
 }
 
+function PersonaLevelRow({ value, onChange }: { value: StructuredLevel; onChange: (next: StructuredLevel) => void }) {
+  const [selectedPersonas, setSelectedPersonas] = useState<string[]>(() => {
+    const ids = value.persona_ids as string[] | undefined
+    if (ids && Array.isArray(ids) && ids.length > 0) return ids
+    const id = value.persona_id as string | null
+    return id ? [id] : ['']
+  })
+
+  // Sync state when value changes (e.g., when loading an existing factor for editing)
+  useEffect(() => {
+    const ids = value.persona_ids as string[] | undefined
+    if (ids && Array.isArray(ids) && ids.length > 0) {
+      setSelectedPersonas(ids)
+    } else {
+      const id = value.persona_id as string | null
+      setSelectedPersonas(id ? [id] : [''])
+    }
+  }, [value.persona_ids, value.persona_id])
+
+  function patch(patch: StructuredLevel) {
+    onChange({ ...value, ...patch })
+  }
+
+  function updatePersona(index: number, newId: string | null) {
+    const newSelected = [...selectedPersonas]
+    newSelected[index] = newId || ''
+    const filtered = newSelected.filter(id => id !== '')
+    setSelectedPersonas(filtered.length > 0 ? filtered : [''])
+
+    const combinedText = filtered
+      .map(id => PERSONA_LIBRARY.find(p => p.id === id)?.prompt ?? '')
+      .filter(Boolean)
+      .join('\n\n')
+
+    const allLabels = filtered
+      .map(id => PERSONA_LIBRARY.find(p => p.id === id)?.label)
+      .filter(Boolean)
+      .join(' + ')
+
+    patch({
+      persona_text: combinedText,
+      persona_id: filtered[0] || null,
+      persona_ids: filtered,
+      persona_label: allLabels || null,
+      mode: 'library',
+      persona_file: null
+    })
+  }
+
+  function addPersona() {
+    if (selectedPersonas.length < 5) {
+      setSelectedPersonas([...selectedPersonas, ''])
+    }
+  }
+
+  function removePersona(index: number) {
+    const newSelected = selectedPersonas.filter((_, i) => i !== index)
+    setSelectedPersonas(newSelected.length > 0 ? newSelected : [''])
+
+    const combinedText = newSelected
+      .map(id => PERSONA_LIBRARY.find(p => p.id === id)?.prompt ?? '')
+      .filter(Boolean)
+      .join('\n\n')
+
+    const allLabels = newSelected
+      .map(id => PERSONA_LIBRARY.find(p => p.id === id)?.label)
+      .filter(Boolean)
+      .join(' + ')
+
+    patch({
+      persona_text: combinedText,
+      persona_id: newSelected[0] || null,
+      persona_ids: newSelected,
+      persona_label: allLabels || null,
+      mode: newSelected.length > 0 ? 'library' : 'custom',
+      persona_file: null
+    })
+  }
+
+  async function handleFileUpload(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0]
+    if (!file) return
+    const text = await file.text()
+    patch({
+      persona_text: text,
+      persona_file: file.name,
+      mode: 'file',
+      persona_id: null,
+      persona_ids: [],
+      persona_label: null
+    })
+    setSelectedPersonas([''])
+  }
+
+  return (
+    <div className="space-y-2 rounded-lg border p-2">
+      <div className="space-y-1.5">
+        <Label className="text-xs">Choose from library</Label>
+        <div className="space-y-1.5">
+          {selectedPersonas.map((personaId, index) => (
+            <div key={index} className="flex gap-1.5">
+              <Select
+                value={personaId || '__none__'}
+                onValueChange={(newId) => {
+                  if (newId === '__none__') return
+                  updatePersona(index, newId)
+                }}
+              >
+                <SelectTrigger className="h-8 flex-1">
+                  <SelectValue>
+                    {() => PERSONA_LIBRARY.find(p => p.id === personaId)?.label ?? 'Select a persona...'}
+                  </SelectValue>
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__none__" disabled>
+                    Select a persona...
+                  </SelectItem>
+                  {PERSONA_LIBRARY.map(p => (
+                    <SelectItem key={p.id} value={p.id}>
+                      <div className="flex items-center gap-2">
+                        <Library className="size-4" />
+                        {p.label}
+                      </div>
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {selectedPersonas.length > 1 && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  type="button"
+                  className="h-8 w-8 p-0"
+                  onClick={() => removePersona(index)}
+                >
+                  <X className="size-3.5" />
+                </Button>
+              )}
+            </div>
+          ))}
+        </div>
+        {selectedPersonas.length < 5 && (
+          <Button
+            variant="outline"
+            size="sm"
+            type="button"
+            className="h-7 w-full text-xs"
+            onClick={addPersona}
+          >
+            <Plus className="size-3 mr-1" />
+            Add another (max 5)
+          </Button>
+        )}
+      </div>
+      <div className="space-y-1">
+        <Label className="text-xs">Upload .md file</Label>
+        <div className="flex gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            type="button"
+            className="h-8 w-full text-xs"
+            onClick={() => document.getElementById(`persona-upload-${String(value.persona_id || 'custom')}`)?.click()}
+          >
+            <Upload className="size-3 mr-1.5" />
+            {(value.persona_file as string) || 'Choose .md file'}
+          </Button>
+          <input
+            id={`persona-upload-${String(value.persona_id || 'custom')}`}
+            type="file"
+            accept=".md"
+            className="hidden"
+            onChange={handleFileUpload}
+          />
+        </div>
+      </div>
+      <div className="space-y-1">
+        <Label className="text-xs">Persona text</Label>
+        <Textarea
+          value={(value.persona_text as string) ?? ''}
+          onChange={(e) => patch({ persona_text: e.target.value, mode: 'custom', persona_id: null, persona_label: null, persona_file: null })}
+          placeholder="You are extremely organized, very responsible..."
+          className="h-20 font-mono text-xs"
+        />
+      </div>
+    </div>
+  )
+}
+
 // One row of a "tool_names" factor's levels -- an allow-list of BARE tool
 // names for one MCP node, i.e. exactly what McpToolNodeInspector's own "Tools
 // allowed" toggle list writes into config.tool_names (protocol_execution.py's
@@ -665,7 +856,18 @@ function StandardFactorEditorDialog({
           ? [false, true]
           : selectedIndexes.map((index) => parseLevelValue((draftLevels as string[])[index], draftLevelType))
     const defaults = defaultFactorLevelLabels(draftName, parsedLevels.length, draftLevelType)
-    const labels = selectedIndexes.map((index, outputIndex) => draftLevelLabels[index]?.trim() || defaults[outputIndex])
+    const labels =
+      draftLevelType === 'persona_text'
+        ? draftLevels.map((level, index) => {
+            if (typeof level === 'object' && level !== null && 'persona_label' in level) {
+              const personaLabel = (level as Record<string, unknown>).persona_label
+              if (typeof personaLabel === 'string' && personaLabel.trim()) {
+                return personaLabel.trim()
+              }
+            }
+            return defaults[index]
+          })
+        : selectedIndexes.map((index, outputIndex) => draftLevelLabels[index]?.trim() || defaults[outputIndex])
     return { factor: { name: draftName, levels: parsedLevels, level_labels: labels, level_type: draftLevelType } satisfies DesignFactor, field }
   }
 
@@ -892,6 +1094,11 @@ function StandardFactorEditorDialog({
                                     .filter((id): id is string => typeof id === 'string'),
                                 )
                               }
+                              onChange={(next) => setLevels((ls) => ls.map((l, j) => (j === i ? next : l)))}
+                            />
+                          ) : levelType === 'persona_text' ? (
+                            <PersonaLevelRow
+                              value={level as StructuredLevel}
                               onChange={(next) => setLevels((ls) => ls.map((l, j) => (j === i ? next : l)))}
                             />
                           ) : (

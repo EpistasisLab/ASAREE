@@ -154,6 +154,18 @@ def _skill_edge(source: str, target: str) -> dict:
     return {"id": f"{source}-{target}-skill", "source": source, "target": target, "targetHandle": "skill"}
 
 
+def _persona_node(node_id: str = "persona1", text: str = "You are anxious.") -> dict:
+    return {
+        "id": node_id,
+        "type": "persona",
+        "data": {"label": "", "config": {"mode": "text", "persona_text": text}},
+    }
+
+
+def _persona_edge(source: str, target: str) -> dict:
+    return {"id": f"{source}-{target}-persona", "source": source, "target": target, "targetHandle": "persona"}
+
+
 def _okf_bundle_node(
     node_id: str = "okf1",
     server_name: str = "okf-bundle-spine-abc12345",
@@ -2846,6 +2858,106 @@ def test_resolve_skill_config_empty_with_nothing_wired() -> None:
     agent, agent_llm_edge = _agent_with_llm("a")
     graph = {"nodes": [llm, agent], "edges": [agent_llm_edge]}
     assert pe._resolve_skill_config(graph, "a") == {}
+
+
+def test_persona_connector_is_repeatable_and_uncapped() -> None:
+    # Uncapped like Skill: several personas concatenate into one prefix.
+    llm = _llm_node()
+    agent, agent_llm_edge = _agent_with_llm("a")
+    p1, p2 = _persona_node("p1", "one"), _persona_node("p2", "two")
+    graph = {
+        "nodes": [llm, agent, p1, p2],
+        "edges": [agent_llm_edge, _persona_edge("p1", "a"), _persona_edge("p2", "a")],
+    }
+    assert {n["id"] for n in topological_order(graph)} == {"llm", "a", "p1", "p2"}
+
+
+def test_persona_edge_is_a_connector_not_a_pipeline_input() -> None:
+    # Regression: before "persona" was in _CONNECTOR_HANDLES the Persona node
+    # was read as a main-pipeline predecessor of the agent.
+    llm = _llm_node()
+    agent, agent_llm_edge = _agent_with_llm("a")
+    graph = {"nodes": [llm, agent, _persona_node()], "edges": [agent_llm_edge, _persona_edge("persona1", "a")]}
+    assert pe._upstream_ids(graph, "a") == []
+    assert pe.sink_node_ids(graph) == ["a"]
+
+
+def test_persona_connection_from_non_persona_node_raises() -> None:
+    llm = _llm_node()
+    agent, agent_llm_edge = _agent_with_llm("a")
+    graph = {"nodes": [llm, agent, _skill_node()], "edges": [agent_llm_edge, _persona_edge("skill1", "a")]}
+    with pytest.raises(ProtocolValidationError, match="Persona connection must come from a Persona node"):
+        topological_order(graph)
+
+
+def test_persona_connection_on_critic_gate_raises() -> None:
+    llm = _llm_node()
+    worker, worker_llm_edge = _agent_with_llm("w1")
+    graph = {
+        "nodes": [llm, worker, _node("g1", "critic_gate"), _persona_node()],
+        "edges": [
+            worker_llm_edge,
+            _llm_edge("llm", "g1"),
+            {"id": "w1-g1", "source": "w1", "target": "g1"},
+            _persona_edge("persona1", "g1"),
+        ],
+    }
+    with pytest.raises(ProtocolValidationError, match="Only Agent nodes can have a Tool, Memory"):
+        topological_order(graph)
+
+
+def test_persona_node_with_plain_outgoing_edge_raises() -> None:
+    llm = _llm_node()
+    agent, agent_llm_edge = _agent_with_llm("a")
+    graph = {
+        "nodes": [llm, agent, _persona_node(), _node("b", "agent")],
+        "edges": [
+            agent_llm_edge,
+            _persona_edge("persona1", "a"),
+            {"id": "persona1-b", "source": "persona1", "target": "b"},
+        ],
+    }
+    with pytest.raises(ProtocolValidationError, match="Persona node .* can only connect to a node's Persona slot"):
+        topological_order(graph)
+
+
+def test_resolve_persona_configs_in_wiring_order_skipping_disabled_and_empty() -> None:
+    llm = _llm_node()
+    agent, agent_llm_edge = _agent_with_llm("a")
+    disabled = _persona_node("p3", "three")
+    disabled["data"]["config"]["enabled"] = False
+    graph = {
+        "nodes": [
+            llm,
+            agent,
+            _persona_node("p1", "one"),
+            _persona_node("p2", "  "),
+            disabled,
+            _persona_node("p4", "four"),
+        ],
+        "edges": [
+            agent_llm_edge,
+            _persona_edge("p1", "a"),
+            _persona_edge("p2", "a"),
+            _persona_edge("p3", "a"),
+            _persona_edge("p4", "a"),
+        ],
+    }
+    assert pe._resolve_persona_configs(graph, "a") == ["one", "four"]
+
+
+def test_persona_factor_level_replaces_whole_config() -> None:
+    # Persona factors bind the whole `config` (levels are config-shaped), so
+    # a cell's level lands as a plain persona_text string, never a nested dict.
+    llm = _llm_node()
+    agent, agent_llm_edge = _agent_with_llm("a")
+    persona = _persona_node("p1", "")
+    persona["data"]["factor_bindings"] = {"config": "Persona:Persona"}
+    graph = {"nodes": [llm, agent, persona], "edges": [agent_llm_edge, _persona_edge("p1", "a")]}
+    level = {"mode": "library", "persona_text": "You are calm.", "persona_id": "14", "persona_label": "Low Neuroticism"}
+    patched = pe.apply_factor_bindings(graph, {"Persona:Persona": level})
+    assert pe._resolve_persona_configs(patched, "a") == ["You are calm."]
+    assert pe._resolve_persona_configs(graph, "a") == []
 
 
 def test_knowledge_connector_is_repeatable_and_uncapped() -> None:

@@ -283,6 +283,11 @@ export function bindableFieldsForNode(node: Node): BindableFieldSpec[] {
       // Individual availability binds here; Knowledge connector choices are
       // listed by factorCreationFields and edited in the dedicated dialog.
       return [{ fieldPath: 'config.enabled', label: 'Enabled', levelType: 'boolean' }]
+    case 'persona':
+      // Whole config, not config.persona_text: persona levels are config-shaped
+      // objects, and the baseline invariant (reconcileFactorBaselines) plus
+      // apply_factor_bindings both need the bound field to have the same shape.
+      return [{ fieldPath: 'config', label: 'Persona', levelType: 'persona_text' }]
     case 'script':
       // Keep config discoverable for editing existing variant bindings.
       // New factors compare separate Script nodes through Script levels.

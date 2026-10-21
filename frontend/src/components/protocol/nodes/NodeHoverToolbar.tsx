@@ -18,7 +18,7 @@ function ToolbarIconButton({
     <Button
       variant="ghost"
       size="icon-xs"
-      className="size-5 hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent"
+      className="hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent"
       aria-label={label}
       title={label}
       disabled={disabled}
@@ -99,7 +99,7 @@ export function NodeHoverToolbar({
         // ProtocolCanvasPage.tsx).
         <span title={runAlone.canRun ? undefined : "Has upstream input -- can't run alone yet"}>
           <ToolbarIconButton
-            label="Run this node's configuration; choose a skill level in the run dialog"
+            label="Run this node's configuration; choose connector factor levels in the run dialog"
             disabled={!runAlone.canRun}
             onClick={() => runAlone.canRun && runAlone.onRun()}
           >

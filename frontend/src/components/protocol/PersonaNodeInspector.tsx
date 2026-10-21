@@ -1,79 +1,43 @@
-import { useId } from 'react'
-import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { User, Upload } from 'lucide-react'
-import { personasApi } from '@/api/client'
+import { Power, Split, User } from 'lucide-react'
 import { nodeAccent } from '@/lib/nodeAccent'
 import { Label } from '@/components/ui/label'
-import { Textarea } from '@/components/ui/textarea'
+import { Switch } from '@/components/ui/switch'
 import { Button } from '@/components/ui/button'
 import { EditableNodeTitle } from './EditableNodeTitle'
-import { FactorBindableField } from './FactorBindableField'
 import { NodeInspectorDialog } from './NodeInspectorDialog'
-import { PersonaLibraryPicker } from './PersonaLibraryPicker'
-import { configForSavedPersona } from './usePersonaLibrary'
 import type { ProtocolNode, PersonaNodeData } from '@/types/protocols'
 
 const ACCENT = nodeAccent('persona')
 
-export function PersonaNodeInspector({ node, experimentId, factorNodeLabel, onChange, onDelete, onClose }: {
+export function PersonaNodeInspector({ node, onChange, onDelete, onClose, connectorFactorName }: {
   node: (ProtocolNode & { data: PersonaNodeData }) | null
-  experimentId: string | null
-  factorNodeLabel: string
   onChange: (nodeId: string, data: PersonaNodeData) => void
   onDelete: (nodeId: string) => void
   onClose: () => void
+  connectorFactorName?: string
 }) {
-  const uploadId = useId()
-  const client = useQueryClient()
-  const upload = useMutation({
-    mutationFn: personasApi.upload,
-    onSuccess: () => client.invalidateQueries({ queryKey: ['personas'] }),
-  })
   if (!node) return null
   const data = node.data
   const config = data.config
   const bindings = data.factor_bindings ?? {}
-  function patchConfig(patch: Partial<PersonaNodeData['config']>) {
-    if (node) onChange(node.id, { ...data, config: { ...config, ...patch } })
+  function unbind(path: string) {
+    const next = { ...bindings }; delete next[path]
+    onChange(node!.id, { ...data, factor_bindings: next })
   }
-  function bindFactor(name: string | null) {
-    if (!node) return
-    const next = { ...bindings }
-    if (name) next.config = name
-    else delete next.config
-    onChange(node.id, { ...data, factor_bindings: next })
-  }
-  return (
-    <NodeInspectorDialog open onOpenChange={onClose} accent={ACCENT}
-      title={<><User className="size-5" style={{ color: ACCENT }} /><EditableNodeTitle label={data.label} placeholder="Persona" onCommit={label => onChange(node.id, { ...data, label })} /></>}
-      onDelete={() => onDelete(node.id)} onClose={onClose}>
-      <div className="space-y-6">
-        <PersonaLibraryPicker value={config} onChange={patchConfig} />
-        <div className="space-y-2">
-          <Label htmlFor={uploadId}>Upload persona (.md)</Label>
-          <Button variant="outline" size="sm" className="w-full" disabled={upload.isPending} onClick={() => document.getElementById(uploadId)?.click()}>
-            <Upload className="mr-2 size-4" />{upload.isPending ? 'Saving persona…' : config.persona_file || 'Choose .md file'}
-          </Button>
-          <input id={uploadId} type="file" accept=".md" className="hidden" onChange={event => {
-            const file = event.target.files?.[0]
-            if (file) upload.mutate(file, { onSuccess: persona => patchConfig({ ...configForSavedPersona(persona), mode: 'file' }) })
-            event.target.value = ''
-          }} />
-          <p className="text-xs text-muted-foreground">Upload plain Markdown instructions. No frontmatter is required. A reusable persona is saved with a name suggested from the filename, and its text is copied here.</p>
-          {upload.error && <p role="alert" className="text-sm text-destructive">{upload.error.message}</p>}
-        </div>
-        <FactorBindableField experimentId={experimentId} nodeId={node.id} fieldPath="config" creationInToolbar defaultLabel="Persona" nodeLabel={factorNodeLabel}
-          levelType="persona_text" currentValue={config} boundFactorName={bindings.config} onBind={bindFactor} onUnbind={() => bindFactor(null)}>
-          {trigger => trigger}
-        </FactorBindableField>
-        <div className="space-y-2">
-          <Label htmlFor={`${uploadId}-text`}>Persona text</Label>
-          <Textarea id={`${uploadId}-text`} value={config.persona_text || ''} onChange={event => patchConfig({
-            persona_text: event.target.value, mode: 'text', persona_id: null, persona_ids: [], persona_sources: [], persona_label: null, persona_file: null,
-          })} placeholder="Describe the agent's personality and behavior…" className="min-h-32 font-mono text-sm" />
-        </div>
-        <p className="text-xs text-muted-foreground">Persona text is prepended to the agent's system prompt. Library edits do not change this snapshot. Publish the experiment to use changes in production runs.</p>
+  return <NodeInspectorDialog open onOpenChange={open => !open && onClose()} accent={ACCENT}
+    title={<><User className="size-5" style={{ color: ACCENT }} /><EditableNodeTitle label={data.label} placeholder="Persona" onCommit={label => onChange(node.id, { ...data, label })} /></>}
+    onDelete={() => onDelete(node.id)} onClose={onClose}>
+    <div className="space-y-4">
+      <p className="rounded-lg border px-3 py-2 text-xs text-muted-foreground"><span className="font-medium text-chart-2">Make factor</span> is in the node toolbar. Hover over the Persona node and click <Split className="inline size-3 text-chart-2" aria-label="Make factor" />. Use <Power className="inline size-3" aria-label="Power" /> to activate or deactivate it.</p>
+      <div className="space-y-2 rounded-lg border px-3 py-2">
+        <div className="flex items-center justify-between"><Label htmlFor="persona-enabled">Enabled</Label><Switch id="persona-enabled" checked={!!connectorFactorName || (config.enabled ?? true)} disabled={!!connectorFactorName || !!bindings.config} onCheckedChange={enabled => onChange(node.id, { ...data, config: { ...config, enabled } })} /></div>
+        <p className="text-xs text-muted-foreground">{connectorFactorName ? `Availability is controlled by connector factor ${connectorFactorName}. Remove it to restore individual controls.` : 'Off: the wired agent does not receive these persona instructions.'}</p>
+        {bindings['config.enabled'] && <p className="text-xs text-chart-2">Factor: {bindings['config.enabled']}</p>}
+        {bindings.config && <div className="space-y-2"><p className="text-xs text-muted-foreground">Legacy persona factor: {bindings.config}. Remove this binding before using the new factor modes. Its declaration remains in Design until removed or rebound.</p><Button variant="outline" size="sm" onClick={() => unbind('config')}>Remove legacy binding</Button></div>}
+        {connectorFactorName && Object.entries(bindings).filter(([path]) => path !== 'config').map(([path, name]) => <div key={path} className="space-y-1"><p className="text-xs text-destructive">Individual factor {name} conflicts with this connector.</p><Button variant="outline" size="sm" onClick={() => unbind(path)}>Remove individual binding</Button></div>)}
       </div>
-    </NodeInspectorDialog>
-  )
+      <div className="space-y-2"><Label>Persona</Label><p className="text-sm font-medium">{config.persona_label || data.label}</p>{config.persona_description && <p className="text-xs text-muted-foreground">{config.persona_description}</p>}{config.persona_file && <p className="font-mono text-xs text-muted-foreground">{config.persona_file}</p>}<pre className="max-h-[calc(100vh-24rem)] min-h-32 overflow-auto rounded-md border bg-muted/30 p-2 font-mono text-xs whitespace-pre-wrap">{config.persona_text || '(empty — unmodified system prompt)'}</pre></div>
+      <p className="text-xs text-muted-foreground">Instructions are prepended to the agent’s system prompt. Edit or upload personas in the Personas drawer, then add a new node to use them. Existing nodes and published experiments keep their saved text.</p>
+    </div>
+  </NodeInspectorDialog>
 }

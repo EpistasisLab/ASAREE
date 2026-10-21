@@ -293,7 +293,7 @@ export function AgentNode({
         className="!size-2 !border-2 !bg-background !border-[color:var(--card-accent)]"
       />
       <ConnectorHandleLabel left={personaLeft} side="top">Persona</ConnectorHandleLabel>
-      <ConnectorAddStub nodeId={id} slot="persona" left={personaLeft} side="top" />
+      <ConnectorAddStub nodeId={id} slot="persona" left={personaLeft} side="top" alwaysVisible factorName={data.factor_bindings?.persona_selection} factorLevelCount={data.personaFactorLevelCount as number | undefined} factorOnOff={data.persona_factor_mode === 'persona_toggle'} />
       {/* Dataset -- the data an agent works ON, as opposed to the Tool
           connector's "capabilities it works WITH". UNCAPPED, like
           Skill/Knowledge/Tool: a cell's workspace holds one dataset per named

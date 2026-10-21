@@ -4,7 +4,7 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { datasetsApi, experimentsApi, mcpServersApi, protocolsApi, skillsApi } from '@/api/client'
+import { datasetsApi, experimentsApi, mcpServersApi, personasApi, protocolsApi, skillsApi } from '@/api/client'
 import { protocolGraphQueryKey } from '@/lib/protocolGraph'
 import type { Experiment } from '@/types/experiments'
 import {
@@ -145,6 +145,31 @@ describe('ProtocolCanvas connector adds', () => {
     }))
   })
 
+  it('adds a chosen persona through the filtered drawer and keeps its inspector read-only', async () => {
+    vi.spyOn(personasApi, 'list').mockResolvedValue([])
+    const { client } = renderCanvas({
+      nodes: [{ id: 'agent', type: 'agent', position: { x: 100, y: 200 }, data: defaultAgentNodeData('Writer') }],
+      edges: [],
+    })
+    const agent = document.querySelector<HTMLElement>('[data-testid="rf__node-agent"]')!
+    fireEvent.click(agent.querySelector<HTMLButtonElement>('button[aria-label="Add Persona"]')!)
+    expect(screen.getByPlaceholderText('Search node types…')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /^Skills/ })).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: /^Personas/ }))
+    expect(screen.getByPlaceholderText('Search personas…')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: /^Analyst/ }))
+    await waitFor(() => {
+      const graph = client.getQueryData<ProtocolGraph>(protocolGraphQueryKey('protocol-1'))!
+      const persona = graph.nodes.find(node => node.type === 'persona')!
+      expect(persona.data.config).toMatchObject({ persona_ids: ['01-analyst'], enabled: true })
+      expect(graph.edges).toEqual([expect.objectContaining({ source: persona.id, target: 'agent', targetHandle: 'persona' })])
+    })
+    const inspector = await screen.findByRole('dialog')
+    expect(within(inspector).getByRole('switch', { name: 'Enabled' })).toBeInTheDocument()
+    expect(within(inspector).queryByRole('textbox', { name: 'Persona text' })).not.toBeInTheDocument()
+    expect(within(inspector).queryByRole('button', { name: /Upload|Choose.*file|Manage personas/ })).not.toBeInTheDocument()
+  })
+
   it('shows the bypass marker on the canvas Agent badge', async () => {
     const run = protocolRun({
       status: 'completed',
@@ -247,6 +272,42 @@ describe('ProtocolCanvas connector adds', () => {
       expect(persisted?.nodes.find((node) => node.id === 'other')?.data.factor_bindings).toEqual({ skill_selection: 'Writer:Skills' })
       expect(persisted?.nodes.find((node) => node.id === 'other')?.data.skill_factor_mode).toBe(mode)
       expect(persisted?.nodes.filter((node) => node.type === 'skill')).toHaveLength(2)
+    })
+  })
+
+  it.each(['persona_selection', 'persona_toggle'] as const)('creates a %s persona factor from a shared node and binds every connected Agent', async (mode) => {
+    const experiment = {
+      id: 'experiment-1', name: 'Experiment', description: null, hypothesis: null, design_type: 'factorial', task_brief: null,
+      design_spec: { factors: [], metrics: [] }, measurement_plan: null, dataset_ids: [], dataset_id: null,
+      locked_at: null, locked_protocol_revision_id: null, locked_design_spec: null, locked_measurement_plan: null,
+      created_at: '', updated_at: '', archived_at: null,
+    }
+    vi.spyOn(experimentsApi, 'get').mockResolvedValue(experiment)
+    const save = vi.spyOn(experimentsApi, 'update').mockResolvedValue(experiment)
+
+    const graph: ProtocolGraph = {
+      nodes: [
+        { id: 'agent', type: 'agent', position: { x: 100, y: 200 }, data: defaultAgentNodeData('Writer') },
+        { id: 'other', type: 'agent', position: { x: 300, y: 200 }, data: defaultAgentNodeData('Other') },
+        ...['a', 'b'].map((id) => ({ id, type: 'persona', position: { x: 100, y: 0 }, data: { label: `Persona ${id}`, config: { mode: 'library' as const, persona_id: id, persona_text: `Instructions ${id}`, persona_label: `Persona ${id}` } } })),
+      ],
+      edges: ['a', 'b'].flatMap((id) => ['agent', 'other'].map((target) => ({ id: `${id}-${target}`, source: id, target, targetHandle: 'persona' }))),
+    }
+    const { client } = renderCanvas(graph, 'experiment-1')
+    const makeFactor = document.querySelector<HTMLButtonElement>('[data-testid="rf__node-a"] button[aria-label="Make experimental factor"]')
+    expect(makeFactor).not.toBeNull()
+    fireEvent.click(makeFactor!)
+    await screen.findByRole('dialog')
+    fireEvent.click(screen.getByRole('button', { name: mode === 'persona_toggle' ? 'All personas on/off' : 'Persona levels' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Save factor' }))
+    await waitFor(() => expect(save).toHaveBeenCalledWith('experiment-1', expect.objectContaining({ design_spec: expect.objectContaining({ factors: [{ name: 'Writer:Personas', level_type: mode, levels: mode === 'persona_toggle' ? [['a', 'b'], []] : [['a'], ['b']], level_labels: mode === 'persona_toggle' ? ['All enabled', 'All disabled'] : ['Persona a', 'Persona b'] }] }) })))
+    await waitFor(() => {
+      const persisted = client.getQueryData<ProtocolGraph>(protocolGraphQueryKey('protocol-1'))
+      expect(persisted?.nodes.find((node) => node.id === 'agent')?.data.factor_bindings).toEqual({ persona_selection: 'Writer:Personas' })
+      expect(persisted?.nodes.find((node) => node.id === 'agent')?.data.persona_factor_mode).toBe(mode)
+      expect(persisted?.nodes.find((node) => node.id === 'other')?.data.factor_bindings).toEqual({ persona_selection: 'Writer:Personas' })
+      expect(persisted?.nodes.find((node) => node.id === 'other')?.data.persona_factor_mode).toBe(mode)
+      expect(persisted?.nodes.filter((node) => node.type === 'persona')).toHaveLength(2)
     })
   })
 

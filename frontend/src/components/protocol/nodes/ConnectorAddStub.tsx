@@ -36,7 +36,7 @@ export function ConnectorAddStub({
 }) {
   const connections = useNodeConnections({ id: nodeId, handleType: 'target', handleId: slot })
   const { requestConnectorAdd } = useProtocolCanvasActions()
-  const factorLabel = slot === 'skill' ? 'Skills' : slot === 'dataset' ? 'Datasets' : slot === 'tool' ? 'Tools' : CONNECTOR_SLOT_LABELS[slot]
+  const factorLabel = slot === 'persona' ? 'Personas' : slot === 'skill' ? 'Skills' : slot === 'dataset' ? 'Datasets' : slot === 'tool' ? 'Tools' : CONNECTOR_SLOT_LABELS[slot]
 
   if (connections.length > 0 && !alwaysVisible) return null
 

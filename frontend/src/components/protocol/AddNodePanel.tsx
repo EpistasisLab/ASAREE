@@ -1,3 +1,4 @@
+import { PERSONA_BROWSE } from './personaCatalog'
 import { useState } from 'react'
 import { ArrowRight, Atom, BookMarked, Bot, Braces, BrainCircuit, Cloud, Code2, Cog, Database, FileText, HardDrive, Repeat2, Route, ScrollText, ShieldCheck, Server, Sparkles, User, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -108,10 +109,10 @@ const NODE_CATALOG = [
     icon: BrainCircuit,
   },
   {
-    type: 'persona',
+    type: PERSONA_BROWSE,
     category: 'knowledge',
-    label: 'Persona',
-    description: 'OCEAN personality traits for experimental manipulation of agent behavior',
+    label: 'Personas',
+    description: 'Browse persona instructions for an Agent',
     icon: User,
   },
   // Not a node type either -- picking this opens the dataset browser
@@ -207,7 +208,7 @@ export function AddNodePanel({
   })
 
   return (
-    <div className="flex min-h-0 w-80 shrink-0 flex-col gap-3 overflow-hidden border-l p-4">
+    <div className="flex min-h-0 min-w-0 w-full shrink-0 flex-col gap-3 overflow-hidden border-l p-4">
       <div className="flex items-center justify-between">
         <p className="text-sm font-semibold">{title}</p>
         <Button variant="ghost" size="icon-sm" aria-label="Close" onClick={onClose}>

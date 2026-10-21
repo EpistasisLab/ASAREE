@@ -375,6 +375,8 @@ export interface AgentNodeData {
   script_factor_mode?: 'script_selection' | 'script_toggle'
   tool_selection?: string[]
   tool_factor_mode?: 'tool_selection' | 'tool_toggle'
+  persona_selection?: string[]
+  persona_factor_mode?: 'persona_selection' | 'persona_toggle'
   skill_selection?: string[]
   skill_factor_mode?: 'skill_selection' | 'skill_toggle'
   label: string

@@ -55,7 +55,7 @@ export function McpServerBrowserPanel({
   )
 
   return (
-    <div className="flex min-h-0 w-80 shrink-0 flex-col gap-3 overflow-hidden border-l p-4">
+    <div className="flex min-h-0 min-w-0 w-full shrink-0 flex-col gap-3 overflow-hidden border-l p-4">
       <div className="flex shrink-0 items-center justify-between">
         <div className="flex min-w-0 items-center gap-1.5">
           <Button variant="ghost" size="icon-sm" aria-label="Back" onClick={onBack}>
@@ -116,11 +116,11 @@ export function McpServerBrowserPanel({
                 key={server.id}
                 type="button"
                 onClick={() => onPick(server)}
-                className="flex cursor-pointer items-start gap-2.5 rounded-lg border bg-background px-3 py-2.5 text-left text-sm shadow-[0_0_16px_-6px_var(--primary)] ring-1 ring-primary/20 transition-colors hover:bg-muted"
+                className="flex w-full min-w-0 cursor-pointer items-start gap-2.5 rounded-lg border bg-background px-3 py-2.5 text-left text-sm shadow-[0_0_16px_-6px_var(--primary)] ring-1 ring-primary/20 transition-colors hover:bg-muted"
               >
                 <preset.icon className="mt-0.5 size-4 shrink-0 text-primary" />
                 <div className="min-w-0 flex-1">
-                  <p className="font-medium">{preset.label}</p>
+                  <p className="truncate font-medium" title={preset.label}>{preset.label}</p>
                   <p className="truncate text-xs text-muted-foreground" title={descriptionForServer(server)}>
                     {descriptionForServer(server)}
                   </p>

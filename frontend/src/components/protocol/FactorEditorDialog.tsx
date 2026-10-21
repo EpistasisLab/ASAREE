@@ -1,3 +1,4 @@
+import { PersonaFactorEditor } from './PersonaFactorEditor'
 import type { ModelCapabilities } from '@/types/llmSettings'
 import { modelCapabilities } from '@/lib/modelCapabilities'
 import { SubAgentFactorEditor } from './SubAgentFactorEditor'
@@ -557,6 +558,7 @@ export function FactorEditorDialog(props: Parameters<typeof StandardFactorEditor
   if (props.factor.level_type === 'sub_agent_selection' || props.factor.level_type === 'sub_agent_toggle') return <SubAgentFactorEditor {...props} />
   if (props.factor.level_type === 'knowledge_selection' || props.factor.level_type === 'knowledge_toggle') return <KnowledgeFactorEditor {...props} />
   if (props.factor.level_type === 'dataset_selection' || props.factor.level_type === 'dataset_toggle') return <DatasetFactorEditor {...props} />
+  if (props.factor.level_type === 'persona_selection' || props.factor.level_type === 'persona_toggle') return <PersonaFactorEditor {...props} />
   if ((props.factor.level_type === 'skill_selection' || props.factor.level_type === 'skill_toggle')) return <SkillFactorEditor {...props} />
   if (props.factor.level_type === 'tool_selection' || props.factor.level_type === 'tool_toggle') return <ToolFactorEditor {...props} />
   if (props.factor.level_type === 'script_selection' || props.factor.level_type === 'script_toggle') return <ScriptFactorEditor {...props} />

@@ -33,6 +33,7 @@ import type { OkfBundle, OkfDocument } from '@/types/okf'
 import type { CellRunBatch, DatasetRowSchema, PromptPreview, Protocol, ProtocolGraph, ProtocolRevision, ProtocolRun, TestRun } from '@/types/protocols'
 import type { Run, RunStep } from '@/types/runs'
 import type { Skill, SkillListResponse, SkillUrlPreview } from '@/types/skills'
+import type { StatsAnalysis, StatsBackend, StatsConfig, StatsSource } from '@/types/stats'
 import type { Persona } from '@/types/personas'
 import type { AttemptDetail, AttemptPage, CursorPage, ExecutionCell, ExecutionSlot, ExecutionSummary, ResultJob, UsageDistribution } from '@/types/executionResults'
 
@@ -176,6 +177,18 @@ export const authApi = {
   getMe: () => request<User>('/auth/me'),
   updateMe: (data: UserUpdate) => request<User>('/auth/me', { method: 'PATCH', body: data }),
   changePassword: (data: PasswordChangeRequest) => request<void>('/auth/me/password', { method: 'POST', body: data }),
+}
+
+export const statsApi = {
+  capabilities: (backend: StatsBackend) => request<{ families: string[]; unavailable: { title: string; reason: string; reference: string }[] }>(`/stats-prototypes/capabilities?backend=${backend}`),
+  source: (experiment: string) => request<StatsSource>(`/stats-prototypes/${experiment}/source`),
+  history: (experiment: string, backend: StatsBackend) =>
+    request<StatsAnalysis[]>(`/stats-prototypes/${experiment}/analyses?backend=${backend}`),
+  get: (experiment: string, id: string) => request<StatsAnalysis>(`/stats-prototypes/${experiment}/analyses/${id}`),
+  run: (experiment: string, backend: StatsBackend, config: StatsConfig, source?: string) =>
+    request<StatsAnalysis>(`/stats-prototypes/${experiment}/analyses?backend=${backend}`, {
+      method: 'POST', body: { ...config, source_analysis_id: source ?? null },
+    }),
 }
 
 export const tokenApi = {

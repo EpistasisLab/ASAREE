@@ -5,6 +5,7 @@ import { LoginPage } from '@/pages/LoginPage'
 import { RegisterPage } from '@/pages/RegisterPage'
 import { ProfilePage } from '@/pages/ProfilePage'
 import { ExperimentsPage } from '@/pages/ExperimentsPage'
+import { StatsPrototypePage } from '@/pages/StatsPrototypePage'
 import { ProtocolCanvasPage } from '@/pages/ProtocolCanvasPage'
 import { McpOAuthCallbackPage } from '@/pages/McpOAuthCallbackPage'
 
@@ -21,6 +22,8 @@ export function App() {
         <Route element={<ProtectedRoute />}>
           <Route path="/profile" element={<ProfilePage />} />
           <Route path="/experiments" element={<ExperimentsPage />} />
+          <Route path="/stats" element={<StatsPrototypePage backend="stats" />} />
+          <Route path="/stats_sm" element={<StatsPrototypePage backend="stats_sm" />} />
           {/* There is no separate static experiment detail page anymore -- the
               protocol canvas (with its Design/Cells/Runs/Results side panel) IS
               the experiment view. The bare route stays as a redirect so old

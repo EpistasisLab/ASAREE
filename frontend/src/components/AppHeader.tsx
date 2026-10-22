@@ -10,7 +10,11 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { useAuth } from '@/hooks/useAuth'
 import { cn } from '@/lib/utils'
 
-const NAV_LINKS = [{ to: '/experiments', label: 'Experiments' }]
+const NAV_LINKS = [
+  { to: '/experiments', label: 'Experiments' },
+  { to: '/stats', label: 'Stats' },
+  { to: '/stats_sm', label: 'Stats SM' },
+]
 
 export function AppHeader() {
   const { user, logout } = useAuth()

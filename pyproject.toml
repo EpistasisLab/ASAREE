@@ -75,6 +75,7 @@ dependencies = [
     # test — the spinal_surgery use case's factorial-analysis methodology
     # (services.factorial_analysis).
     "scipy>=1.14.0",
+    "statsmodels>=0.14.6",
     # The run worker (asaree.worker) — executes runs enqueued by POST /runs
     # instead of inline, on the same Redis Motoro and the rate-limiter
     # already depend on. Motoro's own pyproject.toml earmarks this as
@@ -168,6 +169,8 @@ select = ["E", "W", "F", "I", "N", "UP", "B", "SIM"]
 # feature matrix, y = a target vector) -- renaming to x_train would read as
 # wrong to anyone coming from that ecosystem, not more correct.
 "src/asaree/mcp_servers/workspace_server.py" = ["N806"]
+# Preserve the imported statistical implementation's mathematical notation.
+"src/asaree/stats/*.py" = ["N803", "N806", "N812", "E741"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["asaree"]

@@ -34,6 +34,7 @@ import asaree.models.protocol_revision  # noqa: F401
 import asaree.models.protocol_run  # noqa: F401
 import asaree.models.result_job  # noqa: F401
 import asaree.models.result_read_model  # noqa: F401
+import asaree.models.stats_analysis  # noqa: F401
 import asaree.models.user  # noqa: F401
 import asaree.models.user_api_token  # noqa: F401
 import asaree.models.user_llm_setting  # noqa: F401

@@ -133,6 +133,7 @@ export function AgentNode({
       <NodeHoverToolbar
         nodeId={id}
         hoverClassName="pointer-events-none group-hover/agent-body:pointer-events-auto group-hover/agent-body:opacity-100"
+        positionClassName="bottom-full -mb-2"
         isActive={isActive}
         onToggleActive={controlled ? undefined : () => updateNodeData(id, { active: !isActive })}
         onMakeFactor={experimentLocked ? undefined : isSubAgent ? requestSubAgentFactor && (() => requestSubAgentFactor(id)) : requestAgentFactor && (() => requestAgentFactor(id))}
@@ -214,7 +215,7 @@ export function AgentNode({
           configured with" rather than a runtime capability, which is what
           separates them from the bottom row. Their x-positions are NOT evenly
           spaced, and that's forced, not a style choice: the hover toolbar
-          (NodeHoverToolbar, -top-8, appearing on :hover with a solid bg-card)
+          (NodeHoverToolbar, overlapping the top edge on :hover with a solid bg-card)
           is ~112px wide and centered, so it owns the middle of this card and
           would sit right on top of any "+" stub placed there -- all four have
           to fit in the two margins outside it. That's also why the card is

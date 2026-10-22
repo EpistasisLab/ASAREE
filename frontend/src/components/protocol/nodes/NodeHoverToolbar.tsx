@@ -51,9 +51,15 @@ export function NodeHoverToolbar({
   swap,
   onMakeFactor,
   hoverClassName = 'group-hover:opacity-100',
+  positionClassName = 'bottom-full mb-1',
 }: {
   nodeId: string
   hoverClassName?: string
+  // Where the toolbar hangs relative to the card. A node that scopes hover to
+  // part of its card (AgentNode's body, so the stem connectors don't trigger
+  // it) overlaps the card's top edge instead: with a gap, the pointer leaves
+  // the hover target on its way up and the toolbar vanishes before it's reached.
+  positionClassName?: string
   // Absent for pure config-source nodes (llm/memory/pattern) -- "deactivate"
   // has no meaning for something that isn't ever "run" in the first place,
   // so those node types only get Delete, not the power icon.
@@ -90,7 +96,7 @@ export function NodeHoverToolbar({
   const { deleteElements } = useReactFlow()
 
   return (
-    <div className={`absolute bottom-full left-1/2 z-10 mb-1 flex -translate-x-1/2 items-center gap-0.5 rounded-md border bg-card p-0.5 opacity-0 shadow-[0_0_10px_-4px_var(--primary)] ring-1 ring-primary/20 transition-opacity ${hoverClassName}`}>
+    <div className={`absolute ${positionClassName} left-1/2 z-10 flex -translate-x-1/2 items-center gap-0.5 rounded-md border bg-card p-0.5 opacity-0 shadow-[0_0_10px_-4px_var(--primary)] ring-1 ring-primary/20 transition-opacity ${hoverClassName}`}>
       {runAlone && (
         // A disabled Button gets `pointer-events-none`, which would also
         // swallow its own `title` tooltip -- wrapping it in a span that

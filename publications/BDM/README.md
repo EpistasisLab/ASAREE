@@ -28,12 +28,12 @@ have:
 
 | File | Model factor | Effort factor | Design size |
 | --- | --- | --- | --- |
-| `myocardial-anthropic.json` | `claude-sonnet-5`, `claude-opus-5` | `medium`, `xhigh` | 8 cells / 160 replicates |
-| `myocardial-openai.json` | `gpt-5-mini`, `gpt-5` | `medium`, `high` | 8 cells / 160 replicates |
-| `myocardial-azure-foundry.json` | `claude-sonnet-5`, `claude-opus-5` | `medium`, `xhigh` | 8 cells / 160 replicates |
+| `myocardial-anthropic.json` | `claude-sonnet-5`, `claude-opus-5` | `medium`, `xhigh` | 8 cells / 80 replicates |
+| `myocardial-openai.json` | `gpt-5-mini`, `gpt-5` | `medium`, `high` | 8 cells / 80 replicates |
+| `myocardial-azure-foundry.json` | `claude-sonnet-5`, `claude-opus-5` | `medium`, `xhigh` | 8 cells / 80 replicates |
 
-All three are 2 × 2 × 2 designs (model × effort × critic on/off) at 20
-replicates, with the smaller/larger model of a family at the middle and top of
+All three are 2 × 2 × 2 designs (model × effort × critic on/off) at 10
+replicates per cell, with the smaller/larger model of a family at the middle and top of
 its provider's effort ladder. The two ladders aren't the same length: OpenAI's
 `reasoning_effort` stops at `high`, so `high` is that variant's counterpart to
 Anthropic's `xhigh`, not a rung below it.
@@ -229,8 +229,8 @@ built from the train half; the test half is only touched by the final model
 script. Re-splitting at a different seed overwrites rather than accumulating.
 
 **7. Inspect the generated design.** The **Design** and **Cells** tabs show
-2 × 2 × 2 factor combinations = **8 cells**, with 20 replicates per cell
-(**160 replicates** total). The imported canvas is already published.
+2 × 2 × 2 factor combinations = **8 cells**, with 10 replicates per cell
+(**80 replicates** total). The imported canvas is already published.
 
 **8. Run.** Two ways:
 
@@ -243,7 +243,7 @@ results land in **Cells** and **Results**.
 
 ## Cost
 
-Generating the grid is free — cells and replicates are rows until a run starts — but 160 runs
+Generating the grid is free — cells and replicates are rows until a run starts — but 80 runs
 of a four-agent pipeline, half of them at the top of the effort ladder, is a
 real bill. Run one cell
 first. If you only want a smoke test, lower **Replicates** on the Design tab and

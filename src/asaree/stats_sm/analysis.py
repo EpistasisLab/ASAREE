@@ -49,6 +49,42 @@ UNAVAILABLE = [
 ]
 
 
+def fit_model(y, x, family, config, trials=None, robust=False):
+    """Shared native fit for the original sample and fixed-family bootstrap refits."""
+    options = {"cov_type": "HC0"} if robust else {}
+    if family in ("gaussian", "lognormal"):
+        return sm.OLS(np.log(y) if family == "lognormal" else y, x).fit(**({"cov_type": "HC3"} if robust else {}))
+    if family == "negbin":
+        return sm.NegativeBinomial(y, x, loglike_method="nb2").fit(disp=0, maxiter=500, **options)
+    if family in ("zip", "zinb"):
+        cls = ZeroInflatedPoisson if family == "zip" else ZeroInflatedNegativeBinomialP
+        return cls(y, x, exog_infl=np.ones((len(y), 1))).fit(disp=0, maxiter=500, **options)
+    if family == "beta":
+        return BetaModel(y, x).fit(method="bfgs", gtol=1e-9, disp=0, maxiter=500, **options)
+    if family == "ordinal_logit":
+        if len(config["ordinal_levels"]) < 2 or len(np.unique(y)) != len(config["ordinal_levels"]):
+            raise ValueError("A bootstrap sample omitted an ordinal category.")
+        return OrderedModel(y, x[:, 1:], distr="logit").fit(method="bfgs", disp=0, maxiter=500, **options)
+    families = {
+        "gamma": sm.families.Gamma(sm.families.links.Log()),
+        "poisson": sm.families.Poisson(),
+        "binomial": sm.families.Binomial(),
+    }
+    response = np.column_stack((y, trials - y)) if family == "binomial" and trials is not None else y
+    return sm.GLM(response, x, family=families[family]).fit(**options)
+
+
+def predict_model(result, matrix, family, config):
+    if family in ("zip", "zinb"):
+        return result.predict(matrix, exog_infl=np.ones((len(matrix), 1)))
+    if family == "ordinal_logit":
+        return result.model.predict(result.params, matrix[:, 1:]) @ np.arange(1, len(config["ordinal_levels"]) + 1)
+    values = result.predict(matrix)
+    if family == "lognormal":
+        return np.exp(values + np.sum(result.resid**2) / len(result.resid) / 2)
+    return values
+
+
 def analyze(frame: pd.DataFrame, config: dict) -> dict:
     family = config["family"]
     if family not in FAMILIES:
@@ -77,7 +113,11 @@ def analyze(frame: pd.DataFrame, config: dict) -> dict:
     )
     tables = {}
     robust = config.get("robust", False)
-    fit_options = {"cov_type": "HC0"} if robust else {}
+    covariance_label = (
+        ("HC3 robust covariance" if family in ("gaussian", "lognormal") else "HC0 robust covariance")
+        if robust
+        else "model-based covariance"
+    )
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
         if family == "tweedie":
@@ -93,50 +133,18 @@ def analyze(frame: pd.DataFrame, config: dict) -> dict:
             notes.append("Tweedie: fixed power; likelihood, AIC, coefficient intervals and tests unavailable.")
             result = None
         else:
-            if family in ("gaussian", "lognormal"):
-                if family == "lognormal" and np.any(y <= 0):
-                    raise ValueError("Log-normal requires positive outcomes.")
-                result = sm.OLS(np.log(y) if family == "lognormal" else y, x).fit(
-                    **({"cov_type": "HC3"} if robust else {})
-                )
-            elif family == "negbin":
-                result = sm.NegativeBinomial(y, x, loglike_method="nb2").fit(disp=0, maxiter=500, **fit_options)
-            elif family in ("zip", "zinb"):
-                cls = ZeroInflatedPoisson if family == "zip" else ZeroInflatedNegativeBinomialP
-                result = cls(y, x, exog_infl=np.ones((len(y), 1))).fit(disp=0, maxiter=500, **fit_options)
-            elif family == "beta":
-                result = BetaModel(y, x).fit(method="bfgs", gtol=1e-9, disp=0, maxiter=500, **fit_options)
-            elif family == "ordinal_logit":
-                levels = config["ordinal_levels"]
-                codes = pd.Series(frame["outcome_raw"]).map({v: i for i, v in enumerate(levels)})
-                if codes.isna().any() or len(levels) < 2:
+            if family == "lognormal" and np.any(y <= 0):
+                raise ValueError("Log-normal requires positive outcomes.")
+            if family == "ordinal_logit":
+                codes = pd.Series(frame["outcome_raw"]).map({v: i for i, v in enumerate(config["ordinal_levels"])})
+                if codes.isna().any():
                     raise ValueError("Declare every ordinal level in order.")
                 y = codes.to_numpy(float)
-                result = OrderedModel(y, x[:, 1:], distr="logit").fit(method="bfgs", disp=0, maxiter=500, **fit_options)
-            else:
-                families = {
-                    "gamma": sm.families.Gamma(sm.families.links.Log()),
-                    "poisson": sm.families.Poisson(),
-                    "binomial": sm.families.Binomial(),
-                }
-                response = y
-                if family == "binomial" and config.get("denominator"):
-                    trials = frame["trials"].to_numpy(float)
-                    response = np.column_stack((y, trials - y))
-                result = sm.GLM(response, x, family=families[family]).fit(**fit_options)
+            trials = frame["trials"].to_numpy(float) if config.get("denominator") else None
+            result = fit_model(y, x, family, config, trials, robust)
 
             def predict(matrix):
-                if family in ("zip", "zinb"):
-                    return result.predict(matrix, exog_infl=np.ones((len(matrix), 1)))
-                if family == "ordinal_logit":
-                    return result.model.predict(result.params, matrix[:, 1:]) @ np.arange(
-                        1, len(config["ordinal_levels"]) + 1
-                    )
-                values = result.predict(matrix)
-                if family == "lognormal":
-                    # Gaussian ML variance on log y, with the response-scale mean correction.
-                    return np.exp(values + np.sum(result.resid**2) / len(y) / 2)
-                return values
+                return predict_model(result, matrix, family, config)
 
             means, fitted = np.asarray(predict(grid)), np.asarray(predict(x))
             intervals = np.asarray(result.conf_int())
@@ -225,7 +233,8 @@ def analyze(frame: pd.DataFrame, config: dict) -> dict:
             )
             if family in ("gaussian", "lognormal"):
                 notes.append(
-                    "OLS reports t/F inference and counts regression coefficients in AIC. "
+                    f"OLS reports {'t/F' if result.use_t else 'z/chi-square'} inference "
+                    "and counts regression coefficients in AIC. "
                     "The original engine estimates Gaussian dispersion by maximum likelihood "
                     "and uses different inference."
                 )
@@ -250,10 +259,18 @@ def analyze(frame: pd.DataFrame, config: dict) -> dict:
                 restriction = np.eye(len(result.params))[idx]
                 try:
                     test = result.wald_test(restriction, scalar=True)
-                    rows.append(dict(term=term, statistic=float(test.statistic), p=float(test.pvalue)))
+                    test_name = "Wald F-test" if test.distribution == "F" else "Wald chi-square test"
+                    rows.append(
+                        dict(
+                            term=term,
+                            statistic=float(test.statistic),
+                            p=float(test.pvalue),
+                            p_method=f"{test_name} ({covariance_label})",
+                        )
+                    )
                 except (ValueError, np.linalg.LinAlgError):
                     notes.append(f"No usable covariance for {term}; the library cannot provide a Wald test.")
-                    rows.append(dict(term=term, statistic=np.nan, p=np.nan))
+                    rows.append(dict(term=term, statistic=np.nan, p=np.nan, p_method="Wald test unavailable"))
             tests = pd.DataFrame(rows)
             tests["p_holm"] = np.nan
             valid = tests.p.notna()
@@ -271,7 +288,7 @@ def analyze(frame: pd.DataFrame, config: dict) -> dict:
         ci = np.asarray(result.get_prediction(grid).conf_int())
         cell_table["ci_low"], cell_table["ci_high"] = ci[:, 0], ci[:, 1]
     tables["cell_means"] = cell_table
-    marginal, contrasts = [], []
+    marginal, contrasts, comparison_weights = [], [], []
     ratio = family in ("gamma", "poisson", "negbin", "zip", "zinb", "lognormal", "tweedie")
 
     def summarize(weights, label, **meta):
@@ -281,6 +298,16 @@ def analyze(frame: pd.DataFrame, config: dict) -> dict:
             test = result.t_test(weights @ grid)
             ci = np.asarray(test.conf_int()).ravel()
             row.update(ci_low=float(ci[0]), ci_high=float(ci[1]), p=float(np.asarray(test.pvalue).item()))
+            row["p_method"] = (
+                "Student's t-test for a linear contrast"
+                if test.distribution == "t"
+                else "Wald z-test for a linear contrast"
+            ) + f" ({covariance_label})"
+            row["ci_method"] = (
+                "Student's t confidence interval"
+                if test.distribution == "t"
+                else "Normal-approximation confidence interval"
+            )
         elif family in ("gamma", "poisson", "binomial") and usable and np.all(weights >= 0):
             # statsmodels itself averages nonlinear predictions and propagates their covariance.
             ci = np.asarray(result.get_prediction(grid[weights > 0], which="mean", average=True).conf_int()).ravel()
@@ -330,7 +357,15 @@ def analyze(frame: pd.DataFrame, config: dict) -> dict:
         bounds = center + np.array([-1, 1]) * stats.norm.ppf(0.975) * se
         if ratio_scale:
             bounds = np.exp(bounds)
-        return dict(ci_low=float(bounds[0]), ci_high=float(bounds[1]), p=float(2 * stats.norm.sf(abs(center / se))))
+        return dict(
+            ci_low=float(bounds[0]),
+            ci_high=float(bounds[1]),
+            p=float(2 * stats.norm.sf(abs(center / se))),
+            p_method=f"Delta-method Wald z-test ({covariance_label})",
+            ci_method="Log-scale delta-method confidence interval"
+            if ratio_scale
+            else "Delta-method confidence interval",
+        )
 
     def weights_for(conditions):
         mask = np.ones(len(cells), bool)
@@ -339,6 +374,7 @@ def analyze(frame: pd.DataFrame, config: dict) -> dict:
         return mask.astype(float) / mask.sum()
 
     def comparison(weights, label, family_name):
+        comparison_weights.append(weights)
         pieces = np.asarray([w @ means for w in weights])
         if ratio:
             estimate = pieces[0] / pieces[1] if len(weights) == 2 else (pieces[0] / pieces[1]) / (pieces[2] / pieces[3])
@@ -391,6 +427,13 @@ def analyze(frame: pd.DataFrame, config: dict) -> dict:
     if "p" in con:
         con["p_holm"] = con.groupby("family").p.transform(lambda p: multipletests(p, method="holm")[1])
     tables["contrasts"] = con
+    if config.get("_resample") and result is not None and usable:
+        from asaree.stats_sm.resampling import bootstrap_intervals
+
+        boot, metadata = bootstrap_intervals(frame, x, y, grid, comparison_weights, family, config, ratio, trials)
+        for column in boot:
+            con[column] = boot[column]
+        tables["resampling"] = pd.DataFrame([metadata])
     observed = frame["outcome"].to_numpy(float)
     if family == "binomial" and config.get("denominator"):
         observed = observed / frame["trials"].to_numpy(float)

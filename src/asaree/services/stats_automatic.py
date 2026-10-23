@@ -16,7 +16,7 @@ import numpy as np
 
 from asaree.stats_sm.analysis import analyze
 
-REPORT_VERSION = 1
+REPORT_VERSION = 2
 ORDERED_LABELS = (
     ("very low", "low", "medium", "high", "very high"),
     ("strongly disagree", "disagree", "neutral", "agree", "strongly agree"),
@@ -371,12 +371,10 @@ def analyze_automatic(source: dict, config: dict) -> dict:
                 if family in {"zoib", "gamma_hurdle", "betabinomial"}:
                     output = compute("stats", converted_source, candidate_config)
                     diagnostics = output["tables"]["diagnostics"][0]
-                    quantities = output["tables"]["quantities"]
                     valid = (
                         diagnostics["converged"]
                         and diagnostics["hessian_positive_definite"]
                         and not diagnostics["severe"]
-                        and quantities[0]["n_boot_ok"] >= 0.9 * resolved["n_boot"]
                     )
                     fit = dict(aic=diagnostics["aic"], usable=valid)
                 else:
@@ -411,6 +409,35 @@ def analyze_automatic(source: dict, config: dict) -> dict:
             )
             return result
         _, family, output, frame = min(fitted, key=lambda r: r[0])
+        selected_config = dict(resolved, family=family)
+        if family not in {"zoib", "gamma_hurdle", "betabinomial"}:
+            # Select once, then resample only the selected family, never every candidate.
+            from asaree.services.stats_resampling import native_permutations
+
+            output = json_safe(analyze(frame, dict(selected_config, _resample=True)))
+            try:
+                permutations, permutation_reason = native_permutations(frame, selected_config)
+            except (ValueError, RuntimeError, np.linalg.LinAlgError, FloatingPointError) as exc:
+                permutations, permutation_reason = [], f"Permutation check unavailable: {exc}"
+            output["tables"]["permutation_tests"] = permutations
+            if permutation_reason:
+                output["permutation_reason"] = permutation_reason
+        elif resolved.get("denominator") and frame.trials.nunique() != 1:
+            output["tables"]["permutation_tests"] = []
+            output["permutation_reason"] = (
+                "Permutation check unavailable: unequal trial totals do not justify exchanging proportions."
+            )
+        if family in {"zoib", "gamma_hurdle", "betabinomial"}:
+            for row in output["tables"].get("permutation_tests", []):
+                if ":" in row["term"]:
+                    row.update(
+                        p_perm=None,
+                        p_holm=None,
+                        reason=(
+                            "Interaction permutation withheld: exchangeable additive errors are not established "
+                            "for this non-Gaussian model."
+                        ),
+                    )
         warnings = list(plan["warnings"])
         if source.get("demo"):
             warnings.insert(0, "DEMONSTRATION: synthetic data, not results from a real experiment.")
@@ -428,10 +455,8 @@ def analyze_automatic(source: dict, config: dict) -> dict:
             )
         if family in {"zoib", "gamma_hurdle", "betabinomial"}:
             warnings.append("A specialized custom model was used for this measurement construction.")
-            if resolved["n_boot"] < 1000:
-                warnings.append(
-                    "Exploratory simulation count: confidence intervals need more draws for final reporting."
-                )
+        if resolved["n_boot"] < 1000:
+            warnings.append("Exploratory simulation count: confidence intervals need more draws for final reporting.")
         counts = frame.groupby([f"factor_{i}" for i in range(len(factors))]).size()
         if counts.max() != counts.min():
             warnings.append("Run counts differ across conditions; comparisons weight conditions equally.")
@@ -471,11 +496,88 @@ def build_summary(output, source, config, plan, family, warnings):
             text = text.replace(alias, aliases[alias])
         return text
 
+    def recorded_method(row):
+        raw = row.get("p_method") or "Test method not recorded"
+        if raw.startswith("parametric bootstrap LRT"):
+            return raw.replace("parametric bootstrap LRT", "Parametric-bootstrap likelihood-ratio test", 1)
+        if raw.startswith("HC3 delta-method Wald"):
+            return "HC3 delta-method Wald z-test (response-scale contrast)"
+        if raw.startswith("HC3 Wald"):
+            return raw.replace("HC3 Wald", "HC3 Wald chi-square test", 1)
+        return raw
+
+    specialized = family in {"zoib", "gamma_hurdle", "betabinomial"}
+    if specialized:
+        quantity = output["tables"].get("quantities", [{}])[0]
+        ok, failed = quantity.get("n_boot_ok", 0), quantity.get("n_boot_failed", 0)
+        bootstrap = dict(
+            method="Parametric-bootstrap percentile intervals; fixed selected model",
+            requested=config["n_boot"],
+            attempted=ok + failed,
+            successful=ok,
+            failed=failed,
+            status="completed" if ok >= 0.9 * config["n_boot"] else "Too many failed refits",
+            seed=config["seed"],
+        )
+    else:
+        bootstrap = next(
+            iter(output["tables"].get("resampling", [])),
+            dict(
+                requested=config["n_boot"],
+                attempted=0,
+                successful=0,
+                failed=0,
+                status="Unavailable",
+            ),
+        )
+    permutation_rows = {label(row["term"]): row for row in output["tables"].get("permutation_tests", [])}
+    if bootstrap["status"] != "completed":
+        warnings.append(f"Bootstrap intervals unavailable: {bootstrap['status']}. Analytic inference is retained.")
+    if output.get("permutation_reason"):
+        warnings.append(output["permutation_reason"])
+
     effects = []
     for row in output["tables"].get("contrasts", []):
         estimate, low, high = (row.get(k) for k in ("estimate", "ci_low", "ci_high"))
         p = row.get("p_holm", row.get("p_primary_holm"))
+        if specialized:
+            low, high = row.get("analytic_ci_low"), row.get("analytic_ci_high")
+            p = row.get("p_response_holm")
         usable = all(number(v) for v in (estimate, low, high, p))
+        scale = row.get("scale", "difference")
+        if not specialized and "link-scale contrast = 0" in row.get("null_hypothesis", ""):
+            purpose = (
+                "Tests whether the selected conditions differ on the model's link scale; "
+                "the estimated effect is displayed on the measurement scale."
+            )
+        elif scale in {"difference_in_differences", "ratio_of_ratios"}:
+            purpose = (
+                "Checks whether the difference between conditions changes across the other factor "
+                f"(null interaction = {1 if scale == 'ratio_of_ratios' else 0})."
+            )
+        else:
+            purpose = (
+                "Checks whether the first condition's predicted average differs from the second "
+                f"(null {'ratio = 1' if scale == 'ratio' else 'difference = 0'})."
+            )
+        method = recorded_method(row)
+        interval = row.get("ci_method")
+        if specialized:
+            method = "HC3 delta-method Wald z-test (response-scale contrast)"
+            interval = (
+                "Log-scale delta-method confidence interval"
+                if scale in {"ratio", "ratio_of_ratios"}
+                else "Delta-method confidence interval"
+            )
+        boot_low, boot_high = (
+            (row.get("ci_low"), row.get("ci_high"))
+            if specialized
+            else (row.get("bootstrap_ci_low"), row.get("bootstrap_ci_high"))
+        )
+        boot_usable = bootstrap["status"] == "completed" and all(number(v) for v in (boot_low, boot_high))
+        null = 1 if scale in {"ratio", "ratio_of_ratios"} else 0
+        analytic_excludes = usable and (low > null or high < null)
+        boot_excludes = boot_usable and (boot_low > null or boot_high < null)
         effects.append(
             dict(
                 comparison=label(row.get("label", "")),
@@ -483,6 +585,17 @@ def build_summary(output, source, config, plan, family, warnings):
                 ci_low=low if usable else None,
                 ci_high=high if usable else None,
                 p_adjusted=p if usable else None,
+                method=method if usable else "Inference unavailable",
+                purpose=purpose,
+                interval_method=interval if usable else None,
+                bootstrap_ci_low=boot_low if boot_usable else None,
+                bootstrap_ci_high=boot_high if boot_usable else None,
+                bootstrap_status="completed" if boot_usable else bootstrap["status"],
+                interval_agreement=(
+                    "Intervals agree" if analytic_excludes == boot_excludes else "Intervals differ; investigate"
+                )
+                if usable and boot_usable
+                else "Interval comparison unavailable",
                 scale=row.get("scale", "difference"),
                 unit=plan["metadata"].get("unit")
                 if str(row.get("scale", "difference")).startswith("difference")
@@ -495,14 +608,42 @@ def build_summary(output, source, config, plan, family, warnings):
             )
         )
     tests = []
-    for row in output["tables"].get("tests", []):
-        if row.get("family", "terms") != "terms":
-            continue
-        p = row.get("p_holm", row.get("p_primary_holm"))
+    term_rows = [row for row in output["tables"].get("tests", []) if row.get("family", "terms") == "terms"]
+    if specialized:
+        from asaree.stats.inference import holm
+
+        analytic_term_p = holm(np.array([row.get("p_wald_hc3", np.nan) for row in term_rows], float))
+    else:
+        analytic_term_p = [row.get("p_holm") for row in term_rows]
+    for row, p in zip(term_rows, analytic_term_p, strict=True):
+        term = row.get("term", row.get("hypothesis", ""))
+        permutation = permutation_rows.get(label(term), {})
+        permutation_p = permutation.get("p_holm")
+        purpose = (
+            "Checks whether the effect of one factor depends on the others in this interaction."
+            if ":" in term
+            else "Checks whether this factor contributes to the fitted model after accounting for other included terms."
+        )
+        if "in every model part (joint)" in row.get("null_hypothesis", ""):
+            purpose += " Coefficients are tested jointly across the model's parts."
         tests.append(
             dict(
-                effect=label(row.get("term", row.get("hypothesis", ""))),
+                effect=label(term),
                 p_adjusted=p if number(p) else None,
+                method=("HC3 Wald chi-square test" if specialized else recorded_method(row))
+                if number(p)
+                else "Inference unavailable",
+                purpose=purpose,
+                permutation_p_adjusted=permutation_p if number(permutation_p) else None,
+                permutation_method=label(permutation["method"]) if permutation.get("method") else None,
+                permutation_status="completed"
+                if number(permutation_p)
+                else permutation.get("reason") or output.get("permutation_reason", "Unavailable"),
+                permutation_result="Evidence in sensitivity check"
+                if number(permutation_p) and permutation_p < 0.05
+                else "No clear evidence in sensitivity check"
+                if number(permutation_p)
+                else "Unavailable",
                 result="Evidence of an effect"
                 if number(p) and p < 0.05
                 else "No clear evidence of an effect"
@@ -523,7 +664,51 @@ def build_summary(output, source, config, plan, family, warnings):
         "The null value is 0 for differences and 1 for ratios. Interactions compare effects across settings.",
         "Holm correction is applied across factor tests and within each factor's comparison family. "
         "Separate metrics are not corrected together; cross-metric findings are exploratory.",
+        "Analytic and permutation results are reported independently; neither is selected based on significance.",
+        "Permutation p-values are separately Holm-adjusted working-scale OLS sensitivity checks, not permutations "
+        "of the model's Wald statistic. Labels are exchanged within other-factor strata for main effects; "
+        "interactions use approximate Freedman–Lane reduced-model residual permutation. These require "
+        "exchangeability under the tested null, beyond independent runs. Nonlinear/multipart models and "
+        "rank-based ordinal checks may test different null hypotheses; "
+        "agreement is descriptive, not proof of validity.",
+        "Analytic and bootstrap intervals are pointwise 95% intervals, not multiplicity-adjusted. Their agreement "
+        "compares whether they include the null; it is not a comparison with the Holm-adjusted p-value.",
     ]
+    methods.append(
+        f"Bootstrap — {bootstrap.get('method', 'unavailable')}: {bootstrap['requested']} requested, "
+        f"{bootstrap['attempted']} attempted, {bootstrap['successful']} successful, {bootstrap['failed']} failed. "
+        f"Status: {bootstrap['status']}. Intervals require completion and at least 90% successful refits. "
+        "The selected family is held fixed; model-selection uncertainty is not included."
+    )
+    for term, row in permutation_rows.items():
+        description = (
+            f"Permutation — {term}: {config['n_perm']} requested, {row['n_perm']} completed; "
+            f"{label(row.get('method', ''))}; "
+            f"working scale: {row.get('working_scale', 'response')}. "
+        )
+        if row.get("reason"):
+            description += str(row["reason"])
+        elif row["n_perm"]:
+            description += (
+                f"Monte Carlo p-value uses (exceedances + 1)/(permutations + 1); minimum {1 / (row['n_perm'] + 1):.6g}."
+            )
+        methods.append(description)
+    # Describe the recorded execution, not a fixed family-to-test lookup. A
+    # manual Gaussian fit can use t/F while its automatic robust fit uses z/chi2.
+    explanations = set()
+    for section, rows in (("Factor tests", tests), ("Comparisons", effects)):
+        for row in rows:
+            if row["method"] in {"Inference unavailable", "Test method not recorded"}:
+                continue
+            explanations.add(f"{section} — {row['method']}: {row['purpose']}")
+    methods.extend(sorted(explanations))
+    for interval in sorted({row["interval_method"] for row in effects if row["interval_method"]}):
+        explanation = (
+            "Simulates and refits the model to estimate uncertainty in each comparison."
+            if "bootstrap" in interval.lower()
+            else "Approximates uncertainty in the predicted comparison using the fitted parameter covariance."
+        )
+        methods.append(f"Confidence intervals — {interval}: {explanation}")
     if plan.get("conversion"):
         conversion = plan["conversion"]
         methods.append(
@@ -538,23 +723,39 @@ def build_summary(output, source, config, plan, family, warnings):
         methods.append(
             "Ordered categories (lowest first): "
             + ", ".join(plan.get("category_labels") or plan["ordinal_levels"])
-            + ". Numeric codes express order; equal spacing is not assumed by the fitted ordinal model."
+            + ". Equal spacing is not assumed by the ordinal likelihood. Comparisons summarize expected "
+            "category codes (1 through K), not distances in physical units; permutation checks use pooled ranks."
         )
     if plan["measurement_type"] == "binary" and plan.get("conversion"):
         methods.append("Reported probabilities refer to the category coded 1; the codes do not imply a numeric rating.")
-    if family in {"zoib", "gamma_hurdle", "betabinomial"}:
-        primary_methods = sorted({row.get("p_method", "HC3 Wald") for row in output["tables"].get("tests", [])})
+    if specialized:
         methods.append(
-            f"Custom likelihood engine; primary tests: {'; '.join(primary_methods)}. "
-            f"{config['n_boot']} parametric interval draws, "
-            f"{config['n_perm']} permutations. Interval refits must be at least 90% successful."
+            "Custom likelihood engine. "
+            "Analytic comparison tests and intervals use the response-scale HC3 delta method; "
+            "bootstrap intervals simulate from the fitted model and share its distributional assumptions. "
+            f"Null-model bootstrap likelihood-ratio tests requested: {config.get('n_boot_lrt', 0)} per hypothesis."
         )
+        if config.get("n_boot_lrt", 0):
+            for row in output["tables"].get("tests", []):
+                methods.append(
+                    f"Additional bootstrap likelihood-ratio test — {label(row.get('hypothesis', ''))}: "
+                    f"{config['n_boot_lrt']} requested, {row.get('n_boot_lrt_attempted', 0)} attempted, "
+                    f"{row.get('n_boot_lrt', 0)} successful, {row.get('n_boot_lrt_failed', 0)} failed. "
+                    f"Recorded method: {recorded_method(row)}. Main report p-values remain analytic."
+                )
     else:
         methods.append(
             "statsmodels fits; HC3 covariance for Gaussian/lognormal models and HC0 for other models. "
             "Nonlinear comparison intervals use the delta method."
         )
-    findings = [f"{t['effect']}: {t['result'].lower()}." for t in tests]
+        methods.append(
+            "Bootstrap intervals resample whole independent runs within each observed cell and refit "
+            "the selected model. Factor values and trial totals stay attached to their runs."
+        )
+    findings = [
+        f"{t['effect']}: analytic — {t['result'].lower()}; permutation — {t['permutation_result'].lower()}."
+        for t in tests
+    ]
     versions = {name: importlib.metadata.version(name) for name in ("numpy", "scipy", "statsmodels")}
     return dict(
         version=REPORT_VERSION,
@@ -568,6 +769,7 @@ def build_summary(output, source, config, plan, family, warnings):
         tests=tests,
         warnings=warnings,
         methods=methods,
+        resampling=dict(bootstrap=bootstrap, permutations=list(permutation_rows.values())),
         metric_definition=plan["metadata"],
         provenance=dict(
             fingerprint=source["fingerprint"],

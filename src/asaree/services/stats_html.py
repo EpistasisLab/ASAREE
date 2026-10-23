@@ -35,12 +35,24 @@ def render_html(analysis: dict) -> str:
         if not rows:
             return "<p>No statistical comparisons are available.</p>"
         head = "".join(f"<th scope='col'>{text(title)}</th>" for _, title in columns)
-        body = "".join(
-            "<tr>"
-            + "".join(f"<td>{escape(display(row.get(key), key == 'p_adjusted'))}</td>" for key, _ in columns)
-            + "</tr>"
-            for row in rows
-        )
+
+        def cell(row, key):
+            content = escape(display(row.get(key), key in {"p_adjusted", "permutation_p_adjusted"}))
+            if key in {"effect", "comparison"} and row.get("method"):
+                content += f'<small class="test-method">{text(row["method"])}</small>'
+            if key == "permutation_p_adjusted":
+                detail = row.get("permutation_result") if row.get(key) is not None else row.get("permutation_status")
+                content += f'<small class="test-method">{text(detail)}</small>'
+            if key == "bootstrap_interval":
+                detail = (
+                    row.get("interval_agreement")
+                    if row.get("bootstrap_ci_low") is not None
+                    else row.get("bootstrap_status")
+                )
+                content += f'<small class="test-method">{text(detail)}</small>'
+            return f"<td>{content}</td>"
+
+        body = "".join("<tr>" + "".join(cell(row, key) for key, _ in columns) + "</tr>" for row in rows)
         return f"<table><thead><tr>{head}</tr></thead><tbody>{body}</tbody></table>"
 
     effects = [
@@ -49,6 +61,9 @@ def render_html(analysis: dict) -> str:
             "scale": str(row["scale"]).replace("_", " ") + (f" ({row['unit']})" if row.get("unit") else ""),
             "interval": f"{display(row['ci_low'])} to {display(row['ci_high'])}"
             if row.get("ci_low") is not None and row.get("ci_high") is not None
+            else "Unavailable",
+            "bootstrap_interval": f"{display(row['bootstrap_ci_low'])} to {display(row['bootstrap_ci_high'])}"
+            if row.get("bootstrap_ci_low") is not None and row.get("bootstrap_ci_high") is not None
             else "Unavailable",
         }
         for row in summary["effects"]
@@ -63,6 +78,16 @@ def render_html(analysis: dict) -> str:
     if info.get("unit"):
         metric_context += f"<p>Unit: {text(info['unit'])}</p>"
     metric_context += "".join(f"<p>{text(line)}</p>" for line in info.get("coding", []))
+    resampled = bool(summary.get("resampling"))
+    resampling_note = ""
+    if resampled:
+        bootstrap = summary["resampling"]["bootstrap"]
+        resampling_note = (
+            f"<p>Bootstrap: {text(bootstrap['successful'])}/{text(bootstrap['requested'])} successful refits; "
+            f"{text(bootstrap['failed'])} failed. Status: {text(bootstrap['status'])}.</p>"
+            "<p>Permutation results are working-scale sensitivity checks and may test a different null hypothesis. "
+            "See “What ran and why” for assumptions.</p>"
+        )
 
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -72,13 +97,19 @@ def render_html(analysis: dict) -> str:
 h1,h2{{line-height:1.25}}table{{border-collapse:collapse;width:100%;font-size:14px;margin:16px 0}}
 th,td{{border-bottom:1px solid #cbd5e1;text-align:left;padding:10px;vertical-align:top;overflow-wrap:anywhere}}
 th{{background:#eff3f6}}pre{{white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px}}
+.test-method{{display:block;margin-top:4px;color:#526170;font-size:12px}}
 @media print{{body{{margin:0;max-width:none}}tr{{break-inside:avoid}}}}</style></head>
 <body><h1>Statistical results: {text(summary["metric"])}</h1>
 {metric_context}
 <p>Status: {text(summary["status"])}</p><p>{text(summary["description"])}</p>
 {listing(summary["findings"])}
 <h2>Statistical tests</h2>{
-        table(summary["tests"], [("effect", "Effect"), ("p_adjusted", "Adjusted p-value"), ("result", "Result")])
+        table(
+            summary["tests"],
+            [("effect", "Effect"), ("p_adjusted", "Analytic adjusted p" if resampled else "Adjusted p-value")]
+            + ([("permutation_p_adjusted", "Permutation adjusted p")] if resampled else [])
+            + [("result", "Analytic result")],
+        )
     }
 <h2>Comparisons</h2>{
         table(
@@ -87,18 +118,28 @@ th{{background:#eff3f6}}pre{{white-space:pre-wrap;overflow-wrap:anywhere;font-si
                 ("comparison", "Comparison"),
                 ("estimate", "Estimate"),
                 ("scale", "Scale"),
-                ("interval", "95% interval"),
-                ("p_adjusted", "Adjusted p-value"),
+                ("interval", "Analytic 95% interval" if resampled else "95% interval"),
+            ]
+            + ([("bootstrap_interval", "Bootstrap 95% interval")] if resampled else [])
+            + [
+                ("p_adjusted", "Analytic adjusted p" if resampled else "Adjusted p-value"),
                 ("result", "Result"),
             ],
         )
     }
+{resampling_note}
 <p>A result without clear evidence does not establish that the effect is zero.
 Statistical evidence does not establish practical importance.</p>
 <details><summary>What ran and why</summary>{listing(summary["methods"])}</details>
 <h2>Limitations and exclusions</h2>{listing(summary["warnings"])}
 <details><summary>Reproducibility</summary>
 <p>Analysis: {text(analysis.get("id"))} · Created: {text(analysis.get("created_at"))}</p>
-<pre>{text(json.dumps(summary.get("provenance", {}), indent=2, ensure_ascii=False))}</pre>
+<pre>{
+        text(
+            json.dumps(
+                dict(summary.get("provenance", {}), resampling=summary.get("resampling")), indent=2, ensure_ascii=False
+            )
+        )
+    }</pre>
 </details>
 </body></html>"""

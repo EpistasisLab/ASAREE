@@ -54,13 +54,22 @@ export interface StatsSummary {
   status: 'valid' | 'unreliable' | 'unavailable'
   description: string
   findings: string[]
-  tests: { effect: string; p_adjusted: number | null; result: string }[]
+  tests: { effect: string; p_adjusted: number | null; result: string; method?: string; purpose?: string
+    permutation_p_adjusted?: number | null; permutation_method?: string | null
+    permutation_status?: string; permutation_result?: string }[]
   effects: {
     comparison: string; estimate: number | null; scale: string
     unit?: string | null
+    method?: string
+    purpose?: string
+    interval_method?: string | null
+    bootstrap_ci_low?: number | null; bootstrap_ci_high?: number | null
+    bootstrap_status?: string; interval_agreement?: string
     ci_low: number | null; ci_high: number | null; p_adjusted: number | null; result: string
   }[]
   warnings: string[]
   methods: string[]
+  resampling?: { bootstrap: { requested: number; attempted: number; successful: number; failed: number; status: string }
+    permutations: Record<string, unknown>[] }
   provenance: Record<string, unknown>
 }

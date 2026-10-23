@@ -12,7 +12,8 @@ import statsmodels.api as sm
 
 from asaree.services.stats_automatic import coerce_values, metric_information, plan_metric
 from asaree.services.stats_html import render_html
-from asaree.services.stats_prototypes import StatsRequest, catalog, compute, metric_definitions
+from asaree.services.stats_prototypes import StatsRequest, catalog, compute, metric_definitions, prepare_frame
+from asaree.stats_sm.analysis import analyze as native_analyze
 
 
 def source_for(values, name="measurement", metadata=None):
@@ -91,6 +92,28 @@ def test_native_gaussian_effect_and_interval_match_reference():
     reference = sm.OLS(y, x).fit(cov_type="HC3").t_test([0, 2])
     np.testing.assert_allclose(effect["estimate"], reference.effect.item(), atol=1e-8)
     np.testing.assert_allclose([effect["ci_low"], effect["ci_high"]], reference.conf_int().ravel(), atol=1e-8)
+    assert "Wald z-test" in effect["method"]
+    assert "Wald chi-square test" in result["summary"]["tests"][0]["method"]
+    assert any("Checks whether this factor contributes" in line for line in result["summary"]["methods"])
+
+
+@pytest.mark.parametrize("robust", [False, True])
+def test_reported_gaussian_test_names_follow_native_reference_distributions(robust):
+    source = source_for(np.random.default_rng(9).normal(size=100).tolist())
+    config = StatsRequest(metric="measurement", factors=["Treatment"], family="gaussian").model_dump()
+    config["robust"] = robust
+    frame = prepare_frame(source, config)
+    output = native_analyze(frame, config)
+    x = np.column_stack([np.ones(100), np.where(np.arange(100) % 2 == 0, 1, -1)])
+    reference = sm.OLS(frame.outcome, x).fit(**({"cov_type": "HC3"} if robust else {}))
+    term = reference.wald_test([0, 1], scalar=True)
+    contrast = reference.t_test([0, 2])
+    row = output["tables"]["tests"].iloc[0]
+    effect = output["tables"]["contrasts"].iloc[0]
+    assert ("Wald F-test" if term.distribution == "F" else "Wald chi-square test") in row.p_method
+    assert ("Student's t-test" if contrast.distribution == "t" else "Wald z-test") in effect.p_method
+    np.testing.assert_allclose(row.p, float(term.pvalue))
+    np.testing.assert_allclose(effect.p, float(contrast.pvalue))
 
 
 @pytest.mark.parametrize("kind", ["binary", "count", "proportion", "positive", "ordinal"])
@@ -112,6 +135,17 @@ def test_nongaussian_comparisons_have_response_scale_uncertainty(kind):
     effect = result["summary"]["effects"][0]
     assert effect["ci_low"] < effect["ci_high"]
     assert 0 <= effect["p_adjusted"] <= 1
+    assert "Delta-method Wald z-test" in effect["method"]
+    assert "predicted average" in effect["purpose"]
+    assert effect["bootstrap_ci_low"] < effect["bootstrap_ci_high"]
+    assert result["summary"]["resampling"]["bootstrap"]["attempted"] == 20
+    assert result["summary"]["tests"][0]["permutation_p_adjusted"] is not None
+    html = render_html(dict(output=result))
+    assert effect["method"] in html
+    assert "Confidence intervals —" in html
+    assert "Analytic 95% interval" in html
+    assert "Bootstrap 95% interval" in html
+    assert "Permutation adjusted p" in html
     json.dumps(result, allow_nan=False)
 
 
@@ -181,7 +215,7 @@ def test_html_escapes_custom_labels_and_never_embeds_figures_or_scripts():
     assert "<svg" not in html and "<img" not in html
     assert "&lt;img src=x onerror=&quot;alert(1)&quot;&gt;" in html
     assert "Unit: &lt;svg&gt;" in html
-    assert "What ran and why" in html and "Adjusted p-value" in html
+    assert "What ran and why" in html and "Analytic adjusted p" in html
     assert "demo-snapshot" in html
 
 
@@ -400,3 +434,13 @@ def test_specialized_custom_models_are_checked_before_being_reported(kind):
     assert result["family"] == expected, result["summary"]["warnings"]
     assert result["validity"] == "valid"
     assert result["summary"]["effects"][0]["ci_low"] is not None
+    assert "Wald" in result["summary"]["tests"][0]["method"]
+    effect = result["summary"]["effects"][0]
+    assert "delta-method" in effect["interval_method"].lower()
+    assert "delta-method Wald z-test" in effect["method"]
+    assert effect["bootstrap_ci_low"] is not None
+    assert effect["bootstrap_ci_high"] > effect["bootstrap_ci_low"]
+    bootstrap = result["summary"]["resampling"]["bootstrap"]
+    assert "Parametric-bootstrap" in bootstrap["method"]
+    assert bootstrap["successful"] + bootstrap["failed"] == bootstrap["attempted"] == 20
+    assert result["summary"]["tests"][0]["permutation_p_adjusted"] is not None

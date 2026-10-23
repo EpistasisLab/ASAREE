@@ -33,9 +33,9 @@ class StatsRequest(BaseModel):
     denominator: str | None = None
     ordinal_levels: list[str] = Field(default_factory=list)
     max_order: int = Field(default=2, ge=1, le=3)
-    n_boot: int = Field(default=100, ge=20, le=5000)
+    n_boot: int = Field(default=1000, ge=20, le=5000)
     n_boot_lrt: int = Field(default=0, ge=0, le=1999)
-    n_perm: int = Field(default=999, ge=99, le=10000)
+    n_perm: int = Field(default=1999, ge=99, le=10000)
     seed: int = Field(default=20261016, ge=0, le=2**32 - 1)
     tweedie_power: float = Field(default=1.5, gt=1, lt=2)
     source_analysis_id: uuid.UUID | None = None

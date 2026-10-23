@@ -6,19 +6,21 @@
 h1,h2{line-height:1.25}table{border-collapse:collapse;width:100%;font-size:14px;margin:16px 0}
 th,td{border-bottom:1px solid #cbd5e1;text-align:left;padding:10px;vertical-align:top;overflow-wrap:anywhere}
 th{background:#eff3f6}pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px}
+.test-method{display:block;margin-top:4px;color:#526170;font-size:12px}
 @media print{body{margin:0;max-width:none}tr{break-inside:avoid}}</style></head>
 <body><h1>Statistical results: Success</h1>
 <p>Example yes/no success flag; this synthetic demo does not define a real success criterion.</p><p>Category coding: yes = 1; no = 0.</p><p>Reported probabilities refer to the category coded 1.</p>
 <p>Status: valid</p><p>SYNTHETIC DEMONSTRATION. Analyzed 240 runs for Success as a binary measurement.</p>
-<ul><li>Approach: no clear evidence of an effect.</li><li>Setting: no clear evidence of an effect.</li><li>Approach:Setting: no clear evidence of an effect.</li></ul>
-<h2>Statistical tests</h2><table><thead><tr><th scope='col'>Effect</th><th scope='col'>Adjusted p-value</th><th scope='col'>Result</th></tr></thead><tbody><tr><td>Approach</td><td>0.154</td><td>No clear evidence of an effect</td></tr><tr><td>Setting</td><td>1.000</td><td>No clear evidence of an effect</td></tr><tr><td>Approach:Setting</td><td>1.000</td><td>No clear evidence of an effect</td></tr></tbody></table>
-<h2>Comparisons</h2><table><thead><tr><th scope='col'>Comparison</th><th scope='col'>Estimate</th><th scope='col'>Scale</th><th scope='col'>95% interval</th><th scope='col'>Adjusted p-value</th><th scope='col'>Result</th></tr></thead><tbody><tr><td>Approach: Revised vs Standard</td><td>0.125</td><td>difference</td><td>0.0005577 to 0.2494</td><td>0.049</td><td>Evidence of a difference</td></tr><tr><td>Setting: Basic vs Extended</td><td>0.025</td><td>difference</td><td>-0.09944 to 0.1494</td><td>0.694</td><td>No clear evidence of a difference</td></tr><tr><td>Approach(Revised vs Standard) x Setting(Basic vs Extended)</td><td>0.05</td><td>difference in differences</td><td>-0.1989 to 0.2989</td><td>0.694</td><td>No clear evidence of a difference</td></tr></tbody></table>
+<ul><li>Approach: analytic — no clear evidence of an effect; permutation — no clear evidence in sensitivity check.</li><li>Setting: analytic — no clear evidence of an effect; permutation — no clear evidence in sensitivity check.</li><li>Approach:Setting: analytic — no clear evidence of an effect; permutation — unavailable.</li></ul>
+<h2>Statistical tests</h2><table><thead><tr><th scope='col'>Effect</th><th scope='col'>Analytic adjusted p</th><th scope='col'>Permutation adjusted p</th><th scope='col'>Analytic result</th></tr></thead><tbody><tr><td>Approach<small class="test-method">Wald chi-square test (HC0 robust covariance)</small></td><td>0.154</td><td>0.108<small class="test-method">No clear evidence in sensitivity check</small></td><td>No clear evidence of an effect</td></tr><tr><td>Setting<small class="test-method">Wald chi-square test (HC0 robust covariance)</small></td><td>1.000</td><td>0.761<small class="test-method">No clear evidence in sensitivity check</small></td><td>No clear evidence of an effect</td></tr><tr><td>Approach:Setting<small class="test-method">Wald chi-square test (HC0 robust covariance)</small></td><td>1.000</td><td>—<small class="test-method">Interaction permutation unavailable: exchangeable additive errors are not established for this non-Gaussian model.</small></td><td>No clear evidence of an effect</td></tr></tbody></table>
+<h2>Comparisons</h2><table><thead><tr><th scope='col'>Comparison</th><th scope='col'>Estimate</th><th scope='col'>Scale</th><th scope='col'>Analytic 95% interval</th><th scope='col'>Bootstrap 95% interval</th><th scope='col'>Analytic adjusted p</th><th scope='col'>Result</th></tr></thead><tbody><tr><td>Approach: Revised vs Standard<small class="test-method">Delta-method Wald z-test (HC0 robust covariance)</small></td><td>0.125</td><td>difference</td><td>0.0005577 to 0.2494</td><td>-1.499e-16 to 0.25<small class="test-method">Intervals differ; investigate</small></td><td>0.049</td><td>Evidence of a difference</td></tr><tr><td>Setting: Basic vs Extended<small class="test-method">Delta-method Wald z-test (HC0 robust covariance)</small></td><td>0.025</td><td>difference</td><td>-0.09944 to 0.1494</td><td>-0.1 to 0.1502<small class="test-method">Intervals agree</small></td><td>0.694</td><td>No clear evidence of a difference</td></tr><tr><td>Approach(Revised vs Standard) x Setting(Basic vs Extended)<small class="test-method">Delta-method Wald z-test (HC0 robust covariance)</small></td><td>0.05</td><td>difference in differences</td><td>-0.1989 to 0.2989</td><td>-0.2167 to 0.2833<small class="test-method">Intervals agree</small></td><td>0.694</td><td>No clear evidence of a difference</td></tr></tbody></table>
+<p>Bootstrap: 1000/1000 successful refits; 0 failed. Status: completed.</p><p>Permutation results are working-scale sensitivity checks and may test a different null hypothesis. See “What ran and why” for assumptions.</p>
 <p>A result without clear evidence does not establish that the effect is zero.
 Statistical evidence does not establish practical importance.</p>
-<details><summary>What ran and why</summary><ul><li>Binary outcomes are analyzed with a binomial model.</li><li>Selected model: binomial. Factors: Approach, Setting. Interactions included through order 2.</li><li>Comparisons are equally weighted differences or ratios of predicted means; 95% confidence intervals.</li><li>Factor tests evaluate model terms; comparisons evaluate predicted overall means. These can answer different questions for nonlinear or multipart models.</li><li>Differences subtract the second listed condition from the first; ratios divide the first by the second. The null value is 0 for differences and 1 for ratios. Interactions compare effects across settings.</li><li>Holm correction is applied across factor tests and within each factor&#x27;s comparison family. Separate metrics are not corrected together; cross-metric findings are exploratory.</li><li>String conversion: &#x27;yes&#x27; → 1, &#x27;no&#x27; → 0</li><li>Reported probabilities refer to the category coded 1; the codes do not imply a numeric rating.</li><li>statsmodels fits; HC3 covariance for Gaussian/lognormal models and HC0 for other models. Nonlinear comparison intervals use the delta method.</li></ul></details>
+<details><summary>What ran and why</summary><ul><li>Binary outcomes are analyzed with a binomial model.</li><li>Selected model: binomial. Factors: Approach, Setting. Interactions included through order 2.</li><li>Comparisons are equally weighted differences or ratios of predicted means; 95% confidence intervals.</li><li>Factor tests evaluate model terms; comparisons evaluate predicted overall means. These can answer different questions for nonlinear or multipart models.</li><li>Differences subtract the second listed condition from the first; ratios divide the first by the second. The null value is 0 for differences and 1 for ratios. Interactions compare effects across settings.</li><li>Holm correction is applied across factor tests and within each factor&#x27;s comparison family. Separate metrics are not corrected together; cross-metric findings are exploratory.</li><li>Analytic and permutation results are reported independently; neither is selected based on significance.</li><li>Permutation p-values are separately Holm-adjusted working-scale OLS sensitivity checks, not permutations of the model&#x27;s Wald statistic. Labels are exchanged within other-factor strata for main effects; interactions use approximate Freedman–Lane reduced-model residual permutation. These require exchangeability under the tested null, beyond independent runs. Nonlinear/multipart models and rank-based ordinal checks may test different null hypotheses; agreement is descriptive, not proof of validity.</li><li>Analytic and bootstrap intervals are pointwise 95% intervals, not multiplicity-adjusted. Their agreement compares whether they include the null; it is not a comparison with the Holm-adjusted p-value.</li><li>Bootstrap — Cell-stratified case bootstrap; fixed selected model; percentile intervals: 1000 requested, 1000 attempted, 1000 successful, 0 failed. Status: completed. Intervals require completion and at least 90% successful refits. The selected family is held fixed; model-selection uncertainty is not included.</li><li>Permutation — Approach: 1999 requested, 1999 completed; labels permuted within strata of Setting; working scale: response. Monte Carlo p-value uses (exceedances + 1)/(permutations + 1); minimum 0.0005.</li><li>Permutation — Setting: 1999 requested, 1999 completed; labels permuted within strata of Approach; working scale: response. Monte Carlo p-value uses (exceedances + 1)/(permutations + 1); minimum 0.0005.</li><li>Permutation — Approach:Setting: 1999 requested, 0 completed; Permutation withheld; working scale: response. Interaction permutation unavailable: exchangeable additive errors are not established for this non-Gaussian model.</li><li>Comparisons — Delta-method Wald z-test (HC0 robust covariance): Checks whether the difference between conditions changes across the other factor (null interaction = 0).</li><li>Comparisons — Delta-method Wald z-test (HC0 robust covariance): Checks whether the first condition&#x27;s predicted average differs from the second (null difference = 0).</li><li>Factor tests — Wald chi-square test (HC0 robust covariance): Checks whether the effect of one factor depends on the others in this interaction.</li><li>Factor tests — Wald chi-square test (HC0 robust covariance): Checks whether this factor contributes to the fitted model after accounting for other included terms.</li><li>Confidence intervals — Delta-method confidence interval: Approximates uncertainty in the predicted comparison using the fitted parameter covariance.</li><li>String conversion: &#x27;yes&#x27; → 1, &#x27;no&#x27; → 0</li><li>Reported probabilities refer to the category coded 1; the codes do not imply a numeric rating.</li><li>statsmodels fits; HC3 covariance for Gaussian/lognormal models and HC0 for other models. Nonlinear comparison intervals use the delta method.</li><li>Bootstrap intervals resample whole independent runs within each observed cell and refit the selected model. Factor values and trial totals stay attached to their runs.</li></ul></details>
 <h2>Limitations and exclusions</h2><ul><li>DEMONSTRATION: synthetic data, not results from a real experiment.</li><li>Measurement type detected as binary from producer context and observed values.</li><li>Inference assumes independent runs and is conditional on the observed experimental inputs.</li></ul>
 <details><summary>Reproducibility</summary>
-<p>Analysis: synthetic-demo-2 · Created: 2026-10-23T03:23:14.067772+00:00</p>
+<p>Analysis: synthetic-demo-2 · Created: 2026-10-23T04:04:09.463919+00:00</p>
 <pre>{
   &quot;fingerprint&quot;: &quot;888ec1ecca061606345ce2305ce6654d13385920889a9b0accae19c538501f7a&quot;,
   &quot;design_revision&quot;: 1,
@@ -28,7 +30,7 @@ Statistical evidence does not establish practical importance.</p>
     &quot;scipy&quot;: &quot;1.18.0&quot;,
     &quot;statsmodels&quot;: &quot;0.14.6&quot;
   },
-  &quot;policy_version&quot;: 1,
+  &quot;policy_version&quot;: 2,
   &quot;candidates&quot;: [
     {
       &quot;family&quot;: &quot;binomial&quot;,
@@ -44,6 +46,70 @@ Statistical evidence does not establish practical importance.</p>
     &quot;Setting&quot;: [
       &quot;Basic&quot;,
       &quot;Extended&quot;
+    ]
+  },
+  &quot;resampling&quot;: {
+    &quot;bootstrap&quot;: {
+      &quot;kind&quot;: &quot;bootstrap&quot;,
+      &quot;method&quot;: &quot;Cell-stratified case bootstrap; fixed selected model; percentile intervals&quot;,
+      &quot;requested&quot;: 1000,
+      &quot;attempted&quot;: 1000,
+      &quot;successful&quot;: 1000,
+      &quot;failed&quot;: 0,
+      &quot;status&quot;: &quot;completed&quot;,
+      &quot;seed&quot;: 20261016,
+      &quot;seed_stream&quot;: 1101,
+      &quot;minimum_success_fraction&quot;: 0.9
+    },
+    &quot;permutations&quot;: [
+      {
+        &quot;term&quot;: &quot;factor_0&quot;,
+        &quot;statistic&quot;: &quot;Type III F (OLS, working scale)&quot;,
+        &quot;F_obs&quot;: 3.8113695090437956,
+        &quot;df1&quot;: 1.0,
+        &quot;df2&quot;: 236.0,
+        &quot;n_perm&quot;: 1999,
+        &quot;p_perm&quot;: 0.054,
+        &quot;method&quot;: &quot;labels permuted within strata of factor_1&quot;,
+        &quot;log10_distinct_permutations&quot;: 69.9700882968786,
+        &quot;reason&quot;: &quot;&quot;,
+        &quot;p_holm&quot;: 0.108,
+        &quot;working_scale&quot;: &quot;response&quot;,
+        &quot;seed&quot;: 20261016,
+        &quot;seed_stream&quot;: 2202
+      },
+      {
+        &quot;term&quot;: &quot;factor_1&quot;,
+        &quot;statistic&quot;: &quot;Type III F (OLS, working scale)&quot;,
+        &quot;F_obs&quot;: 0.15245478036173332,
+        &quot;df1&quot;: 1.0,
+        &quot;df2&quot;: 236.0,
+        &quot;n_perm&quot;: 1999,
+        &quot;p_perm&quot;: 0.761,
+        &quot;method&quot;: &quot;labels permuted within strata of factor_0&quot;,
+        &quot;log10_distinct_permutations&quot;: 69.9700882968786,
+        &quot;reason&quot;: &quot;&quot;,
+        &quot;p_holm&quot;: 0.761,
+        &quot;working_scale&quot;: &quot;response&quot;,
+        &quot;seed&quot;: 20261016,
+        &quot;seed_stream&quot;: 2202
+      },
+      {
+        &quot;term&quot;: &quot;factor_0:factor_1&quot;,
+        &quot;statistic&quot;: &quot;Type III F (OLS, working scale)&quot;,
+        &quot;F_obs&quot;: null,
+        &quot;df1&quot;: null,
+        &quot;df2&quot;: null,
+        &quot;n_perm&quot;: 0,
+        &quot;p_perm&quot;: null,
+        &quot;method&quot;: &quot;Permutation withheld&quot;,
+        &quot;log10_distinct_permutations&quot;: null,
+        &quot;reason&quot;: &quot;Interaction permutation unavailable: exchangeable additive errors are not established for this non-Gaussian model.&quot;,
+        &quot;p_holm&quot;: null,
+        &quot;working_scale&quot;: &quot;response&quot;,
+        &quot;seed&quot;: 20261016,
+        &quot;seed_stream&quot;: 2202
+      }
     ]
   }
 }</pre>

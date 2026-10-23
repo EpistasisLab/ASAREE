@@ -130,6 +130,40 @@ or other non-rankable values with `legacy.unknown` provenance when their
 original producer was never recorded; choose an explicit producer before
 running that legacy declaration again.
 
+### Automatic statistics reports
+
+On **Statistics**, choose an experiment and **Analyze all metrics**. New reports
+show analytic factor-test p-values alongside separately Holm-adjusted permutation
+sensitivity p-values, and analytic comparison intervals alongside bootstrap
+intervals. Defaults are 1,000 bootstrap refits and 1,999 permutations per term.
+Existing saved reports must be rerun to include the new results.
+
+Native-model intervals use a cell-stratified bootstrap of independent runs;
+specialized custom models retain their parametric bootstrap. Model selection is
+held fixed. Bootstrap intervals require all requested attempts and at least 90%
+successful refits; native refitting has a 60-second budget per metric and reports
+incomplete attempts explicitly. Analytic results remain available if resampling
+cannot produce a reliable interval.
+
+Permutation checks use working-scale OLS statistics, not the model's Wald
+statistic. Main effects use within-other-factor-stratum exchanges; interactions
+use approximate Freedman–Lane residual permutation. Exchangeability is an extra
+assumption: agreement does not validate a model, and different methods can test
+different null hypotheses. Known paired/repeated designs are withheld until a
+dependence model is supported; unequal trial totals withhold proportion
+permutation checks. Residual-permutation interaction checks are withheld for
+non-Gaussian models and when Gaussian cell variances show strong heterogeneity.
+Passing that screen does not prove exchangeability. Pointwise intervals are not multiplicity-adjusted, and
+separate metrics are exploratory rather than jointly corrected.
+
+**Download HTML report** includes the same results, test names, rationale,
+requested/completed/failed counts, seed, and limitations. No figures are generated.
+To regenerate the labeled synthetic examples without a database or credentials:
+
+```bash
+python scripts/stats_example.py artifacts/statistics-demo
+```
+
 ## Everyday commands
 
 ```bash

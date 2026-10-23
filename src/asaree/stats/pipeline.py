@@ -196,6 +196,15 @@ def analyze_outcome(df, cfg: AnalysisConfig, o, levels, block_levels, terms, cfa
         )
     multi_part = len(model.regression_blocks) > 1
     con_est, con_se, con_p = response_contrast_wald(model, fit, pred, qset)
+    # Retain analytic intervals alongside the existing parametric-bootstrap intervals.
+    con_bounds = con_est[None, :] + np.array([-1.959963984540054, 1.959963984540054])[:, None] * con_se
+    if model.family.effect_scale == "ratio":
+        con_bounds = np.exp(con_bounds)
+    analytic_low = np.full(len(q), np.nan)
+    analytic_high = np.full(len(q), np.nan)
+    analytic_low[qset.contrast_slice()] = con_bounds[0]
+    analytic_high[qset.contrast_slice()] = con_bounds[1]
+    q["analytic_ci_low"], q["analytic_ci_high"] = analytic_low, analytic_high
     con_lookup = {(c.family, c.label): k for k, c in enumerate(contrasts)}
     tests = []
     for fam_name, hyps in hyp_fams:
@@ -232,8 +241,11 @@ def analyze_outcome(df, cfg: AnalysisConfig, o, levels, block_levels, terms, cfa
             "equal-overall-mean null is nonlinear in the parameters)"
         )
     tests["p_primary_holm"] = np.nan
+    tests["p_response_holm"] = np.nan
     for _fam_name, idx in tests.groupby("family").groups.items():
         tests.loc[idx, "p_primary_holm"] = holm(tests.loc[idx, "p_primary"].to_numpy())
+        if _fam_name not in {"terms", "covariates"}:
+            tests.loc[idx, "p_response_holm"] = holm(tests.loc[idx, "p_wald_response_hc3"].to_numpy())
     tests["significant_primary"] = tests.p_primary_holm < cfg.alpha
     out.tables["tests"] = tests
 
@@ -296,6 +308,8 @@ def _bootstrap_lrt(model, fit, hyp_fams, tests, cfg, seed_seq, name, skip=frozen
     tests["p_lr_chi2"] = np.nan
     tests["p_boot_lrt"] = np.nan
     tests["n_boot_lrt"] = 0
+    tests["n_boot_lrt_attempted"] = 0
+    tests["n_boot_lrt_failed"] = 0
     tests["p_method"] = ""
     budget = cfg.boot_lrt_time_budget_s
     jobs = effective_jobs(cfg.n_jobs)
@@ -335,6 +349,8 @@ def _bootstrap_lrt(model, fit, hyp_fams, tests, cfg, seed_seq, name, skip=frozen
             p, nok, nfail = b.run(cfg.n_boot_lrt, s, cfg.n_jobs)
             tests.loc[i, "p_boot_lrt"] = p
             tests.loc[i, "n_boot_lrt"] = nok
+            tests.loc[i, "n_boot_lrt_attempted"] = nok + nfail
+            tests.loc[i, "n_boot_lrt_failed"] = nfail
             tests.loc[i, "p_method"] = "parametric bootstrap LRT (null model)" + (
                 f"; {nfail} failed refits" if nfail else ""
             )

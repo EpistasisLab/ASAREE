@@ -1,0 +1,125 @@
+"""Checks for fixed-family bootstrap execution and permutation report contracts."""
+
+import numpy as np
+import pandas as pd
+import pytest
+import statsmodels.api as sm
+
+from asaree.services.stats_prototypes import StatsRequest, compute
+from asaree.services.stats_resampling import native_permutations
+from asaree.stats_sm.resampling import bootstrap_intervals
+
+
+def bootstrap_input():
+    group = np.repeat(["A", "B"], [24, 36])
+    x = np.column_stack((np.ones(len(group)), np.where(group == "A", 1, -1)))
+    y = np.random.default_rng(4).normal(size=len(group)) + (group == "B")
+    frame = pd.DataFrame(dict(factor_0=group, outcome=y))
+    config = StatsRequest(metric="value", factors=["Treatment"], n_boot=20, n_perm=99).model_dump()
+    grid = np.array([[1, 1], [1, -1]])
+    weights = [[np.array([1, 0]), np.array([0, 1])]]
+    return frame, x, y, grid, weights, config
+
+
+def test_bootstrap_matches_independent_native_refits_and_preserves_cell_counts():
+    frame, x, y, grid, weights, config = bootstrap_input()
+    bounds, metadata = bootstrap_intervals(frame, x, y, grid, weights, "gaussian", config, False)
+    rng = np.random.default_rng(np.random.SeedSequence([config["seed"], 1101]))
+    reference = []
+    for _ in range(20):
+        a = rng.choice(np.arange(24), size=24, replace=True)
+        b = rng.choice(np.arange(24, 60), size=36, replace=True)
+        indices = np.concatenate((a, b))
+        means = sm.OLS(y[indices], x[indices]).fit().predict(grid)
+        reference.append(means[0] - means[1])
+    np.testing.assert_allclose(bounds.iloc[0], np.quantile(reference, [0.025, 0.975]))
+    assert metadata["status"] == "completed"
+    assert metadata["successful"] == metadata["attempted"] == 20
+    assert metadata["failed"] == 0
+
+
+@pytest.mark.parametrize("failure", ["fit", "budget"])
+def test_incomplete_bootstrap_has_counts_and_no_intervals(monkeypatch, failure):
+    frame, x, y, grid, weights, config = bootstrap_input()
+    if failure == "budget":
+        config["_bootstrap_budget_s"] = 0
+    else:
+
+        def fail(*args, **kwargs):
+            raise ValueError("Deliberate refit failure")
+
+        monkeypatch.setattr("asaree.stats_sm.analysis.fit_model", fail)
+    bounds, metadata = bootstrap_intervals(frame, x, y, grid, weights, "gaussian", config, False)
+    assert bounds.isna().all().all()
+    assert metadata["status"] != "completed"
+    assert metadata["successful"] == 0
+    assert metadata["failed"] == metadata["attempted"] == (20 if failure == "fit" else 0)
+
+
+def test_factorial_permutations_have_adjusted_p_counts_and_reproducible_stream():
+    frame, _, _, _, _, config = bootstrap_input()
+    frame["factor_1"] = np.tile(["C", "D"], 30)
+    config.update(factors=["Treatment", "Setting"], family="gaussian")
+    first, reason = native_permutations(frame, config)
+    second, _ = native_permutations(frame, config)
+    assert reason is None
+    assert first == second
+    assert {row["term"] for row in first} == {"factor_0", "factor_1", "factor_0:factor_1"}
+    for row in first:
+        assert row["n_perm"] == 99
+        assert 0.01 <= row["p_perm"] <= row["p_holm"] <= 1
+    assert "Freedman-Lane" in first[-1]["method"]
+
+
+def test_unequal_trial_totals_explain_why_permutation_is_withheld():
+    frame, _, _, _, _, config = bootstrap_input()
+    frame["trials"] = np.tile([10, 20], 30)
+    config.update(denominator="trials", family="binomial")
+    rows, reason = native_permutations(frame, config)
+    assert rows == []
+    assert "unequal trial totals" in reason
+
+
+def test_nongaussian_interaction_permutation_is_withheld_instead_of_assuming_exchangeable_errors():
+    frame, _, _, _, _, config = bootstrap_input()
+    frame["factor_1"] = np.tile(["C", "D"], 30)
+    config.update(factors=["Treatment", "Setting"], family="gamma")
+    rows, reason = native_permutations(frame, config)
+    assert reason is None
+    assert all(np.isfinite(row["p_holm"]) for row in rows[:2])
+    assert np.isnan(rows[-1]["p_holm"])
+    assert rows[-1]["n_perm"] == 0
+    assert "non-Gaussian" in rows[-1]["reason"]
+
+
+def test_automatic_report_preserves_analytic_inference_when_bootstrap_cannot_finish(monkeypatch):
+    from asaree.stats_sm import resampling
+
+    actual = resampling.bootstrap_intervals
+
+    def no_budget(frame, x, y, grid, weights, family, config, ratio, trials):
+        return actual(frame, x, y, grid, weights, family, dict(config, _bootstrap_budget_s=0), ratio, trials)
+
+    monkeypatch.setattr(resampling, "bootstrap_intervals", no_budget)
+    frame, _, y, _, _, config = bootstrap_input()
+    source = dict(
+        rows=[
+            dict(id=str(i), replicate=i + 1, factors={"Treatment": frame.factor_0[i]}, metrics={"value": value})
+            for i, value in enumerate(y)
+        ],
+        fingerprint="snapshot",
+        metric_metadata={},
+        design_revision=1,
+        design_revision_id="revision",
+        excluded_row_replicates=0,
+    )
+    result = compute("stats_sm", source, config)
+    assert result["validity"] == "valid"
+    summary = result["summary"]
+    assert summary["resampling"]["bootstrap"]["attempted"] == 0
+    effect = summary["effects"][0]
+    assert effect["ci_low"] is not None
+    assert effect["p_adjusted"] is not None
+    assert effect["bootstrap_ci_low"] is None
+    assert "budget" in effect["bootstrap_status"]
+    assert summary["tests"][0]["permutation_p_adjusted"] is not None

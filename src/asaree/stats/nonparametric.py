@@ -240,7 +240,9 @@ def log10_n_permutations(strata: np.ndarray, groups: np.ndarray) -> float:
     return float(tot / np.log(10))
 
 
-def permutation_tests(w, df, builder: DesignBuilder, n_perm: int, rng, batch: int = 1000) -> pd.DataFrame:
+def permutation_tests(
+    w, df, builder: DesignBuilder, n_perm: int, rng, batch: int = 1000, skip_terms=None
+) -> pd.DataFrame:
     """Design-preserving permutation tests for every model term (OLS Type III F on working scale).
 
     Main effects (no continuous covariates): the factor's labels are permuted within
@@ -255,6 +257,21 @@ def permutation_tests(w, df, builder: DesignBuilder, n_perm: int, rng, batch: in
     rows = []
     for t in s.terms + [(c,) for c in s.covariates]:
         name = term_name(t)
+        if skip_terms and name in skip_terms:
+            rows.append(
+                dict(
+                    term=name,
+                    statistic="Type III F (OLS, working scale)",
+                    F_obs=np.nan,
+                    df1=np.nan,
+                    df2=np.nan,
+                    n_perm=0,
+                    p_perm=np.nan,
+                    method="Permutation withheld",
+                    reason=skip_terms[name],
+                )
+            )
+            continue
         cols = builder.term_columns[name]
         red = OLS(_drop(X, cols))
         F_obs, d1, d2 = f_statistic(full, red, w)
@@ -262,15 +279,19 @@ def permutation_tests(w, df, builder: DesignBuilder, n_perm: int, rng, batch: in
             others = [f for f in s.factors if f != t[0]] + s.blocks
             strata = stratum_index(df, others)
             method = f"labels permuted within strata of {' x '.join(others) if others else '(none)'}"
+
             def gen(k, strata=strata):
                 return _within_strata_perms(strata, k, rng, w)
+
             npos = log10_n_permutations(strata, df[t[0]].to_numpy())
         else:
             fitted = red.X @ (red.pinv @ w)
             e = w - fitted
             method = "Freedman-Lane residual permutation" + (f" within {' x '.join(s.blocks)}" if s.blocks else "")
+
             def gen(k, e=e, fitted=fitted):
                 return fitted[:, None] + _within_strata_perms(blocks_idx, k, rng, e)
+
             npos = log10_n_permutations(blocks_idx, np.arange(len(w)))
         count, done = 0, 0
         while done < n_perm:

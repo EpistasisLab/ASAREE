@@ -262,14 +262,13 @@ def choose(table: pd.DataFrame, fitted: dict, spec: OutcomeSpec) -> tuple[str | 
     if ok is None or len(ok) == 0:
         return None, "no candidate could be fitted"
     if spec.family:
+        selected = ok[ok.family == spec.family]
+        if selected.empty or not bool(selected.iloc[0].converged) or not bool(selected.iloc[0].hessian_pd):
+            return None, "the requested model did not converge with usable information"
         return spec.family, "family forced by the outcome specification"
     usable = ok[(ok.converged) & (ok.hessian_pd)]
     if len(usable) == 0:
-        best = ok.sort_values("aic").iloc[0]
-        return best.family, (
-            "no candidate converged with a positive-definite information matrix; "
-            f"lowest-AIC fit ({best.family}) retained and FLAGGED FOR REVIEW"
-        )
+        return None, "no candidate converged with a positive-definite information matrix"
     usable = usable.assign(delta_aic=usable.aic - usable.aic.min())
     clean = usable[~usable.severe_flags]
     pool = clean if len(clean) else usable

@@ -12,8 +12,7 @@ import { cn } from '@/lib/utils'
 
 const NAV_LINKS = [
   { to: '/experiments', label: 'Experiments' },
-  { to: '/stats', label: 'Stats' },
-  { to: '/stats_sm', label: 'Stats SM' },
+  { to: '/statistics', label: 'Statistics' },
 ]
 
 export function AppHeader() {

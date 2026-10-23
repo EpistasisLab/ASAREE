@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Activity, ArrowLeftRight, Play } from 'lucide-react';
 import { experimentsApi, statsApi } from '@/api/client';
 import { AppHeader } from '@/components/AppHeader';
+import { StatisticsReport } from '@/components/stats/StatisticsReport';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -200,6 +201,7 @@ function AnalysisOutput({
   const [table, setTable] = useState('cell_means');
   const output = analysis.output;
   if (!output || analysis.status !== 'completed') return null;
+  if (output.summary) return <StatisticsReport analysis={analysis} experiment={experiment} />;
   const keys = Object.keys(output.tables);
   const selected = keys.includes(table) ? table : keys[0];
   const other = analysis.backend === 'stats' ? 'stats_sm' : 'stats';

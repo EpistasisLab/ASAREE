@@ -41,5 +41,26 @@ export interface StatsAnalysis {
     notes: string[]
     unavailable: { title: string; reason: string; reference: string }[]
     report?: string
+    validity?: 'valid' | 'unreliable' | 'unavailable'
+    summary?: StatsSummary
   }
+}
+
+export interface StatsSummary {
+  metric_info?: { description: string; unit: string | null; coding: string[] }
+  metric_definition?: { description?: string; unit?: string }
+  version: number
+  metric: string
+  status: 'valid' | 'unreliable' | 'unavailable'
+  description: string
+  findings: string[]
+  tests: { effect: string; p_adjusted: number | null; result: string }[]
+  effects: {
+    comparison: string; estimate: number | null; scale: string
+    unit?: string | null
+    ci_low: number | null; ci_high: number | null; p_adjusted: number | null; result: string
+  }[]
+  warnings: string[]
+  methods: string[]
+  provenance: Record<string, unknown>
 }

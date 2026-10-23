@@ -417,6 +417,7 @@ def compare_methods(t: dict, alpha: float) -> dict:
         g["agreement"] = np.where(
             flags.all(axis=1), "all significant", np.where(~flags.any(axis=1), "none significant", "methods disagree")
         )
+        g.loc[g[sig].isna().any(axis=1), "agreement"] = "incomplete inference"
         out["comparison_terms"] = g
     if "contrasts" in t and "artc_contrasts" in t:
         c = t["contrasts"][
@@ -439,6 +440,7 @@ def compare_methods(t: dict, alpha: float) -> dict:
                 np.where(gs & as_, "both significant, OPPOSITE direction", "methods disagree"),
             ),
         )
+        m.loc[m[["p_primary_holm", "artc_p_holm"]].isna().any(axis=1), "agreement"] = "incomplete inference"
         out["comparison_contrasts"] = m
     if "comparison_terms" in out or "comparison_contrasts" in out:
         rows = []

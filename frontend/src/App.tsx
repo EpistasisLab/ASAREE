@@ -6,6 +6,7 @@ import { RegisterPage } from '@/pages/RegisterPage'
 import { ProfilePage } from '@/pages/ProfilePage'
 import { ExperimentsPage } from '@/pages/ExperimentsPage'
 import { StatsPrototypePage } from '@/pages/StatsPrototypePage'
+import { StatisticsPage } from '@/pages/StatisticsPage'
 import { ProtocolCanvasPage } from '@/pages/ProtocolCanvasPage'
 import { McpOAuthCallbackPage } from '@/pages/McpOAuthCallbackPage'
 
@@ -23,6 +24,7 @@ export function App() {
           <Route path="/profile" element={<ProfilePage />} />
           <Route path="/experiments" element={<ExperimentsPage />} />
           <Route path="/stats" element={<StatsPrototypePage backend="stats" />} />
+          <Route path="/statistics" element={<StatisticsPage />} />
           <Route path="/stats_sm" element={<StatsPrototypePage backend="stats_sm" />} />
           {/* There is no separate static experiment detail page anymore -- the
               protocol canvas (with its Design/Cells/Runs/Results side panel) IS

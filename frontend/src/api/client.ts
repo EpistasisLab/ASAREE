@@ -180,6 +180,10 @@ export const authApi = {
 }
 
 export const statsApi = {
+  automatic: (experiment: string) => request<StatsAnalysis[]>(`/stats-prototypes/${experiment}/automatic-analyses`, {
+    method: 'POST',
+  }),
+  report: (experiment: string, id: string) => requestBlob(`/stats-prototypes/${experiment}/analyses/${id}/report`),
   capabilities: (backend: StatsBackend) => request<{ families: string[]; unavailable: { title: string; reason: string; reference: string }[] }>(`/stats-prototypes/capabilities?backend=${backend}`),
   source: (experiment: string) => request<StatsSource>(`/stats-prototypes/${experiment}/source`),
   history: (experiment: string, backend: StatsBackend) =>

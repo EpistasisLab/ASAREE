@@ -22,7 +22,7 @@ async def check_stale_stats(ctx: dict) -> None:
             update(StatsAnalysis)
             .where(
                 or_(
-                    (StatsAnalysis.status == "pending") & (StatsAnalysis.updated_at < now - timedelta(minutes=15)),
+                    (StatsAnalysis.status == "pending") & (StatsAnalysis.updated_at < now - timedelta(minutes=65)),
                     (StatsAnalysis.status == "running") & (StatsAnalysis.updated_at < now - timedelta(minutes=35)),
                 )
             )

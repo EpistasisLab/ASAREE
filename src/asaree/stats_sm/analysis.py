@@ -13,6 +13,7 @@ import numpy as np
 import pandas as pd
 import patsy
 import statsmodels.api as sm
+from scipy import stats
 from sklearn.linear_model import TweedieRegressor
 from statsmodels.discrete.count_model import ZeroInflatedNegativeBinomialP, ZeroInflatedPoisson
 from statsmodels.miscmodels.ordinal_model import OrderedModel
@@ -45,10 +46,6 @@ UNAVAILABLE = [
     ("ART / ART-C", "No mapping in statsmodels or scikit-learn."),
     ("Design-preserving permutation tests", "The original stratified / Freedman–Lane orchestration is custom."),
     ("Cross-method agreement and effect stability", "These depend on the original custom sensitivity pipeline."),
-    (
-        "Response-scale contrast intervals",
-        "Shown only for Gaussian linear contrasts. Marginal intervals also use native GLM prediction where supported.",
-    ),
 ]
 
 
@@ -70,12 +67,17 @@ def analyze(frame: pd.DataFrame, config: dict) -> dict:
         raise ValueError("Design is rank deficient or has too few residual observations; lower interaction order.")
     cells = pd.DataFrame(itertools.product(*[sorted(data[a].unique()) for a in aliases]), columns=aliases)
     grid = np.asarray(patsy.build_design_matrices([design.design_info], cells)[0])
-    notes = ["Model-based inference; no custom HC3 or bootstrap. Marginal means weight factorial cells equally."]
+    notes = [
+        "Native covariance inference; nonlinear comparison intervals use the delta method. "
+        "Marginal means weight factorial cells equally."
+    ]
     notes.append(
         "Design columns use patsy sum coding: "
         + ", ".join(f"{alias} = {name}" for alias, name in zip(aliases, factors, strict=True))
     )
     tables = {}
+    robust = config.get("robust", False)
+    fit_options = {"cov_type": "HC0"} if robust else {}
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
         if family == "tweedie":
@@ -94,21 +96,23 @@ def analyze(frame: pd.DataFrame, config: dict) -> dict:
             if family in ("gaussian", "lognormal"):
                 if family == "lognormal" and np.any(y <= 0):
                     raise ValueError("Log-normal requires positive outcomes.")
-                result = sm.OLS(np.log(y) if family == "lognormal" else y, x).fit()
+                result = sm.OLS(np.log(y) if family == "lognormal" else y, x).fit(
+                    **({"cov_type": "HC3"} if robust else {})
+                )
             elif family == "negbin":
-                result = sm.NegativeBinomial(y, x, loglike_method="nb2").fit(disp=0, maxiter=500)
+                result = sm.NegativeBinomial(y, x, loglike_method="nb2").fit(disp=0, maxiter=500, **fit_options)
             elif family in ("zip", "zinb"):
                 cls = ZeroInflatedPoisson if family == "zip" else ZeroInflatedNegativeBinomialP
-                result = cls(y, x, exog_infl=np.ones((len(y), 1))).fit(disp=0, maxiter=500)
+                result = cls(y, x, exog_infl=np.ones((len(y), 1))).fit(disp=0, maxiter=500, **fit_options)
             elif family == "beta":
-                result = BetaModel(y, x).fit(method="bfgs", gtol=1e-9, disp=0, maxiter=500)
+                result = BetaModel(y, x).fit(method="bfgs", gtol=1e-9, disp=0, maxiter=500, **fit_options)
             elif family == "ordinal_logit":
                 levels = config["ordinal_levels"]
                 codes = pd.Series(frame["outcome_raw"]).map({v: i for i, v in enumerate(levels)})
                 if codes.isna().any() or len(levels) < 2:
                     raise ValueError("Declare every ordinal level in order.")
                 y = codes.to_numpy(float)
-                result = OrderedModel(y, x[:, 1:], distr="logit").fit(method="bfgs", disp=0, maxiter=500)
+                result = OrderedModel(y, x[:, 1:], distr="logit").fit(method="bfgs", disp=0, maxiter=500, **fit_options)
             else:
                 families = {
                     "gamma": sm.families.Gamma(sm.families.links.Log()),
@@ -119,7 +123,7 @@ def analyze(frame: pd.DataFrame, config: dict) -> dict:
                 if family == "binomial" and config.get("denominator"):
                     trials = frame["trials"].to_numpy(float)
                     response = np.column_stack((y, trials - y))
-                result = sm.GLM(response, x, family=families[family]).fit()
+                result = sm.GLM(response, x, family=families[family]).fit(**fit_options)
 
             def predict(matrix):
                 if family in ("zip", "zinb"):
@@ -158,8 +162,66 @@ def analyze(frame: pd.DataFrame, config: dict) -> dict:
                 )
             )
             converged = getattr(result, "converged", getattr(result, "mle_retvals", {}).get("converged", True))
+            try:
+                covariance = np.asarray(result.cov_params())
+            except ValueError:
+                covariance = np.full((len(result.params), len(result.params)), np.nan)
+            usable = bool(
+                converged
+                and np.isfinite(result.params).all()
+                and np.isfinite(covariance).all()
+                and np.all(np.diag(covariance) > 0)
+                and np.isfinite(means).all()
+                and np.isfinite(result.llf)
+                and np.isfinite(result.aic)
+            )
+            if usable:
+                usable = bool(np.linalg.eigvalsh((covariance + covariance.T) / 2).min() > 0)
+            if family in ("binomial", "beta") and np.any((fitted < 1e-8) | (fitted > 1 - 1e-8)):
+                usable = False
+                notes.append("Boundary probabilities or separation make inference unreliable.")
+            if family not in ("gaussian", "lognormal", "gamma") and np.max(np.abs(result.params)) > 30:
+                usable = False
+                notes.append("Extreme parameters suggest separation or a boundary fit.")
+            diagnostic = dict(family=family, severe=False, flags="")
+            flags = []
+            if family in ("gaussian", "lognormal") and len(y) >= 20:
+                residual = np.asarray(result.resid)
+                diagnostic["residual_skewness"] = float(stats.skew(residual))
+                diagnostic["residual_normality_p"] = float(stats.normaltest(residual).pvalue)
+                if diagnostic["residual_normality_p"] < 0.001 and abs(diagnostic["residual_skewness"]) > 1:
+                    flags.append("Residuals are strongly skewed for this Gaussian assumption.")
+                    diagnostic["severe"] = True
+            pearson = getattr(result, "resid_pearson", None)
+            if pearson is not None and result.df_resid > 0:
+                diagnostic["pearson_dispersion"] = float(np.sum(np.asarray(pearson) ** 2) / result.df_resid)
+                if family in ("poisson", "binomial") and diagnostic["pearson_dispersion"] > 3:
+                    flags.append("Residual variation substantially exceeds this model's variance assumption.")
+                    diagnostic["severe"] = True
+            diagnostic["flags"] = " ".join(flags)
+            tables["diagnostics"] = pd.DataFrame([diagnostic])
+            # Advanced manual runs retain diagnostic flags. Automatic selection
+            # excludes these failed assumptions, in addition to numerical failures.
+            if robust and diagnostic["severe"]:
+                usable = False
+            notes.extend(flags)
             tables["model_fit"] = pd.DataFrame(
-                [dict(family=family, n=len(y), loglik=result.llf, aic=result.aic, bic=result.bic, converged=converged)]
+                [
+                    dict(
+                        family=family,
+                        n=len(y),
+                        loglik=result.llf,
+                        aic=result.aic,
+                        bic=result.bic,
+                        converged=converged,
+                        usable=usable,
+                        covariance="HC3"
+                        if robust and family in ("gaussian", "lognormal")
+                        else "HC0"
+                        if robust
+                        else "model-based",
+                    )
+                ]
             )
             if family in ("gaussian", "lognormal"):
                 notes.append(
@@ -205,7 +267,7 @@ def analyze(frame: pd.DataFrame, config: dict) -> dict:
     ]
     cell_table = cells.rename(columns=dict(zip(aliases, factors, strict=True))).copy()
     cell_table["label"], cell_table["estimate"] = labels, means
-    if result is not None and family in ("gaussian", "gamma", "poisson", "binomial"):
+    if result is not None and usable and family in ("gaussian", "gamma", "poisson", "binomial"):
         ci = np.asarray(result.get_prediction(grid).conf_int())
         cell_table["ci_low"], cell_table["ci_high"] = ci[:, 0], ci[:, 1]
     tables["cell_means"] = cell_table
@@ -215,15 +277,60 @@ def analyze(frame: pd.DataFrame, config: dict) -> dict:
     def summarize(weights, label, **meta):
         estimate = float(weights @ means)
         row = dict(label=label, estimate=estimate, **meta)
-        if family == "gaussian":
+        if family == "gaussian" and usable:
             test = result.t_test(weights @ grid)
             ci = np.asarray(test.conf_int()).ravel()
             row.update(ci_low=float(ci[0]), ci_high=float(ci[1]), p=float(np.asarray(test.pvalue).item()))
-        elif family in ("gamma", "poisson", "binomial") and np.all(weights >= 0):
+        elif family in ("gamma", "poisson", "binomial") and usable and np.all(weights >= 0):
             # statsmodels itself averages nonlinear predictions and propagates their covariance.
             ci = np.asarray(result.get_prediction(grid[weights > 0], which="mean", average=True).conf_int()).ravel()
             row.update(ci_low=float(ci[0]), ci_high=float(ci[1]))
         return row
+
+    def response_interval(weights, estimate, ratio_scale=False):
+        """Delta-method inference for the reported response-scale quantity.
+
+        Perturb parameters through the native prediction API. Work on log ratios
+        to keep ratio intervals positive; never substitute coefficient tests.
+        """
+        if not usable:
+            return {}
+        params = np.asarray(result.params).copy()
+
+        def quantity(theta):
+            matrix = grid[:, 1:] if family == "ordinal_logit" else grid
+            kwargs = {"exog_infl": np.ones((len(grid), 1))} if family in ("zip", "zinb") else {}
+            values = np.asarray(result.model.predict(theta, matrix, **kwargs))
+            if family == "ordinal_logit":
+                values = values @ np.arange(1, len(config["ordinal_levels"]) + 1)
+            elif family == "lognormal":
+                values = np.exp(values + np.sum(result.resid**2) / len(y) / 2)
+            pieces = np.asarray([w @ values for w in weights])
+            if ratio_scale:
+                if np.any(pieces <= 0):
+                    return np.nan
+                return (
+                    np.log(pieces[0])
+                    - np.log(pieces[1])
+                    - (np.log(pieces[2]) - np.log(pieces[3]) if len(pieces) == 4 else 0)
+                )
+            return pieces[0] - pieces[1] - (pieces[2] - pieces[3] if len(pieces) == 4 else 0)
+
+        gradient = np.empty(len(params))
+        for k in range(len(params)):
+            step = 1e-5 * (1 + abs(params[k]))
+            delta = np.zeros(len(params))
+            delta[k] = step
+            gradient[k] = (quantity(params + delta) - quantity(params - delta)) / (2 * step)
+        variance = float(gradient @ np.asarray(result.cov_params()) @ gradient)
+        if not np.isfinite(variance) or variance <= 0:
+            return {}
+        se = np.sqrt(variance)
+        center = np.log(estimate) if ratio_scale else estimate
+        bounds = center + np.array([-1, 1]) * stats.norm.ppf(0.975) * se
+        if ratio_scale:
+            bounds = np.exp(bounds)
+        return dict(ci_low=float(bounds[0]), ci_high=float(bounds[1]), p=float(2 * stats.norm.sf(abs(center / se))))
 
     def weights_for(conditions):
         mask = np.ones(len(cells), bool)
@@ -235,21 +342,27 @@ def analyze(frame: pd.DataFrame, config: dict) -> dict:
         pieces = np.asarray([w @ means for w in weights])
         if ratio:
             estimate = pieces[0] / pieces[1] if len(weights) == 2 else (pieces[0] / pieces[1]) / (pieces[2] / pieces[3])
-            return dict(
+            row = dict(
                 label=label,
                 family=family_name,
                 estimate=float(estimate),
                 scale="ratio" if len(weights) == 2 else "ratio_of_ratios",
             )
+            if result is not None:
+                row.update(response_interval(weights, estimate, True))
+            return row
         combined = weights[0] - weights[1]
         if len(weights) == 4:
             combined = combined - weights[2] + weights[3]
-        return summarize(
+        row = summarize(
             combined,
             label,
             family=family_name,
             scale="difference" if len(weights) == 2 else "difference_in_differences",
         )
+        if result is not None and family != "gaussian":
+            row.update(response_interval(weights, row["estimate"]))
+        return row
 
     for name, a in zip(factors, aliases, strict=True):
         levels = sorted(data[a].unique())
@@ -284,9 +397,17 @@ def analyze(frame: pd.DataFrame, config: dict) -> dict:
     if family == "ordinal_logit":
         observed = y + 1
     tables["residuals"] = pd.DataFrame(dict(observed=observed, fitted=fitted, residual=observed - fitted))
+    validity = "valid" if result is not None and usable else "unreliable"
+    if validity != "valid":
+        # Estimates are descriptive only; failed fits must never supply inference.
+        for table in tables.values():
+            for column in table:
+                if column in {"p", "p_holm", "ci_low", "ci_high", "se"}:
+                    table[column] = np.nan
     return {
         "tables": tables,
         "notes": list(dict.fromkeys(notes)),
         "unavailable": [dict(title=title, reason=reason, reference="/stats") for title, reason in UNAVAILABLE],
         "family": family,
+        "validity": validity,
     }

@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src 'none'">
+<title>ASAREE statistics — Rating</title>
+<style>body{font:16px/1.6 system-ui,sans-serif;color:#202c38;max-width:1100px;margin:40px auto;padding:0 24px}
+h1,h2{line-height:1.25}table{border-collapse:collapse;width:100%;font-size:14px;margin:16px 0}
+th,td{border-bottom:1px solid #cbd5e1;text-align:left;padding:10px;vertical-align:top;overflow-wrap:anywhere}
+th{background:#eff3f6}pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px}
+@media print{body{margin:0;max-width:none}tr{break-inside:avoid}}</style></head>
+<body><h1>Statistical results: Rating</h1>
+<p>Example qualitative assessment of a run, ordered low, medium, high.</p><p>Ordered categories (lowest first): low → medium → high.</p><p>Category coding: high = 2; medium = 1; low = 0.</p>
+<p>Status: valid</p><p>SYNTHETIC DEMONSTRATION. Analyzed 240 runs for Rating as a ordinal measurement.</p>
+<ul><li>Approach: no clear evidence of an effect.</li><li>Setting: no clear evidence of an effect.</li><li>Approach:Setting: no clear evidence of an effect.</li></ul>
+<h2>Statistical tests</h2><table><thead><tr><th scope='col'>Effect</th><th scope='col'>Adjusted p-value</th><th scope='col'>Result</th></tr></thead><tbody><tr><td>Approach</td><td>1.000</td><td>No clear evidence of an effect</td></tr><tr><td>Setting</td><td>1.000</td><td>No clear evidence of an effect</td></tr><tr><td>Approach:Setting</td><td>1.000</td><td>No clear evidence of an effect</td></tr></tbody></table>
+<h2>Comparisons</h2><table><thead><tr><th scope='col'>Comparison</th><th scope='col'>Estimate</th><th scope='col'>Scale</th><th scope='col'>95% interval</th><th scope='col'>Adjusted p-value</th><th scope='col'>Result</th></tr></thead><tbody><tr><td>Approach: Revised vs Standard</td><td>-0.07011</td><td>difference</td><td>-0.2455 to 0.1053</td><td>0.433</td><td>No clear evidence of a difference</td></tr><tr><td>Setting: Basic vs Extended</td><td>0.08556</td><td>difference</td><td>-0.08978 to 0.2609</td><td>0.339</td><td>No clear evidence of a difference</td></tr><tr><td>Approach(Revised vs Standard) x Setting(Basic vs Extended)</td><td>-0.04424</td><td>difference in differences</td><td>-0.3951 to 0.3066</td><td>0.805</td><td>No clear evidence of a difference</td></tr></tbody></table>
+<p>A result without clear evidence does not establish that the effect is zero.
+Statistical evidence does not establish practical importance.</p>
+<details><summary>What ran and why</summary><ul><li>Ordered categories are analyzed with a cumulative-logit model.</li><li>Selected model: ordinal_logit. Factors: Approach, Setting. Interactions included through order 2.</li><li>Comparisons are equally weighted differences or ratios of predicted means; 95% confidence intervals.</li><li>Factor tests evaluate model terms; comparisons evaluate predicted overall means. These can answer different questions for nonlinear or multipart models.</li><li>Differences subtract the second listed condition from the first; ratios divide the first by the second. The null value is 0 for differences and 1 for ratios. Interactions compare effects across settings.</li><li>Holm correction is applied across factor tests and within each factor&#x27;s comparison family. Separate metrics are not corrected together; cross-metric findings are exploratory.</li><li>String conversion: &#x27;high&#x27; → 2, &#x27;medium&#x27; → 1, &#x27;low&#x27; → 0</li><li>Ordered categories (lowest first): low, medium, high. Numeric codes express order; equal spacing is not assumed by the fitted ordinal model.</li><li>statsmodels fits; HC3 covariance for Gaussian/lognormal models and HC0 for other models. Nonlinear comparison intervals use the delta method.</li></ul></details>
+<h2>Limitations and exclusions</h2><ul><li>DEMONSTRATION: synthetic data, not results from a real experiment.</li><li>Category order was recognized from conventional ordered labels.</li><li>Inference assumes independent runs and is conditional on the observed experimental inputs.</li></ul>
+<details><summary>Reproducibility</summary>
+<p>Analysis: synthetic-demo-3 · Created: 2026-10-23T03:23:14.290459+00:00</p>
+<pre>{
+  &quot;fingerprint&quot;: &quot;888ec1ecca061606345ce2305ce6654d13385920889a9b0accae19c538501f7a&quot;,
+  &quot;design_revision&quot;: 1,
+  &quot;seed&quot;: 20261016,
+  &quot;libraries&quot;: {
+    &quot;numpy&quot;: &quot;2.5.1&quot;,
+    &quot;scipy&quot;: &quot;1.18.0&quot;,
+    &quot;statsmodels&quot;: &quot;0.14.6&quot;
+  },
+  &quot;policy_version&quot;: 1,
+  &quot;candidates&quot;: [
+    {
+      &quot;family&quot;: &quot;ordinal_logit&quot;,
+      &quot;usable&quot;: true,
+      &quot;aic&quot;: 497.7468184837
+    }
+  ],
+  &quot;treatment_labels&quot;: {
+    &quot;Approach&quot;: [
+      &quot;Standard&quot;,
+      &quot;Revised&quot;
+    ],
+    &quot;Setting&quot;: [
+      &quot;Basic&quot;,
+      &quot;Extended&quot;
+    ]
+  }
+}</pre>
+</details>
+</body></html>

@@ -50,6 +50,7 @@ def source():
 
 
 def configuration(**kwargs):
+    kwargs = {"family": "gaussian", "measurement_type": "continuous", **kwargs}
     return StatsRequest(metric="continuous", factors=["model", "prompt"], n_boot=20, n_perm=99, **kwargs).model_dump(
         mode="json"
     )

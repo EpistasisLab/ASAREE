@@ -15,18 +15,21 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from asaree.models.experiment import ResearchExperiment
 from asaree.models.factorial_cell import FactorialCell
 from asaree.models.factorial_replicate_result import FactorialReplicateResult
 from asaree.models.factorial_row_result import FactorialRowResult
+from asaree.models.protocol import Protocol
+from asaree.models.protocol_run import ProtocolRun
 from asaree.services.design_revisions import get_current_revision
 from asaree.services.factorial_cells import list_replicates
 
 
 class StatsRequest(BaseModel):
     metric: str = Field(min_length=1, max_length=255)
-    factors: list[str] = Field(min_length=1, max_length=6)
-    family: str = "gaussian"
-    measurement_type: str = Field(default="continuous", pattern="^(continuous|count|binary|proportion|ordinal|auto)$")
+    factors: list[str] = Field(default_factory=list, max_length=6)
+    family: str = "auto"
+    measurement_type: str = Field(default="auto", pattern="^(continuous|count|binary|proportion|ordinal|auto)$")
     denominator: str | None = None
     ordinal_levels: list[str] = Field(default_factory=list)
     max_order: int = Field(default=2, ge=1, le=3)
@@ -44,6 +47,27 @@ def finite_number(value: Any) -> float | None:
     return None
 
 
+def metric_definitions(design: dict, plan: dict) -> dict:
+    """Read declared identities, including opaque custom metrics, without executing producers."""
+    definitions = {}
+    outputs = {
+        identifier: dict(
+            output_key=key,
+            producer_id=binding.get("producer_id"),
+            producer_kind=binding.get("kind", "reported"),
+            kind="runtime" if binding.get("kind") == "runtime" else "custom",
+        )
+        for binding in plan.get("producers", [])
+        for key, identifier in binding.get("outputs", {}).items()
+    }
+    for metric in [*design.get("metrics", []), *plan.get("metrics", [])]:
+        if not isinstance(metric, dict) or not metric.get("name"):
+            continue
+        name = metric["name"]
+        definitions[name] = {**definitions.get(name, {}), **metric, **outputs.get(metric.get("id"), {})}
+    return definitions
+
+
 async def read_source(db: AsyncSession, experiment_id: uuid.UUID) -> dict:
     revision = await get_current_revision(db, experiment_id)
     count = await db.scalar(
@@ -58,6 +82,34 @@ async def read_source(db: AsyncSession, experiment_id: uuid.UUID) -> dict:
     if count and count > 5000:
         raise ValueError("This prototype supports designs with at most 5,000 replicate slots.")
     replicates = await list_replicates(db, experiment_id=experiment_id, revision_id=revision.id) if revision else []
+    experiment = await db.get(ResearchExperiment, experiment_id)
+    design = getattr(revision, "design_spec", None) or getattr(experiment, "design_spec", None) or {}
+    if not isinstance(design, dict):
+        design = {}
+    plan = getattr(experiment, "measurement_plan", None) or {}
+    if not isinstance(plan, dict):
+        plan = {}
+    metadata = metric_definitions(design, plan)
+    run_ids = [r.run_id for r in replicates if getattr(r, "run_id", None)]
+    runs = (
+        (
+            await db.scalars(
+                select(ProtocolRun)
+                .join(Protocol, ProtocolRun.protocol_id == Protocol.id)
+                .where(
+                    ProtocolRun.id.in_(run_ids),
+                    Protocol.experiment_id == experiment_id,
+                )
+            )
+        ).all()
+        if run_ids
+        else []
+    )
+    runs_by_id = {run.id: run for run in runs}
+    protocol_revisions = set()
+    frozen_metadata = {}
+    conflicts = set()
+    metric_errors = {}
     # Row slots are correlated observations, not independent experimental replicates.
     row_parents = (
         set(
@@ -76,16 +128,45 @@ async def read_source(db: AsyncSession, experiment_id: uuid.UUID) -> dict:
     for replicate in replicates:
         if replicate.id in row_parents:
             continue
+        metrics = dict(replicate.metric_values or {})
+        run = runs_by_id.get(getattr(replicate, "run_id", None))
+        if run is not None and (run.status != "completed" or run.replicate_result_id != replicate.id):
+            # Never mix an old score with a newer failed/in-flight attempt's usage.
+            metrics = {}
+            run = None
+        if run is not None:
+            if run.protocol_revision_id:
+                protocol_revisions.add(str(run.protocol_revision_id))
+            evidence = run.attempt_result or {}
+            frozen_plan = evidence.get("measurement_plan_snapshot") or {}
+            frozen_definitions = metric_definitions({}, frozen_plan)
+            for name, definition in frozen_definitions.items():
+                if name in frozen_metadata and frozen_metadata[name] != definition:
+                    conflicts.add(name)
+                frozen_metadata[name] = definition
+                metadata[name] = {**metadata.get(name, {}), **definition}
+            # Older completed attempts can have compact usage but no measurement
+            # observation. Only declared builtin identities may read that usage.
+            for name, definition in metadata.items():
+                key = definition.get("output_key", definition.get("catalogKey"))
+                if definition.get("kind") == "runtime" and key in (run.usage_summary or {}):
+                    metrics[name] = run.usage_summary[key]
+            for observation in (evidence.get("measurement") or {}).get("observations", []):
+                name = observation.get("metric_name")
+                if name and observation.get("status") == "measured":
+                    metrics[name] = observation.get("value")
+                elif name:
+                    metrics.pop(name, None)
+                    reason = (
+                        observation.get("error") or f"Measurement status: {observation.get('status', 'unavailable')}"
+                    )
+                    metric_errors.setdefault(name, set()).add(str(reason)[:300])
         rows.append(
             dict(
                 id=str(replicate.id),
                 replicate=replicate.replicate_number,
                 factors=replicate.factor_values or {},
-                metrics={
-                    key: value
-                    for key, value in (replicate.metric_values or {}).items()
-                    if finite_number(value) is not None or isinstance(value, str)
-                },
+                metrics=metrics,
             )
         )
     payload = dict(
@@ -93,6 +174,12 @@ async def read_source(db: AsyncSession, experiment_id: uuid.UUID) -> dict:
         design_revision=revision.revision if revision else None,
         rows=rows,
         excluded_row_replicates=len(row_parents),
+        metric_metadata=metadata,
+        factor_metadata={factor["name"]: factor for factor in design.get("factors", []) if factor.get("name")},
+        metric_conflicts=sorted(conflicts),
+        metric_errors={name: sorted(errors) for name, errors in metric_errors.items()},
+        dependence={key: bool(design.get(key)) for key in ("paired", "clustered", "repeated")},
+        protocol_revision_ids=sorted(protocol_revisions),
     )
     payload["fingerprint"] = hashlib.sha256(json.dumps(payload, sort_keys=True, default=str).encode()).hexdigest()
     return payload
@@ -100,19 +187,26 @@ async def read_source(db: AsyncSession, experiment_id: uuid.UUID) -> dict:
 
 def catalog(source: dict) -> dict:
     factors: dict[str, set[str]] = {}
-    metrics: dict[str, int] = {}
+    metrics: dict[str, int] = {name: 0 for name in source.get("metric_metadata", {})}
     for row in source["rows"]:
         for key, value in row["factors"].items():
             if value is not None and not isinstance(value, dict | list):
                 factors.setdefault(key, set()).add(str(value))
         for key, value in row["metrics"].items():
-            if finite_number(value) is not None or isinstance(value, str):
+            if value is not None:
                 metrics[key] = metrics.get(key, 0) + 1
     return dict(
         factors=[
             dict(name=name, levels=sorted(levels)) for name, levels in sorted(factors.items()) if len(levels) >= 2
         ],
-        metrics=[dict(name=name, n=n) for name, n in sorted(metrics.items())],
+        metrics=[
+            dict(
+                name=name,
+                n=n,
+                **{k: v for k, v in source.get("metric_metadata", {}).get(name, {}).items() if k not in {"name", "n"}},
+            )
+            for name, n in sorted(metrics.items())
+        ],
         n_replicates=len(source["rows"]),
         design_revision=source["design_revision"],
         design_revision_id=source["design_revision_id"],
@@ -205,6 +299,12 @@ def json_safe(value: Any) -> Any:
 
 def compute(backend: str, source: dict, config: dict) -> dict:
     started = time.perf_counter()
+    if config["family"] == "auto" and backend == "stats_sm":
+        from asaree.services.stats_automatic import analyze_automatic
+
+        output = analyze_automatic(source, config)
+        output["runtime_s"] = time.perf_counter() - started
+        return output
     frame = prepare_frame(source, config)
     if backend == "stats_sm":
         from asaree.stats_sm import analyze

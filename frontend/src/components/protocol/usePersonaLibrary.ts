@@ -2,7 +2,10 @@ import { useQuery } from '@tanstack/react-query'
 import { personasApi } from '@/api/client'
 import type { Persona } from '@/types/personas'
 import type { PersonaNodeConfig } from '@/types/protocols'
-import { PERSONA_LIBRARY } from './personaLibrary'
+import { PERSONA_LIBRARY, type PersonaLibraryEntry } from './personaLibrary'
+
+// A built-in entry keeps its own kind; a saved persona is its own group.
+export type PersonaChoice = Omit<PersonaLibraryEntry, 'kind'> & { kind: PersonaLibraryEntry['kind'] | 'saved' }
 
 export function configForSavedPersona(persona: Persona): PersonaNodeConfig {
   return {
@@ -15,10 +18,12 @@ export function configForSavedPersona(persona: Persona): PersonaNodeConfig {
 
 export function usePersonaLibrary() {
   const query = useQuery({ queryKey: ['personas'], queryFn: personasApi.list })
-  const choices = [
+  const choices: PersonaChoice[] = [
     ...PERSONA_LIBRARY,
-    ...(query.data ?? []).map(persona => ({ id: persona.id, label: persona.name, prompt: persona.prompt })),
+    ...(query.data ?? []).map(persona => ({ id: persona.id, label: persona.name, prompt: persona.prompt, kind: 'saved' as const })),
   ]
+  // Several ids become ONE node: prompts concatenated in the given order (that
+  // order is what gets prepended to the agent's system prompt), labels joined.
   function selectionConfig(ids: string[]): PersonaNodeConfig {
     const selected = ids.flatMap(id => {
       const choice = choices.find(entry => entry.id === id)

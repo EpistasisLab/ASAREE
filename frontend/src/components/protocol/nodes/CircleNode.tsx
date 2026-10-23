@@ -114,7 +114,7 @@ export function CircleNode({
           className="!size-2 !border-2 !bg-background !border-[color:var(--card-accent)]"
         />
       </div>
-      <span className="mt-1.5 max-w-24 truncate text-center text-xs font-medium" title={label}>
+      <span className="mt-1.5 max-w-36 line-clamp-3 break-words text-center text-xs font-medium leading-tight" title={label}>
         {label || placeholder}
       </span>
     </div>

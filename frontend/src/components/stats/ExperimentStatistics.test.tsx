@@ -2,14 +2,14 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
-import { experimentsApi, statsApi } from '@/api/client'
+import { statsApi } from '@/api/client'
 import type { StatsAnalysis } from '@/types/stats'
-import { StatisticsPage } from './StatisticsPage'
+import { ExperimentStatistics } from './ExperimentStatistics'
 
 vi.mock('@/components/AppHeader', () => ({ AppHeader: () => null }))
 
 const saved: StatsAnalysis = {
-  id: 'analysis', backend: 'stats_sm', status: 'completed', error: null,
+  id: 'analysis', backend: 'stats_sm', status: 'completed', report_status: 'valid', error: null,
   created_at: '2026-10-22T18:00:00Z', fingerprint: 'input-snapshot', design_revision: 1,
   config: { metric: 'Duration', factors: [], family: 'auto', measurement_type: 'auto', denominator: null,
     ordinal_levels: [], max_order: 2, n_boot: 100, n_boot_lrt: 0, n_perm: 999, seed: 22, tweedie_power: 1.5 },
@@ -27,7 +27,6 @@ const saved: StatsAnalysis = {
 }
 
 beforeEach(() => {
-  vi.spyOn(experimentsApi, 'list').mockResolvedValue([{ id: 'experiment', name: 'Demo' }] as never)
   vi.spyOn(statsApi, 'history').mockResolvedValue([])
 })
 afterEach(() => { cleanup(); vi.restoreAllMocks() })
@@ -35,23 +34,28 @@ afterEach(() => { cleanup(); vi.restoreAllMocks() })
 function mount() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   render(<QueryClientProvider client={client}><MemoryRouter initialEntries={['/statistics?experiment=experiment']}>
-    <StatisticsPage />
+    <ExperimentStatistics experiment="experiment" />
   </MemoryRouter></QueryClientProvider>)
 }
 
 it('analyzes all metrics without asking users to select statistical settings', async () => {
   const automatic = vi.spyOn(statsApi, 'automatic').mockResolvedValue([])
   mount()
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Analyze all metrics' })).toBeEnabled())
   fireEvent.click(await screen.findByRole('button', { name: 'Analyze all metrics' }))
   await waitFor(() => expect(automatic).toHaveBeenCalledWith('experiment'))
   expect(screen.queryByLabelText('Model family')).not.toBeInTheDocument()
   expect(screen.queryByLabelText('Measurement type')).not.toBeInTheDocument()
+  expect(screen.queryByLabelText('Experiment')).not.toBeInTheDocument()
 })
 
 it('shows concise statistics and a report download with no figures', async () => {
   vi.spyOn(statsApi, 'history').mockResolvedValue([saved])
   vi.spyOn(statsApi, 'get').mockResolvedValue(saved)
   mount()
+  expect(await screen.findByRole('button', { name: /Duration/ })).toHaveAttribute('aria-expanded', 'false')
+  expect(statsApi.get).not.toHaveBeenCalled()
+  fireEvent.click(screen.getByRole('button', { name: /Duration/ }))
   expect(await screen.findByText('Treatment: A vs B')).toBeInTheDocument()
   expect(screen.getByText('0.6 to 0.9')).toBeInTheDocument()
   expect(screen.getByRole('button', { name: 'Download HTML report' })).toBeInTheDocument()
@@ -64,14 +68,35 @@ it('shows concise statistics and a report download with no figures', async () =>
   expect(screen.getByText(/checks whether the factor contributes to the fitted model/)).toBeInTheDocument()
 })
 
-it('explains why a custom metric cannot be analyzed', async () => {
-  const unavailable = { ...saved, output: { ...saved.output!, summary: { ...saved.output!.summary!,
+it('hides reports without valid conclusions', async () => {
+  const unavailable = { ...saved, report_status: 'unavailable' as const, output: { ...saved.output!, summary: { ...saved.output!.summary!,
     status: 'unavailable' as const, tests: [], effects: [], warnings: ['Free text has no established statistical ordering.'] } } }
-  vi.spyOn(statsApi, 'history').mockResolvedValue([unavailable])
+  vi.spyOn(statsApi, 'history').mockResolvedValue([unavailable, { ...unavailable, id: 'unreliable', report_status: 'unreliable' }])
   vi.spyOn(statsApi, 'get').mockResolvedValue(unavailable)
   mount()
-  expect(await screen.findByText('Free text has no established statistical ordering.')).toBeInTheDocument()
+  expect(await screen.findByText(/No statistical reports are available/)).toBeInTheDocument()
+  expect(screen.queryByRole('button', { name: /Duration/ })).not.toBeInTheDocument()
+  expect(statsApi.get).not.toHaveBeenCalled()
   expect(screen.queryByText('Evidence of an effect')).not.toBeInTheDocument()
+})
+
+it('lists reports independently and loads them only when expanded', async () => {
+  const other = { ...saved, id: 'other', config: { ...saved.config, metric: 'Success' } }
+  vi.spyOn(statsApi, 'history').mockResolvedValue([saved, other])
+  const get = vi.spyOn(statsApi, 'get').mockResolvedValue(saved)
+  mount()
+  const duration = await screen.findByRole('button', { name: /Duration/ })
+  const success = screen.getByRole('button', { name: /Success/ })
+  expect(get).not.toHaveBeenCalled()
+  fireEvent.click(duration)
+  expect(await screen.findByText('Treatment: A vs B')).toBeVisible()
+  expect(success).toHaveAttribute('aria-expanded', 'false')
+  expect(get).toHaveBeenCalledTimes(1)
+  fireEvent.click(duration)
+  expect(duration).toHaveAttribute('aria-expanded', 'false')
+  expect(screen.queryByText('Treatment: A vs B')).not.toBeInTheDocument()
+  fireEvent.click(success)
+  await waitFor(() => expect(get).toHaveBeenCalledWith('experiment', 'other'))
 })
 
 it('presents both inference methods with counts and unavailable checks explicitly', async () => {
@@ -85,6 +110,7 @@ it('presents both inference methods with counts and unavailable checks explicitl
   vi.spyOn(statsApi, 'history').mockResolvedValue([both])
   vi.spyOn(statsApi, 'get').mockResolvedValue(both)
   mount()
+  fireEvent.click(await screen.findByRole('button', { name: /Duration/ }))
   expect(await screen.findAllByText('Analytic adjusted p', { selector: 'th' })).toHaveLength(2)
   expect(screen.getByText('Permutation adjusted p')).toBeInTheDocument()
   expect(screen.getByText('0.080')).toBeInTheDocument()
@@ -106,6 +132,7 @@ it('keeps analytic results visible when resampling is unavailable', async () => 
   vi.spyOn(statsApi, 'history').mockResolvedValue([incomplete])
   vi.spyOn(statsApi, 'get').mockResolvedValue(incomplete)
   mount()
+  fireEvent.click(await screen.findByRole('button', { name: /Duration/ }))
   expect(await screen.findByText('Unequal trial totals prevent this permutation check.')).toBeInTheDocument()
   expect(screen.getByText('0.6 to 0.9')).toBeInTheDocument()
   expect(screen.getByText('Too many failed refits')).toBeInTheDocument()
@@ -117,6 +144,7 @@ it('does not invent a definition for a metric whose description is missing', asy
   vi.spyOn(statsApi, 'history').mockResolvedValue([missing])
   vi.spyOn(statsApi, 'get').mockResolvedValue(missing)
   mount()
+  fireEvent.click(await screen.findByRole('button', { name: /Duration/ }))
   expect(await screen.findByText('Description not provided.')).toBeInTheDocument()
 })
 
@@ -127,5 +155,6 @@ it('shows category coding beside the metric definition', async () => {
   vi.spyOn(statsApi, 'history').mockResolvedValue([coded])
   vi.spyOn(statsApi, 'get').mockResolvedValue(coded)
   mount()
+  fireEvent.click(await screen.findByRole('button', { name: /Duration/ }))
   expect(await screen.findByText('Category coding: yes = 1; no = 0.')).toBeInTheDocument()
 })

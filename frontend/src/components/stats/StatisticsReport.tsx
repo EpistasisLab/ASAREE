@@ -45,8 +45,8 @@ export function StatisticsReport({ analysis, experiment }: { analysis: StatsAnal
   }
   return <Card>
     <CardHeader>
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <CardTitle>{report.metric}</CardTitle>
+      <div className="flex flex-col items-start gap-3 @2xl:flex-row @2xl:items-center @2xl:justify-between">
+        <CardTitle className="min-w-0 break-words">{report.metric}</CardTitle>
         <Button variant="outline" onClick={() => void download()} disabled={downloading}>
           <Download className="size-4" />{downloading ? 'Downloading…' : 'Download HTML report'}
         </Button>

@@ -34,7 +34,7 @@ async def capabilities(user: CurrentUser, backend: Backend) -> dict:
     return dict(families=[*FAMILIES, "auto"], unavailable=[])
 
 
-def summary(analysis: StatsAnalysis, *, detail: bool = False) -> dict:
+def summary(analysis: StatsAnalysis, *, detail: bool = False, report_status: str | None = None) -> dict:
     result = dict(
         id=str(analysis.id),
         backend=analysis.backend,
@@ -44,9 +44,11 @@ def summary(analysis: StatsAnalysis, *, detail: bool = False) -> dict:
         config=analysis.request["config"],
         fingerprint=analysis.request["source"]["fingerprint"],
         design_revision=analysis.request["source"]["design_revision"],
+        report_status=report_status,
     )
     if detail:
         result["output"] = analysis.output
+        result["report_status"] = (analysis.output.get("summary") or {}).get("status")
         result["source"] = catalog(analysis.request["source"])
     return result
 
@@ -64,15 +66,15 @@ async def source(experiment_id: uuid.UUID, user: CurrentUser, db: DbSession) -> 
 async def history(experiment_id: uuid.UUID, user: CurrentUser, db: DbSession, backend: Backend) -> list[dict]:
     await _get_owned_experiment(db, experiment_id, user)
     analyses = (
-        await db.scalars(
-            select(StatsAnalysis)
+        await db.execute(
+            select(StatsAnalysis, StatsAnalysis.output["summary"]["status"].as_string())
             .options(defer(StatsAnalysis.output))
             .where(StatsAnalysis.experiment_id == experiment_id, StatsAnalysis.backend == backend)
             .order_by(StatsAnalysis.created_at.desc())
             .limit(100)
         )
     ).all()
-    return [summary(a) for a in analyses]
+    return [summary(a, report_status=report_status) for a, report_status in analyses]
 
 
 @router.get("/{experiment_id}/analyses/{analysis_id}")

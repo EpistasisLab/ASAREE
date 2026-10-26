@@ -24,6 +24,17 @@ function mount(url: string) {
 }
 
 describe('experiment panel URL navigation', () => {
+  it('switches Results title-bar tabs and restores the selection with browser history', async () => {
+    mount('/experiments/experiment/protocol?tab=results&version=revision-1')
+    expect(screen.getByRole('tab', { name: 'Experiment Results' })).toHaveAttribute('aria-selected', 'true')
+    fireEvent.click(screen.getByRole('tab', { name: 'Statistics' }))
+    await waitFor(() => expect(screen.getByLabelText('Current URL')).toHaveTextContent('results=statistics'))
+    expect(screen.getByLabelText('Current URL')).toHaveTextContent('version=revision-1')
+    expect(screen.getByRole('tab', { name: 'Statistics' })).toHaveAttribute('aria-selected', 'true')
+    fireEvent.click(screen.getByRole('button', { name: 'Back' }))
+    await waitFor(() => expect(screen.getByRole('tab', { name: 'Experiment Results' })).toHaveAttribute('aria-selected', 'true'))
+  })
+
   it.each([
     ['?tab=runs', 'Runs'], ['?tab=results', 'Results'], ['?tab=design', 'Design'], ['', 'Design'], ['?tab=invalid', 'Design'],
   ])('restores %s as the %s panel on mount', (query, panel) => {

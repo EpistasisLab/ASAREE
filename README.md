@@ -132,7 +132,8 @@ running that legacy declaration again.
 
 ### Automatic statistics reports
 
-On **Statistics**, choose an experiment and **Analyze all metrics**. New reports
+In an experiment’s **Results** panel, open **Statistics** and select **Analyze all metrics**.
+Available reports appear in a collapsible list; reports without valid statistical conclusions are hidden. New reports
 show analytic factor-test p-values alongside separately Holm-adjusted permutation
 sensitivity p-values, and analytic comparison intervals alongside bootstrap
 intervals. Defaults are 1,000 bootstrap refits and 1,999 permutations per term.

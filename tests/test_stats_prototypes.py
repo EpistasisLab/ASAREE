@@ -16,6 +16,29 @@ from fastapi import HTTPException
 from asaree.services.stats_prototypes import StatsRequest, catalog, compute, prepare_frame
 
 
+@pytest.mark.asyncio
+async def test_history_exposes_report_status_without_loading_reports(monkeypatch):
+    from asaree.api import stats_prototypes as api
+
+    experiment_id = uuid4()
+    analysis = SimpleNamespace(
+        id=uuid4(), backend="stats_sm", status="completed", error=None,
+        created_at=datetime.now(UTC),
+        request={"config": {"family": "auto", "metric": "duration"},
+                 "source": {"fingerprint": "snapshot", "design_revision": 1}},
+    )
+    # No output attribute: history must use the projected status, not load report JSON.
+    result = MagicMock()
+    result.all.return_value = [(analysis, "valid"), (analysis, "unavailable")]
+    db = SimpleNamespace(execute=AsyncMock(return_value=result))
+    monkeypatch.setattr(api, "_get_owned_experiment", AsyncMock())
+    user = object()
+    saved = await api.history(experiment_id, user, db, "stats_sm")
+    assert [item["report_status"] for item in saved] == ["valid", "unavailable"]
+    assert all("output" not in item for item in saved)
+    api._get_owned_experiment.assert_awaited_once_with(db, experiment_id, user)
+
+
 @pytest.fixture
 def source():
     rng = np.random.default_rng(74)

@@ -32,6 +32,7 @@ export interface StatsAnalysis {
   fingerprint: string
   design_revision: number | null
   source?: StatsSource
+  report_status?: StatsSummary['status'] | null
   output?: {
     family: string
     n_observations: number

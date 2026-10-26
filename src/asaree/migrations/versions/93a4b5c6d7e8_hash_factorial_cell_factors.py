@@ -28,6 +28,21 @@ def upgrade() -> None:
         unique=True,
         postgresql_where=sa.text("factor_values IS NOT NULL AND factor_values <> '{}'::jsonb"),
     )
+    # Verify the live definition before Alembic records success, in the same
+    # transaction as the index replacement.
+    op.execute("""
+        DO $$
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1 FROM pg_index
+                WHERE indexrelid = 'uq_factorial_cells_revision_factors'::regclass
+                  AND indisunique AND indisvalid
+                  AND position('md5(' in pg_get_indexdef(indexrelid)) > 0
+            ) THEN
+                RAISE EXCEPTION 'factorial cell factor index must use a unique MD5 digest';
+            END IF;
+        END $$
+    """)
 
 
 def downgrade() -> None:

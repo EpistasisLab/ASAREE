@@ -116,7 +116,7 @@ import type { OkfBundle, OkfDocument } from '@/types/okf'
 import type { Skill } from '@/types/skills'
 import { AddNodePanel } from './AddNodePanel'
 import { AgentNodeInspector } from './AgentNodeInspector'
-import { agentTracedLabel, factorBoundField, factorCreationFields, revealsHiddenMcpServers, toolFactorServerId, type UnboundField } from './bindableFields'
+import { agentTracedLabel, factorBoundField, factorCreationFields, factorEditorField, revealsHiddenMcpServers, toolFactorServerId, type UnboundField } from './bindableFields'
 import { CanvasControls } from './CanvasControls'
 import { CriticGateNodeInspector } from './CriticGateNodeInspector'
 import { ToolStepNodeInspector } from './ToolStepNodeInspector'
@@ -399,6 +399,7 @@ export interface ProtocolCanvasHandle {
   // the factor, not leave the graph and design as two sources of truth.
   setFactorBaseline: (factorName: string, baseline: unknown) => void
   openConnectorFactor: (field: UnboundField) => void
+  editFactor: (factorName: string) => void
 }
 
 export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
@@ -519,31 +520,6 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
     [setNodes],
   )
 
-  useImperativeHandle(
-    canvasHandleRef,
-    () => ({
-      bindFactor: bindFactorOnNode,
-      removeFactorBindings,
-      renameFactorBindings,
-      setFactorBaseline,
-      openConnectorFactor: (field) => {
-        if (!experimentId || experimentLocked || !field.connectorFactor) return
-        setSelectedNodeId(null)
-        setConnectorFactorChoice(field.connectorFactor)
-        if (field.connectorFactor.kind === 'agent') { setAgentFactorFieldPath(field.fieldPath); setAgentFactorNodeId(field.nodeId) }
-        else if (field.connectorFactor.kind === 'sub_agent') setSubAgentFactorNodeId(field.connectorFactor.nodeId)
-        else if (field.connectorFactor.kind === 'tool') setToolFactorNodeId(field.connectorFactor.nodeId)
-        else if (field.connectorFactor.kind === 'script') setScriptFactorNodeId(field.connectorFactor.nodeId)
-        else if (field.connectorFactor.kind === 'skill') setSkillFactorNodeId(field.connectorFactor.nodeId)
-        else if (field.connectorFactor.kind === 'persona') setPersonaFactorNodeId(field.connectorFactor.nodeId)
-        else if (field.connectorFactor.kind === 'dataset') setDatasetFactorNodeId(field.connectorFactor.nodeId)
-        else if (field.connectorFactor.kind === 'model') { setModelFactorLevelIndex(undefined); setModelFactorFieldPath(field.fieldPath); setModelFactorNodeId(field.connectorFactor.nodeId) }
-        else if (field.connectorFactor.kind === 'pattern') { setPatternFactorFieldPath(field.fieldPath); setPatternFactorNodeId(field.connectorFactor.nodeId) }
-        else setKnowledgeFactorNodeId(field.connectorFactor.nodeId)
-      },
-    }),
-    [bindFactorOnNode, removeFactorBindings, renameFactorBindings, setFactorBaseline, experimentId, experimentLocked],
-  )
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
   useEffect(() => {
     if (!experimentLocked) return
@@ -1467,20 +1443,46 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
     },
     [experimentId, experimentLocked],
   )
+  const openConnectorFactor = useCallback((field: UnboundField) => {
+    if (!experimentId || experimentLocked || !field.connectorFactor) return
+    setSelectedNodeId(null)
+    setAddPanelOpen(false)
+    setEditingFactorName(null)
+    setFactorPickerNodeId(null)
+    setConnectorFactorChoice(field.connectorFactor)
+    if (field.connectorFactor.kind === 'agent') { setAgentFactorFieldPath(field.fieldPath); setAgentFactorNodeId(field.nodeId) }
+    else if (field.connectorFactor.kind === 'sub_agent') setSubAgentFactorNodeId(field.connectorFactor.nodeId)
+    else if (field.connectorFactor.kind === 'tool') setToolFactorNodeId(field.connectorFactor.nodeId)
+    else if (field.connectorFactor.kind === 'script') setScriptFactorNodeId(field.connectorFactor.nodeId)
+    else if (field.connectorFactor.kind === 'skill') setSkillFactorNodeId(field.connectorFactor.nodeId)
+    else if (field.connectorFactor.kind === 'persona') setPersonaFactorNodeId(field.connectorFactor.nodeId)
+    else if (field.connectorFactor.kind === 'dataset') setDatasetFactorNodeId(field.connectorFactor.nodeId)
+    else if (field.connectorFactor.kind === 'model') { setModelFactorLevelIndex(undefined); setModelFactorFieldPath(field.fieldPath); setModelFactorNodeId(field.connectorFactor.nodeId) }
+    else if (field.connectorFactor.kind === 'pattern') { setPatternFactorFieldPath(field.fieldPath); setPatternFactorNodeId(field.connectorFactor.nodeId) }
+    else setKnowledgeFactorNodeId(field.connectorFactor.nodeId)
+  }, [experimentId, experimentLocked])
   const requestEditFactor = useCallback(
     (factorName: string) => {
       if (!experimentId || experimentLocked) return
-      const owner = nodes.find((node) => node.type === 'agent' && Object.entries(node.data.factor_bindings as Record<string, string> ?? {}).some(([path, name]) => name === factorName && ['active', 'config.prompt', 'config.system_prompt'].includes(path)))
-      if (owner) {
-        setSelectedNodeId(null)
-        setAgentFactorFieldPath(Object.entries(owner.data.factor_bindings as Record<string, string>).find(([path, name]) => name === factorName && ['active', 'config.prompt', 'config.system_prompt'].includes(path))![0])
-        setAgentFactorNodeId(owner.id)
+      const factor = factors.find((candidate) => candidate.name === factorName)
+      const field = factor && factorEditorField(nodes, edges, factor)
+      if (field?.connectorFactor) {
+        openConnectorFactor(field)
         return
       }
+      // Unbound or legacy fields still need an editor so they can be repaired.
       setEditingFactorName(factorName)
     },
-    [experimentId, experimentLocked, nodes],
+    [experimentId, experimentLocked, nodes, edges, factors, openConnectorFactor],
   )
+  useImperativeHandle(canvasHandleRef, () => ({
+    bindFactor: bindFactorOnNode,
+    removeFactorBindings,
+    renameFactorBindings,
+    setFactorBaseline,
+    openConnectorFactor,
+    editFactor: requestEditFactor,
+  }), [bindFactorOnNode, removeFactorBindings, renameFactorBindings, setFactorBaseline, openConnectorFactor, requestEditFactor])
   const requestAgentFactor = useCallback((nodeId: string) => {
     if (!experimentId || experimentLocked) return
     setSelectedNodeId(null)
@@ -2746,21 +2748,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
           factor={{ name: '', levels: [], level_type: 'string' }}
           pickableFields={factorPickerFields}
           canvasAgentCount={nodes.filter(node => node.type === 'agent' || node.type === 'sub_agent').length}
-          onPickConnectorFactor={(field) => {
-            if (!field.connectorFactor) return
-            setFactorPickerNodeId(null)
-            setConnectorFactorChoice(field.connectorFactor)
-            if (field.connectorFactor.kind === 'agent') { setAgentFactorFieldPath(field.fieldPath); setAgentFactorNodeId(field.nodeId) }
-            else if (field.connectorFactor.kind === 'sub_agent') setSubAgentFactorNodeId(field.connectorFactor.nodeId)
-            else if (field.connectorFactor.kind === 'tool') setToolFactorNodeId(field.connectorFactor.nodeId)
-            else if (field.connectorFactor.kind === 'script') setScriptFactorNodeId(field.connectorFactor.nodeId)
-            else if (field.connectorFactor.kind === 'skill') setSkillFactorNodeId(field.connectorFactor.nodeId)
-            else if (field.connectorFactor.kind === 'persona') setPersonaFactorNodeId(field.connectorFactor.nodeId)
-            else if (field.connectorFactor.kind === 'dataset') setDatasetFactorNodeId(field.connectorFactor.nodeId)
-            else if (field.connectorFactor.kind === 'model') { setModelFactorLevelIndex(undefined); setModelFactorFieldPath(field.fieldPath); setModelFactorNodeId(field.connectorFactor.nodeId) }
-            else if (field.connectorFactor.kind === 'pattern') { setPatternFactorFieldPath(field.fieldPath); setPatternFactorNodeId(field.connectorFactor.nodeId) }
-        else setKnowledgeFactorNodeId(field.connectorFactor.nodeId)
-          }}
+          onPickConnectorFactor={openConnectorFactor}
           existingNames={factorPickerExistingNames}
           emptyPickerMessage={`${(factorPickerNode?.data as { label?: string })?.label || 'This node'} has no fields that can be turned into a factor.`}
           revealHiddenServers={revealsHiddenMcpServers(nodes)}

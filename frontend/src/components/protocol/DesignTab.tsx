@@ -26,9 +26,7 @@ import { skillFactorIssues } from '@/lib/skillFactors'
 import { promptReferenceScope } from '@/lib/promptReferences'
 import { protocolGraphQueryKey } from '@/lib/protocolGraph'
 import {
-  factorBoundField,
   revealsHiddenMcpServers,
-  toolFactorServerId,
   factorCreationFields,
   type UnboundField,
 } from './bindableFields'
@@ -104,10 +102,7 @@ type MetadataSave = {
 // bindable fields to search through, and the dialog already has the room a
 // cramped popover wouldn't.
 // The canvas's live nodes/edges, read from the same shared query cache
-// ProtocolCanvas mirrors its own state into on every change. Used by both
-// halves of the factors editor: AddFactorButton needs the list of bindable
-// fields, FactorsEditor needs to resolve a tool_names factor's pinned MCP
-// server (toolFactorServerId) before opening its level editor.
+// ProtocolCanvas mirrors its own state into on every change.
 function useProtocolGraph(protocolId: string | undefined) {
   return useQuery({
     queryKey: protocolGraphQueryKey(protocolId ?? 'none'),
@@ -218,11 +213,8 @@ function AddFactorButton({
 // popover (still used to quick-create a factor scoped to binding one
 // specific node field) -- both read/write the same design_spec.factors
 // array, they just serve different entry points. Each row is a compact
-// summary (name, level type, level count) with an Edit button opening
-// FactorEditorDialog for real room -- levels used to be crammed into one
-// comma-separated text Input, which broke for any value containing a comma
-// and was unusable for a long-form level (e.g. a factor whose levels are
-// several different full system prompts).
+// summary (name, level type, level count). Edit opens the canvas's existing
+// factor dialog, shared with the node hover menu and bound-field badges.
 //
 // Rename and Delete are immediate, atomic two-sided writes, same as
 // AddFactorButton's own createMutation above -- NOT folded into this tab's
@@ -249,10 +241,7 @@ function FactorsEditor({
   factors: DesignFactor[]
   disabled?: boolean
 }) {
-  const [editingFactor, setEditingFactor] = useState<{ index: number; draft: DesignFactor } | null>(null)
   const queryClient = useQueryClient()
-  const graphQuery = useProtocolGraph(protocolId)
-  const promptScopeFor = usePromptScopeFor(protocolId)
 
   const deleteMutation = useMutation({
     mutationFn: async (name: string) => {
@@ -263,24 +252,6 @@ function FactorsEditor({
     },
     onSuccess: (name) => {
       canvasRef.current?.removeFactorBindings(name)
-      queryClient.invalidateQueries({ queryKey: ['experiments', experiment.id] })
-      queryClient.invalidateQueries({ queryKey: ['experiments', experiment.id, 'design-impact'] })
-    },
-  })
-
-  const editMutation = useMutation({
-    mutationFn: async ({ oldName, next }: { oldName: string; next: DesignFactor }) => {
-      const fresh = await experimentsApi.get(experiment.id)
-      if (next.name !== oldName && (fresh.design_spec?.factors ?? []).some((factor) => factor.name === next.name)) throw new Error('A factor with this name already exists.')
-      const nextFactors = (fresh.design_spec?.factors ?? []).map((f) => (f.name === oldName ? next : f))
-      await experimentsApi.update(experiment.id, { design_spec: { ...fresh.design_spec, factors: nextFactors } })
-      return { oldName, next }
-    },
-    onSuccess: ({ oldName, next }) => {
-      if (next.level_type !== 'boolean' && next.levels.length > 0) {
-        canvasRef.current?.setFactorBaseline(oldName, next.levels[0])
-      }
-      if (next.name !== oldName) canvasRef.current?.renameFactorBindings(oldName, next.name)
       queryClient.invalidateQueries({ queryKey: ['experiments', experiment.id] })
       queryClient.invalidateQueries({ queryKey: ['experiments', experiment.id, 'design-impact'] })
     },
@@ -304,7 +275,7 @@ function FactorsEditor({
             size="icon-sm"
             aria-label="Edit factor"
             disabled={disabled}
-            onClick={() => setEditingFactor({ index: i, draft: factor })}
+            onClick={() => canvasRef.current?.editFactor(factor.name)}
           >
             <Pencil className="size-3.5" />
           </Button>
@@ -322,27 +293,6 @@ function FactorsEditor({
       ))}
       <AddFactorButton experiment={experiment} protocolId={protocolId} canvasRef={canvasRef} existingNames={factors.map((f) => f.name)} disabled={disabled} />
 
-      {editingFactor && (
-        <FactorEditorDialog
-          graph={graphQuery.data as unknown as ProtocolGraph | undefined}
-          open
-          onOpenChange={(open) => {
-            if (!open) setEditingFactor(null)
-          }}
-          factor={editingFactor.draft}
-          // Only read for a tool_names factor -- a level there is a bare
-          // allow-list, so the editor needs the bound node to know whose
-          // tools to offer (see bindableFields.ts's toolFactorServerId).
-          toolServerId={toolFactorServerId(graphQuery.data?.nodes ?? [], editingFactor.draft.name)}
-          revealHiddenServers={revealsHiddenMcpServers(graphQuery.data?.nodes ?? [])}
-          // Same idea one step further along: a factor edited from here was
-          // bound somewhere else entirely, so which node its levels belong to
-          // has to be recovered from the canvas's own factor_bindings.
-          boundField={factorBoundField(graphQuery.data?.nodes ?? [], editingFactor.draft.name)}
-          promptScopeFor={promptScopeFor}
-          onSave={(next) => editMutation.mutateAsync({ oldName: editingFactor.draft.name, next })}
-        />
-      )}
     </div>
   )
 }

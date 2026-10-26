@@ -1,6 +1,7 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { createRef } from 'react'
 import { ReactFlowProvider } from '@xyflow/react'
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -24,7 +25,7 @@ import {
   type ProtocolRun,
   type TestRun,
 } from '@/types/protocols'
-import { ProtocolCanvas } from './ProtocolCanvas'
+import { ProtocolCanvas, type ProtocolCanvasHandle } from './ProtocolCanvas'
 
 vi.mock('./PythonCodeEditor', () => ({
   PythonCodeEditor: ({ value }: { value: string }) => <textarea aria-label="Python code" value={value} readOnly />,
@@ -32,12 +33,14 @@ vi.mock('./PythonCodeEditor', () => ({
 
 function renderCanvas(graph: ProtocolGraph, experimentId: string | null = null, publishedRevision: number | null = null) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  const canvasRef = createRef<ProtocolCanvasHandle>()
   const result = render(
     <QueryClientProvider client={client}>
       <MemoryRouter>
         <ReactFlowProvider>
           <div style={{ width: 1000, height: 800 }}>
             <ProtocolCanvas
+              ref={canvasRef}
               protocolId="protocol-1"
               experimentId={experimentId}
               initialGraph={graph}
@@ -49,7 +52,7 @@ function renderCanvas(graph: ProtocolGraph, experimentId: string | null = null, 
       </MemoryRouter>
     </QueryClientProvider>,
   )
-  return { client, ...result }
+  return { client, canvasRef, ...result }
 }
 
 function protocolRun(overrides: Partial<ProtocolRun> = {}): ProtocolRun {
@@ -797,6 +800,27 @@ describe('ProtocolCanvas connector adds', () => {
 
     expect(await screen.findByRole('heading', { name: 'Scoring variants' })).toBeInTheDocument()
     expect(screen.getByText('Factor name')).toBeInTheDocument()
+  })
+
+  it('opens the hover-menu Model factor dialog at the selected field from Design', async () => {
+    vi.spyOn(experimentsApi, 'get').mockResolvedValue({
+      id: 'experiment-1', name: 'Experiment', description: null, hypothesis: null, design_type: 'factorial', task_brief: null,
+      design_spec: { factors: [{ name: 'Temperature', level_type: 'number', levels: [0.1, 0.9], level_labels: ['cool', 'warm'] }] },
+      measurement_plan: null, dataset_ids: [], dataset_id: null, locked_at: null,
+      locked_protocol_revision_id: null, locked_design_spec: null, locked_measurement_plan: null,
+      created_at: '', updated_at: '', archived_at: null,
+    })
+    const { canvasRef, client } = renderCanvas({ nodes: [{
+      id: 'model', type: 'model_anthropic', position: { x: 100, y: 100 },
+      data: { ...defaultAnthropicModelNodeData(), factor_bindings: { 'config.temperature': 'Temperature' } },
+    }], edges: [] }, 'experiment-1')
+    await waitFor(() => expect(client.getQueryData<Experiment>(['experiments', 'experiment-1'])).toBeDefined())
+    act(() => canvasRef.current!.editFactor('Temperature'))
+    expect(await screen.findByRole('heading', { name: 'Model factor' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Temperature', pressed: true })).toBeInTheDocument()
+    expect(screen.getByLabelText('Level 1 label')).toHaveValue('cool')
+    expect(screen.getByLabelText('Level 2 value')).toHaveValue(0.9)
+    expect(screen.queryByText('Changes save automatically.')).not.toBeInTheDocument()
   })
 
   it('moves Agent factor creation to the hover toolbar and saves a prompt baseline', async () => {

@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import ForeignKey, Index, String, UniqueConstraint
+from sqlalchemy import ForeignKey, Index, String, UniqueConstraint, text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -22,7 +22,9 @@ class FactorialCell(Base, TimestampMixin):
         Index(
             "uq_factorial_cells_revision_factors",
             "design_revision_id",
-            "factor_values",
+            # Prompt levels can exceed PostgreSQL's B-tree entry limit. Keep
+            # their full values in JSONB and index only a fixed-size digest.
+            text("md5(factor_values::text)"),
             unique=True,
             postgresql_where=("factor_values IS NOT NULL AND factor_values <> '{}'::jsonb"),
         ),

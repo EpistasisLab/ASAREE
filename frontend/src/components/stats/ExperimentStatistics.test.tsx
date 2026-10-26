@@ -111,6 +111,16 @@ it('hides reports without valid conclusions', async () => {
   expect(screen.queryByText('Evidence of an effect')).not.toBeInTheDocument()
 })
 
+it('shows only the latest report for each metric while older duplicates are being removed', async () => {
+  const older = { ...saved, id: 'older-report', created_at: '2026-10-21T18:00:00Z' }
+  vi.spyOn(statsApi, 'history').mockResolvedValue([saved, older])
+  vi.spyOn(statsApi, 'get').mockResolvedValue(saved)
+  mount()
+  expect(await screen.findAllByRole('button', { name: /Duration/ })).toHaveLength(1)
+  fireEvent.click(screen.getByRole('button', { name: /Duration/ }))
+  await waitFor(() => expect(statsApi.get).toHaveBeenCalledWith('experiment', 'analysis'))
+})
+
 it('replaces old stored narrative with conversational summaries of the numeric tests', async () => {
   const findings = [
     'Both the main test and the permutation check found evidence that Effort has an effect on this metric.',

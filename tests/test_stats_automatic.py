@@ -473,6 +473,7 @@ async def test_automatic_batch_pins_one_snapshot_before_enqueuing(monkeypatch):
     monkeypatch.setattr(api, "_get_owned_experiment", AsyncMock())
     monkeypatch.setattr(api, "read_source", AsyncMock(return_value=source))
     db, saved = AsyncMock(), []
+    db.scalar.return_value = None
 
     def add(row):
         row.id, row.created_at = uuid4(), datetime.now(UTC)
@@ -481,6 +482,7 @@ async def test_automatic_batch_pins_one_snapshot_before_enqueuing(monkeypatch):
     async def enqueue(*args, **kwargs):
         db.commit.assert_awaited_once()
         assert all(row.request["source"] is source for row in saved)
+        assert any(call.args[0].is_delete for call in db.execute.call_args_list)
 
     db.add = MagicMock(side_effect=add)
     monkeypatch.setattr(api, "_get_pool", AsyncMock(return_value=SimpleNamespace(enqueue_job=enqueue)))

@@ -25,7 +25,13 @@ export function ExperimentStatistics({ experiment, version }: { experiment: stri
     mutationFn: () => statsApi.automatic(experiment, version!),
     onSuccess: () => client.invalidateQueries({ queryKey: historyKey }),
   })
-  const analyses = (history.data ?? []).filter(a => a.config.family === 'auto')
+  const latest = new Map<string, StatsAnalysis>()
+  for (const analysis of history.data ?? []) {
+    if (analysis.config.family === 'auto' && !latest.has(analysis.config.metric)) {
+      latest.set(analysis.config.metric, analysis)
+    }
+  }
+  const analyses = [...latest.values()]
   const pending = run.isPending || analyses.some(a => a.status === 'pending' || a.status === 'running')
   const reports = analyses.filter(a => a.status === 'completed' && a.report_status === 'valid')
   const failed = analyses.filter(a => a.status === 'failed')
@@ -33,7 +39,7 @@ export function ExperimentStatistics({ experiment, version }: { experiment: stri
   const ready = !!version && !source.isError && (source.data?.n_measured_replicates ?? 0) > 0
 
   return <div className="@container space-y-3 p-3">
-    <p className="text-xs text-muted-foreground">Analyze metrics from the experiment version being viewed. Methods are selected automatically.</p>
+    <p className="text-xs text-muted-foreground">Analyze metrics from the experiment version being viewed. Methods are selected automatically. Rerunning replaces this version’s existing reports.</p>
     <Button size="sm" disabled={!ready || pending || history.isLoading} onClick={() => run.mutate()}>
       {pending ? 'Analyzing metrics…' : 'Analyze all metrics'}
     </Button>

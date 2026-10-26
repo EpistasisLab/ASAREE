@@ -16,6 +16,55 @@ from fastapi import HTTPException
 from asaree.services.stats_prototypes import StatsRequest, catalog, compute, prepare_frame
 
 
+@pytest.mark.parametrize("metric", [None, "score"])
+async def test_replacement_deletes_old_reports_only_in_the_selected_scope(metric):
+    import sqlalchemy as sa
+
+    from asaree.api.stats_prototypes import replace_automatic_reports
+
+    metadata = sa.MetaData()
+    experiments = sa.Table("research_experiments", metadata, sa.Column("id", sa.Uuid, primary_key=True))
+    reports = sa.Table(
+        "stats_analyses", metadata,
+        sa.Column("id", sa.Uuid, primary_key=True), sa.Column("experiment_id", sa.Uuid),
+        sa.Column("backend", sa.String), sa.Column("status", sa.String), sa.Column("request", sa.JSON),
+    )
+    experiment, other_experiment, version, other_version = [uuid4() for _ in range(4)]
+
+    def row(*, exp=experiment, ver=version, backend="stats_sm", family="auto", name="score", status="completed"):
+        return dict(id=uuid4(), experiment_id=exp, backend=backend, status=status,
+                    request=dict(source=dict(protocol_revision_id=str(ver)), config=dict(family=family, metric=name)))
+
+    obsolete = [row(), row(), row(name="cost")]
+    preserved = [row(exp=other_experiment), row(ver=other_version), row(backend="stats"), row(family="gaussian")]
+    with sa.create_engine("sqlite://").begin() as connection:
+        metadata.create_all(connection)
+        connection.execute(experiments.insert(), [dict(id=experiment), dict(id=other_experiment)])
+        connection.execute(reports.insert(), obsolete + preserved)
+        db = SimpleNamespace(execute=AsyncMock(side_effect=connection.execute),
+                             scalar=AsyncMock(side_effect=connection.scalar))
+        await replace_automatic_reports(db, experiment, version, metric=metric)
+        remaining = set(connection.scalars(sa.select(reports.c.id)))
+        expected = {report["id"] for report in preserved}
+        if metric:
+            expected.add(obsolete[-1]["id"])
+        assert remaining == expected
+        assert "FOR UPDATE" in str(db.execute.call_args_list[0].args[0])
+
+
+@pytest.mark.parametrize("status", ["pending", "running"])
+async def test_replacement_rejects_an_active_batch_without_deleting_reports(status):
+    from asaree.api.stats_prototypes import replace_automatic_reports
+
+    db = AsyncMock()
+    db.scalar.return_value = uuid4()
+    with pytest.raises(HTTPException) as error:
+        await replace_automatic_reports(db, uuid4(), uuid4())
+    assert error.value.status_code == 409
+    assert all(not call.args[0].is_delete for call in db.execute.call_args_list)
+    assert status in db.scalar.call_args.args[0].compile().params["status_1"]
+
+
 @pytest.mark.asyncio
 async def test_history_exposes_report_status_without_loading_reports(monkeypatch):
     from asaree.api import stats_prototypes as api

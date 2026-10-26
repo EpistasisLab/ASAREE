@@ -136,6 +136,7 @@ In an experiment’s **Results** panel, open **Statistics** and select **Analyze
 Statistics use only the experiment version being viewed, including when viewing history.
 The action is enabled once that version has completed whole-dataset replicates with recorded measurements.
 Reports are filtered to the selected version; rerun older unscoped reports to attach them to a version.
+Reanalyzing replaces that version’s previous automatic reports; older report copies are not retained.
 Each report shows the selected model distribution and the stored observed summaries
 (replicate count, minimum, maximum, mean, standard deviation, distinct values, and zero count),
 both in the panel and the HTML download.

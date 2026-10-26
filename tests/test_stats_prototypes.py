@@ -39,6 +39,90 @@ async def test_history_exposes_report_status_without_loading_reports(monkeypatch
     api._get_owned_experiment.assert_awaited_once_with(db, experiment_id, user)
 
 
+async def test_history_filters_by_publication_before_limit(monkeypatch):
+    from asaree.api import stats_prototypes as api
+
+    monkeypatch.setattr(api, "_get_owned_experiment", AsyncMock())
+    result = MagicMock()
+    result.all.return_value = []
+    db = SimpleNamespace(execute=AsyncMock(return_value=result))
+    version = uuid4()
+    assert await api.history(uuid4(), object(), db, "stats_sm", version) == []
+    statement = db.execute.call_args.args[0]
+    assert str(version) in statement.compile().params.values()
+    assert "protocol_revision_id" in statement.compile().params.values()
+
+
+async def test_version_source_uses_frozen_attempts_and_publication_scope(monkeypatch):
+    from asaree.services import stats_prototypes as service
+    from asaree.services.result_reads import ResultScope
+
+    experiment, protocol, version, design, replicate, run_id = [uuid4() for _ in range(6)]
+    scope = ResultScope(
+        experiment, protocol, version, design,
+        {"factors": [{"name": "treatment", "levels": ["A", "B"]}], "replicates": 3},
+        {}, True, None,
+        {"metrics": [{"name": "Original score", "measurement_type": "continuous"}]},
+        protocol_revision=2, design_revision=1,
+    )
+    resolver = AsyncMock(return_value=scope)
+    monkeypatch.setattr(service, "resolve_result_scope", resolver)
+    current = AsyncMock(side_effect=AssertionError("Must not read the current design"))
+    monkeypatch.setattr(service, "get_current_revision", current)
+    run = SimpleNamespace(
+        id=run_id, status="completed", protocol_revision_id=version, replicate_result_id=replicate,
+        attempt_result={"metric_values": {"Original score": 2.5}}, usage_summary={},
+    )
+    result = MagicMock()
+    result.all.return_value = [(replicate, 1, {"treatment": "A"}, run)]
+    db = SimpleNamespace(execute=AsyncMock(return_value=result))
+    snapshot = await service.read_source(db, experiment, version)
+    resolver.assert_awaited_once_with(db, experiment_id=experiment, protocol_revision_id=version)
+    assert snapshot["protocol_revision_id"] == str(version)
+    assert snapshot["protocol_revision"] == 2
+    assert snapshot["rows"][0]["metrics"] == {"Original score": 2.5}
+    assert snapshot["metric_metadata"]["Original score"]["measurement_type"] == "continuous"
+    assert catalog(snapshot)["n_measured_replicates"] == 1
+    statement = db.execute.call_args.args[0]
+    # The shared slot query constrains BOTH the publication and design, plus
+    # its frozen factor levels/replicate count, before selecting each latest attempt.
+    parameters = statement.compile().params
+    assert version in parameters.values()
+    assert design in parameters.values()
+    assert "completed" in parameters.values()
+    assert "protocol_runs.created_at DESC" in str(statement)
+
+
+@pytest.mark.parametrize("reason", ["legacy", "row"])
+async def test_version_source_refuses_unsupported_scopes(monkeypatch, reason):
+    from asaree.services import stats_prototypes as service
+
+    monkeypatch.setattr(service, "resolve_result_scope", AsyncMock(return_value=SimpleNamespace(
+        versioned=reason != "legacy", unit="row" if reason == "row" else "replicate",
+    )))
+    db = AsyncMock()
+    with pytest.raises(ValueError):
+        await service.read_source(db, uuid4(), uuid4())
+    db.execute.assert_not_awaited()
+
+
+@pytest.mark.parametrize("version", [None, "empty"])
+async def test_automatic_requires_a_version_with_measured_completed_replicates(monkeypatch, version):
+    from asaree.api import stats_prototypes as api
+
+    monkeypatch.setattr(api, "_get_owned_experiment", AsyncMock())
+    monkeypatch.setattr(api, "read_source", AsyncMock(return_value={
+        "rows": [{"factors": {}, "metrics": {"declared": None}}],
+        "design_revision": 1, "design_revision_id": str(uuid4()),
+        "fingerprint": "empty", "excluded_row_replicates": 0,
+    }))
+    db = AsyncMock()
+    with pytest.raises(HTTPException) as error:
+        await api.automatic(uuid4(), object(), db, uuid4() if version else None)
+    assert error.value.status_code == 422
+    db.flush.assert_not_awaited()
+
+
 @pytest.fixture
 def source():
     rng = np.random.default_rng(74)

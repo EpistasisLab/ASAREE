@@ -7,6 +7,7 @@ import json
 import math
 import time
 import uuid
+from types import SimpleNamespace
 from typing import Any
 
 import numpy as np
@@ -14,6 +15,7 @@ import pandas as pd
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import load_only
 
 from asaree.models.experiment import ResearchExperiment
 from asaree.models.factorial_cell import FactorialCell
@@ -23,6 +25,7 @@ from asaree.models.protocol import Protocol
 from asaree.models.protocol_run import ProtocolRun
 from asaree.services.design_revisions import get_current_revision
 from asaree.services.factorial_cells import list_replicates
+from asaree.services.result_reads import resolve_result_scope, slot_query
 
 
 class StatsRequest(BaseModel):
@@ -68,7 +71,11 @@ def metric_definitions(design: dict, plan: dict) -> dict:
     return definitions
 
 
-async def read_source(db: AsyncSession, experiment_id: uuid.UUID) -> dict:
+async def read_source(
+    db: AsyncSession, experiment_id: uuid.UUID, protocol_revision_id: uuid.UUID | None = None,
+) -> dict:
+    if protocol_revision_id is not None:
+        return await read_version_source(db, experiment_id, protocol_revision_id)
     revision = await get_current_revision(db, experiment_id)
     count = await db.scalar(
         select(func.count())
@@ -89,7 +96,6 @@ async def read_source(db: AsyncSession, experiment_id: uuid.UUID) -> dict:
     plan = getattr(experiment, "measurement_plan", None) or {}
     if not isinstance(plan, dict):
         plan = {}
-    metadata = metric_definitions(design, plan)
     run_ids = [r.run_id for r in replicates if getattr(r, "run_id", None)]
     runs = (
         (
@@ -105,11 +111,6 @@ async def read_source(db: AsyncSession, experiment_id: uuid.UUID) -> dict:
         if run_ids
         else []
     )
-    runs_by_id = {run.id: run for run in runs}
-    protocol_revisions = set()
-    frozen_metadata = {}
-    conflicts = set()
-    metric_errors = {}
     # Row slots are correlated observations, not independent experimental replicates.
     row_parents = (
         set(
@@ -124,6 +125,57 @@ async def read_source(db: AsyncSession, experiment_id: uuid.UUID) -> dict:
         if replicates
         else set()
     )
+    return build_snapshot(replicates, runs, design, plan, revision, row_parents)
+
+
+async def read_version_source(db: AsyncSession, experiment_id: uuid.UUID, protocol_revision_id: uuid.UUID) -> dict:
+    scope = await resolve_result_scope(db, experiment_id=experiment_id, protocol_revision_id=protocol_revision_id)
+    if not scope.versioned:
+        raise ValueError("This publication has no saved experiment definition and cannot be analyzed by version.")
+    if scope.unit == "row":
+        raise ValueError("Statistics require whole-dataset replicates; row-mode results are not independent.")
+    slots = slot_query(scope).subquery()
+    # The shared Results query selects the latest attempt per slot WITHIN this
+    # publication, even when a later version has overwritten replicate.run_id.
+    selected = (
+        await db.execute(
+            select(slots.c.replicate_id, slots.c.replicate_number, slots.c.factor_values, ProtocolRun)
+            .options(load_only(
+                ProtocolRun.id, ProtocolRun.status, ProtocolRun.protocol_revision_id,
+                ProtocolRun.replicate_result_id, ProtocolRun.attempt_result, ProtocolRun.usage_summary,
+            ))
+            .join(ProtocolRun, ProtocolRun.id == slots.c.run_id)
+            .where(slots.c.status == "completed")
+            .order_by(slots.c.replicate_id)
+            .limit(5001)
+        )
+    ).all()
+    if len(selected) > 5000:
+        raise ValueError("Statistics support at most 5,000 completed replicates per version.")
+    replicates, runs = [], []
+    for replicate_id, number, factors, run in selected:
+        replicates.append(SimpleNamespace(
+            id=replicate_id, replicate_number=number, factor_values=factors,
+            run_id=run.id, metric_values=(run.attempt_result or {}).get("metric_values") or {},
+        ))
+        runs.append(run)
+    revision = SimpleNamespace(id=scope.design_revision_id, revision=scope.design_revision)
+    snapshot = build_snapshot(replicates, runs, scope.design_spec or {}, scope.measurement_plan or {}, revision, set())
+    snapshot["protocol_revision_id"] = str(protocol_revision_id)
+    snapshot["protocol_revision"] = scope.protocol_revision
+    snapshot["fingerprint"] = fingerprint({k: v for k, v in snapshot.items() if k != "fingerprint"})
+    return snapshot
+
+
+def fingerprint(payload: dict) -> str:
+    return hashlib.sha256(json.dumps(payload, sort_keys=True, default=str).encode()).hexdigest()
+
+
+def build_snapshot(replicates, runs, design, plan, revision, row_parents) -> dict:
+    metadata = metric_definitions(design, plan)
+    runs_by_id = {run.id: run for run in runs}
+    protocol_revisions, conflicts = set(), set()
+    frozen_metadata, metric_errors = {}, {}
     rows = []
     for replicate in replicates:
         if replicate.id in row_parents:
@@ -181,7 +233,7 @@ async def read_source(db: AsyncSession, experiment_id: uuid.UUID) -> dict:
         dependence={key: bool(design.get(key)) for key in ("paired", "clustered", "repeated")},
         protocol_revision_ids=sorted(protocol_revisions),
     )
-    payload["fingerprint"] = hashlib.sha256(json.dumps(payload, sort_keys=True, default=str).encode()).hexdigest()
+    payload["fingerprint"] = fingerprint(payload)
     return payload
 
 
@@ -208,6 +260,10 @@ def catalog(source: dict) -> dict:
             for name, n in sorted(metrics.items())
         ],
         n_replicates=len(source["rows"]),
+        n_measured_replicates=sum(
+            any(value is not None for value in row["metrics"].values()) for row in source["rows"]
+        ),
+        protocol_revision_id=source.get("protocol_revision_id"),
         design_revision=source["design_revision"],
         design_revision_id=source["design_revision_id"],
         fingerprint=source["fingerprint"],

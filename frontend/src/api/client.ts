@@ -180,14 +180,14 @@ export const authApi = {
 }
 
 export const statsApi = {
-  automatic: (experiment: string) => request<StatsAnalysis[]>(`/stats-prototypes/${experiment}/automatic-analyses`, {
+  automatic: (experiment: string, version: string) => request<StatsAnalysis[]>(`/stats-prototypes/${experiment}/automatic-analyses?protocol_revision_id=${encodeURIComponent(version)}`, {
     method: 'POST',
   }),
   report: (experiment: string, id: string) => requestBlob(`/stats-prototypes/${experiment}/analyses/${id}/report`),
   capabilities: (backend: StatsBackend) => request<{ families: string[]; unavailable: { title: string; reason: string; reference: string }[] }>(`/stats-prototypes/capabilities?backend=${backend}`),
-  source: (experiment: string) => request<StatsSource>(`/stats-prototypes/${experiment}/source`),
-  history: (experiment: string, backend: StatsBackend) =>
-    request<StatsAnalysis[]>(`/stats-prototypes/${experiment}/analyses?backend=${backend}`),
+  source: (experiment: string, version?: string) => request<StatsSource>(`/stats-prototypes/${experiment}/source${version ? `?protocol_revision_id=${encodeURIComponent(version)}` : ''}`),
+  history: (experiment: string, backend: StatsBackend, version?: string) =>
+    request<StatsAnalysis[]>(`/stats-prototypes/${experiment}/analyses?backend=${backend}${version ? `&protocol_revision_id=${encodeURIComponent(version)}` : ''}`),
   get: (experiment: string, id: string) => request<StatsAnalysis>(`/stats-prototypes/${experiment}/analyses/${id}`),
   run: (experiment: string, backend: StatsBackend, config: StatsConfig, source?: string) =>
     request<StatsAnalysis>(`/stats-prototypes/${experiment}/analyses?backend=${backend}`, {

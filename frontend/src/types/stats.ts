@@ -18,6 +18,8 @@ export interface StatsSource {
   factors: { name: string; levels: string[] }[]
   metrics: { name: string; n: number }[]
   n_replicates: number
+  n_measured_replicates?: number
+  protocol_revision_id?: string | null
   design_revision: number | null
   fingerprint: string
   excluded_row_replicates: number

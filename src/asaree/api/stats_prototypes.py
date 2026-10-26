@@ -54,22 +54,34 @@ def summary(analysis: StatsAnalysis, *, detail: bool = False, report_status: str
 
 
 @router.get("/{experiment_id}/source")
-async def source(experiment_id: uuid.UUID, user: CurrentUser, db: DbSession) -> dict:
+async def source(
+    experiment_id: uuid.UUID, user: CurrentUser, db: DbSession, protocol_revision_id: uuid.UUID | None = None,
+) -> dict:
     await _get_owned_experiment(db, experiment_id, user)
     try:
-        return catalog(await read_source(db, experiment_id))
+        return catalog(await read_source(db, experiment_id, protocol_revision_id))
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
 
 
 @router.get("/{experiment_id}/analyses")
-async def history(experiment_id: uuid.UUID, user: CurrentUser, db: DbSession, backend: Backend) -> list[dict]:
+async def history(
+    experiment_id: uuid.UUID, user: CurrentUser, db: DbSession, backend: Backend,
+    protocol_revision_id: uuid.UUID | None = None,
+) -> list[dict]:
     await _get_owned_experiment(db, experiment_id, user)
+    statement = (
+        select(StatsAnalysis, StatsAnalysis.output["summary"]["status"].as_string())
+        .options(defer(StatsAnalysis.output))
+        .where(StatsAnalysis.experiment_id == experiment_id, StatsAnalysis.backend == backend)
+    )
+    if protocol_revision_id is not None:
+        statement = statement.where(
+            StatsAnalysis.request["source"]["protocol_revision_id"].as_string() == str(protocol_revision_id)
+        )
     analyses = (
         await db.execute(
-            select(StatsAnalysis, StatsAnalysis.output["summary"]["status"].as_string())
-            .options(defer(StatsAnalysis.output))
-            .where(StatsAnalysis.experiment_id == experiment_id, StatsAnalysis.backend == backend)
+            statement
             .order_by(StatsAnalysis.created_at.desc())
             .limit(100)
         )
@@ -103,14 +115,21 @@ async def report(experiment_id: uuid.UUID, analysis_id: uuid.UUID, user: Current
 
 
 @router.post("/{experiment_id}/automatic-analyses", status_code=202)
-async def automatic(experiment_id: uuid.UUID, user: CurrentUser, db: DbSession) -> list[dict]:
+async def automatic(
+    experiment_id: uuid.UUID, user: CurrentUser, db: DbSession, protocol_revision_id: uuid.UUID | None = None,
+) -> list[dict]:
     """One action analyzes declared metrics on one immutable input snapshot."""
     await _get_owned_experiment(db, experiment_id, user)
+    if protocol_revision_id is None:
+        raise HTTPException(422, "Select a published experiment version before analyzing metrics.")
     try:
-        snapshot = await read_source(db, experiment_id)
+        snapshot = await read_source(db, experiment_id, protocol_revision_id)
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
-    metrics = catalog(snapshot)["metrics"]
+    source_catalog = catalog(snapshot)
+    if not source_catalog["n_measured_replicates"]:
+        raise HTTPException(422, "This experiment version has no completed replicates with recorded measurements.")
+    metrics = source_catalog["metrics"]
     if not metrics or len(metrics) > 64:
         raise HTTPException(422, "An automatic batch requires between one and 64 metrics.")
     analyses = []

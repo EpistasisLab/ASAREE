@@ -6,34 +6,44 @@ import { Button } from '@/components/ui/button'
 import { StatisticsReport } from './StatisticsReport'
 import type { StatsAnalysis } from '@/types/stats'
 
-export function ExperimentStatistics({ experiment }: { experiment: string }) {
+export function ExperimentStatistics({ experiment, version }: { experiment: string; version: string | null }) {
   const client = useQueryClient()
-  const historyKey = ['automatic-statistics', experiment]
+  const historyKey = ['automatic-statistics', experiment, version]
+  const source = useQuery({
+    queryKey: ['statistics-source', experiment, version],
+    queryFn: () => statsApi.source(experiment, version!),
+    enabled: !!version,
+    refetchInterval: 15000,
+  })
   const history = useQuery({
     queryKey: historyKey,
-    queryFn: () => statsApi.history(experiment, 'stats_sm'),
+    queryFn: () => statsApi.history(experiment, 'stats_sm', version!),
+    enabled: !!version,
     refetchInterval: query => query.state.data?.some(a => a.status === 'pending' || a.status === 'running') ? 2500 : false,
   })
   const run = useMutation({
-    mutationFn: () => statsApi.automatic(experiment),
+    mutationFn: () => statsApi.automatic(experiment, version!),
     onSuccess: () => client.invalidateQueries({ queryKey: historyKey }),
   })
   const analyses = (history.data ?? []).filter(a => a.config.family === 'auto')
   const pending = run.isPending || analyses.some(a => a.status === 'pending' || a.status === 'running')
   const reports = analyses.filter(a => a.status === 'completed' && a.report_status === 'valid')
   const failed = analyses.filter(a => a.status === 'failed')
-  const error = history.error || run.error
+  const error = source.error || history.error || run.error
+  const ready = !!version && !source.isError && (source.data?.n_measured_replicates ?? 0) > 0
 
   return <div className="@container space-y-3 p-3">
-    <p className="text-xs text-muted-foreground">Analyze metrics from the experiment’s current design. Methods are selected automatically; saved reports retain the data captured when analyzed.</p>
-    <Button size="sm" disabled={pending || history.isLoading} onClick={() => run.mutate()}>
+    <p className="text-xs text-muted-foreground">Analyze metrics from the experiment version being viewed. Methods are selected automatically.</p>
+    <Button size="sm" disabled={!ready || pending || history.isLoading} onClick={() => run.mutate()}>
       {pending ? 'Analyzing metrics…' : 'Analyze all metrics'}
     </Button>
+    {!version && <p className="text-xs text-muted-foreground">Publish the experiment and run replicates to enable statistics.</p>}
+    {version && !source.isLoading && !source.error && !ready && <p className="text-xs text-muted-foreground">Run replicates for this experiment version and record measurements to enable statistics.</p>}
     {error && <p role="alert" className="text-xs text-destructive">{error.message}</p>}
     {history.isLoading && <p role="status" className="text-xs text-muted-foreground">Loading statistics…</p>}
     {pending && <p role="status" className="text-xs text-muted-foreground">Metrics are being analyzed. You can leave this tab and return later.</p>}
     {failed.map(a => <p key={a.id} role="alert" className="break-words text-xs text-destructive">{a.config.metric}: {a.error || 'Analysis failed. Please rerun the analysis.'}</p>)}
-    {!history.isLoading && !history.error && !pending && reports.length === 0 && <p className="text-xs text-muted-foreground">No statistical reports are available. Analyze all metrics after collecting sufficient experiment results.</p>}
+    {version && !history.isLoading && !history.error && !pending && reports.length === 0 && <p className="text-xs text-muted-foreground">No statistical reports are available for this experiment version. Analyze all metrics after collecting sufficient experiment results.</p>}
     <div className="space-y-2">
       {reports.map(analysis => <ReportRow key={analysis.id} experiment={experiment} analysis={analysis} />)}
     </div>
@@ -56,7 +66,6 @@ function ReportRow({ experiment, analysis }: { experiment: string; analysis: Sta
         <span className="block break-words font-medium">{analysis.config.metric}</span>
         <span className="block text-muted-foreground">{new Date(analysis.created_at).toLocaleString()}</span>
       </span>
-      <span className="shrink-0 font-mono text-muted-foreground">Design {analysis.design_revision ?? '—'}</span>
     </button>
     <div id={`stats-report-${analysis.id}`} hidden={!open} className="border-t">
       {open && <>

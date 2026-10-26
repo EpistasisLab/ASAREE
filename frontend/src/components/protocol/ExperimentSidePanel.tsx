@@ -308,7 +308,8 @@ export function ExperimentSidePanel({
               ) : activeTab === 'results' ? (
                 <>
                 <TabsContent value="statistics">
-                  <ExperimentStatistics key={experiment.id} experiment={experiment.id} />
+                  <ExperimentStatistics key={`${experiment.id}:${version?.id ?? protocol?.published_revision_id ?? 'unpublished'}`}
+                    experiment={experiment.id} version={version?.id ?? protocol?.published_revision_id ?? null} />
                 </TabsContent>
                 <TabsContent value="experiment">
                 <ResultsTab

@@ -28,13 +28,17 @@ const saved: StatsAnalysis = {
 
 beforeEach(() => {
   vi.spyOn(statsApi, 'history').mockResolvedValue([])
+  vi.spyOn(statsApi, 'source').mockResolvedValue({
+    factors: [], metrics: [], n_replicates: 10, n_measured_replicates: 10,
+    design_revision: 1, fingerprint: 'source', excluded_row_replicates: 0,
+  })
 })
 afterEach(() => { cleanup(); vi.restoreAllMocks() })
 
-function mount() {
+function mount(version: string | null = 'version-1') {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   render(<QueryClientProvider client={client}><MemoryRouter initialEntries={['/statistics?experiment=experiment']}>
-    <ExperimentStatistics experiment="experiment" />
+    <ExperimentStatistics experiment="experiment" version={version} />
   </MemoryRouter></QueryClientProvider>)
 }
 
@@ -43,10 +47,35 @@ it('analyzes all metrics without asking users to select statistical settings', a
   mount()
   await waitFor(() => expect(screen.getByRole('button', { name: 'Analyze all metrics' })).toBeEnabled())
   fireEvent.click(await screen.findByRole('button', { name: 'Analyze all metrics' }))
-  await waitFor(() => expect(automatic).toHaveBeenCalledWith('experiment'))
+  await waitFor(() => expect(automatic).toHaveBeenCalledWith('experiment', 'version-1'))
   expect(screen.queryByLabelText('Model family')).not.toBeInTheDocument()
   expect(screen.queryByLabelText('Measurement type')).not.toBeInTheDocument()
   expect(screen.queryByLabelText('Experiment')).not.toBeInTheDocument()
+  expect(statsApi.source).toHaveBeenCalledWith('experiment', 'version-1')
+  expect(statsApi.history).toHaveBeenCalledWith('experiment', 'stats_sm', 'version-1')
+})
+
+it('disables analysis when this version has no completed measured replicates', async () => {
+  vi.mocked(statsApi.source).mockResolvedValue({
+    factors: [], metrics: [], n_replicates: 10, n_measured_replicates: 0,
+    design_revision: 1, fingerprint: 'empty', excluded_row_replicates: 0,
+  })
+  const automatic = vi.spyOn(statsApi, 'automatic')
+  mount('older-version')
+  expect(await screen.findByText(/Run replicates for this experiment version/)).toBeInTheDocument()
+  expect(screen.getByRole('button', { name: 'Analyze all metrics' })).toBeDisabled()
+  expect(statsApi.source).toHaveBeenCalledWith('experiment', 'older-version')
+  expect(statsApi.history).toHaveBeenCalledWith('experiment', 'stats_sm', 'older-version')
+  fireEvent.click(screen.getByRole('button', { name: 'Analyze all metrics' }))
+  expect(automatic).not.toHaveBeenCalled()
+})
+
+it('requires a publication before enabling statistics', () => {
+  mount(null)
+  expect(screen.getByText(/Publish the experiment and run replicates/)).toBeInTheDocument()
+  expect(screen.getByRole('button', { name: 'Analyze all metrics' })).toBeDisabled()
+  expect(statsApi.source).not.toHaveBeenCalled()
+  expect(statsApi.history).not.toHaveBeenCalled()
 })
 
 it('shows concise statistics and a report download with no figures', async () => {

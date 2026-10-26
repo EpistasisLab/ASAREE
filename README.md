@@ -133,6 +133,9 @@ running that legacy declaration again.
 ### Automatic statistics reports
 
 In an experiment’s **Results** panel, open **Statistics** and select **Analyze all metrics**.
+Statistics use only the experiment version being viewed, including when viewing history.
+The action is enabled once that version has completed whole-dataset replicates with recorded measurements.
+Reports are filtered to the selected version; rerun older unscoped reports to attach them to a version.
 Available reports appear in a collapsible list; reports without valid statistical conclusions are hidden. New reports
 show analytic factor-test p-values alongside separately Holm-adjusted permutation
 sensitivity p-values, and analytic comparison intervals alongside bootstrap

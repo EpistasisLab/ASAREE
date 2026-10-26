@@ -408,7 +408,9 @@ async def test_automatic_batch_pins_one_snapshot_before_enqueuing(monkeypatch):
 
     db.add = MagicMock(side_effect=add)
     monkeypatch.setattr(api, "_get_pool", AsyncMock(return_value=SimpleNamespace(enqueue_job=enqueue)))
-    results = await api.automatic(uuid4(), SimpleNamespace(), db)
+    experiment_id, version_id = uuid4(), uuid4()
+    results = await api.automatic(experiment_id, SimpleNamespace(), db, version_id)
+    api.read_source.assert_awaited_once_with(db, experiment_id, version_id)
     assert {row["config"]["metric"] for row in results} == {"Custom", "Unmeasured"}
     assert all(row["backend"] == "stats_sm" and row["config"]["family"] == "auto" for row in results)
 

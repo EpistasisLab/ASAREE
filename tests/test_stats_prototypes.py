@@ -156,6 +156,59 @@ def source():
     )
 
 
+def test_saved_report_findings_refresh_without_mutating_stored_results(source):
+    from asaree.api.stats_prototypes import summary
+
+    output = dict(summary=dict(findings=["Old dense wording"], tests=[
+        dict(effect="Effort:Budget", p_adjusted=.4, permutation_p_adjusted=None),
+    ]))
+    analysis = SimpleNamespace(
+        id=uuid4(), backend="stats_sm", status="completed", error=None,
+        created_at=datetime.now(UTC), request=dict(source=source, config={}), output=output,
+    )
+    report = summary(analysis, detail=True)
+    assert "the effect of Effort changes across Budget settings" in report["output"]["summary"]["findings"][0]
+    assert output["summary"]["findings"] == ["Old dense wording"]
+
+
+@pytest.mark.parametrize("has_summary", [True, False])
+def test_saved_ordinal_report_recovers_chart_from_its_input_snapshot(source, has_summary):
+    from asaree.api.stats_prototypes import summary
+
+    source["metric_metadata"] = {"ordinal": {"ordinal_levels": ["low", "medium", "high"]}}
+    values = [row["metrics"]["ordinal"] for row in source["rows"]]
+    output = dict(family="ordinal_logit", tables={}, n_observations=len(values), summary=dict(
+        status="valid", findings=[], tests=[], distribution=dict(n=len(values), minimum=0, maximum=2),
+    ))
+    if not has_summary:
+        del output["summary"]["distribution"]
+    analysis = SimpleNamespace(
+        id=uuid4(), backend="stats_sm", status="completed", error=None, created_at=datetime.now(UTC),
+        request=dict(source=source, config=StatsRequest(metric="ordinal").model_dump()), output=output,
+    )
+    report = summary(analysis, detail=True)
+    plot = report["output"]["summary"]["distribution"]["plot"]
+    assert plot is not None
+    assert plot["bins"] == [dict(label=label, count=values.count(label)) for label in ["low", "medium", "high"]]
+    assert "plot" not in output["summary"].get("distribution", {})
+
+
+def test_saved_binomial_chart_uses_success_counts_not_transformed_residuals(source):
+    from asaree.services.stats_distribution import report_distribution
+
+    source["metric_metadata"] = {"successes": {"denominator": "trials"}}
+    values = [row["metrics"]["successes"] for row in source["rows"]]
+    output = dict(family="binomial", n_observations=len(values), summary=dict(
+        distribution=dict(n=len(values), minimum=min(values), maximum=max(values)),
+    ), tables=dict(residuals=[dict(observed=value / 10) for value in values]))
+    restored = report_distribution(output, source, StatsRequest(metric="successes").model_dump())
+    assert restored["maximum"] == max(values)
+    assert sum(bin["count"] for bin in restored["plot"]["bins"]) == len(values)
+    assert restored["plot"]["bins"] == [
+        dict(label=str(value), count=values.count(value)) for value in sorted(set(values))
+    ]
+
+
 def configuration(**kwargs):
     kwargs = {"family": "gaussian", "measurement_type": "continuous", **kwargs}
     return StatsRequest(metric="continuous", factors=["model", "prompt"], n_boot=20, n_perm=99, **kwargs).model_dump(

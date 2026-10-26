@@ -56,6 +56,8 @@ function ReportRow({ experiment, analysis }: { experiment: string; analysis: Sta
     queryKey: ['stats-analysis', experiment, analysis.id],
     queryFn: () => statsApi.get(experiment, analysis.id),
     enabled: open,
+    staleTime: 0,
+    refetchOnMount: 'always',
   })
   return <div className="overflow-hidden rounded-md border border-border">
     <button type="button" aria-expanded={open} aria-controls={`stats-report-${analysis.id}`}

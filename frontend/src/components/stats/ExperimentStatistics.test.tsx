@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { statsApi } from '@/api/client'
@@ -15,6 +15,8 @@ const saved: StatsAnalysis = {
     ordinal_levels: [], max_order: 2, n_boot: 100, n_boot_lrt: 0, n_perm: 999, seed: 22, tweedie_power: 1.5 },
   output: { family: 'gamma', n_observations: 100, n_excluded: 0, runtime_s: 1, tables: {}, notes: [], unavailable: [],
     summary: { version: 1, metric: 'Duration', status: 'valid', description: 'Analyzed 100 runs for Duration.',
+      distribution: { n: 100, minimum: 1, maximum: 9, mean: 4, sd: 2, distinct: 20, zeros: 0,
+        plot: { kind: 'histogram', bins: [{ label: '1–5', count: 60 }, { label: '5–9', count: 40 }] } },
       metric_info: { description: 'Elapsed time for one run.', unit: 'seconds', coding: [] },
       findings: [], tests: [{ effect: 'Treatment', p_adjusted: .01, result: 'Evidence of an effect',
         method: 'Wald chi-square test (HC0 robust covariance)' }],
@@ -78,7 +80,7 @@ it('requires a publication before enabling statistics', () => {
   expect(statsApi.history).not.toHaveBeenCalled()
 })
 
-it('shows concise statistics and a report download with no figures', async () => {
+it('shows concise statistics and a report download', async () => {
   vi.spyOn(statsApi, 'history').mockResolvedValue([saved])
   vi.spyOn(statsApi, 'get').mockResolvedValue(saved)
   mount()
@@ -92,8 +94,8 @@ it('shows concise statistics and a report download with no figures', async () =>
   expect(screen.getByText('What ran and why')).toBeInTheDocument()
   expect(screen.getByText('Elapsed time for one run.')).toBeInTheDocument()
   expect(screen.getByText('Unit: seconds')).toBeInTheDocument()
-  expect(screen.getByText('Wald chi-square test (HC0 robust covariance)')).toBeInTheDocument()
-  expect(screen.getByText('Delta-method Wald z-test (HC0 robust covariance)')).toBeInTheDocument()
+  expect(within(screen.getByRole('region', { name: 'What ran and why' })).getByText('Wald chi-square test (HC0 robust covariance)')).toBeInTheDocument()
+  expect(within(screen.getByRole('region', { name: 'What ran and why' })).getByText('Delta-method Wald z-test (HC0 robust covariance)')).toBeInTheDocument()
   expect(screen.getByText(/checks whether the factor contributes to the fitted model/)).toBeInTheDocument()
 })
 
@@ -107,6 +109,90 @@ it('hides reports without valid conclusions', async () => {
   expect(screen.queryByRole('button', { name: /Duration/ })).not.toBeInTheDocument()
   expect(statsApi.get).not.toHaveBeenCalled()
   expect(screen.queryByText('Evidence of an effect')).not.toBeInTheDocument()
+})
+
+it('replaces old stored narrative with conversational summaries of the numeric tests', async () => {
+  const findings = [
+    'Both the main test and the permutation check found evidence that Effort has an effect on this metric.',
+    'Both the main test and the permutation check found evidence that Feature budget has an effect on this metric.',
+    'The main test found no clear evidence that the effect of Effort changes across Feature budget settings. A permutation check was not available for this comparison.',
+  ]
+  const old = 'Effort: analytic — evidence of an effect; permutation — evidence in sensitivity check.'
+  const tests = [
+    { ...saved.output!.summary!.tests[0], effect: 'Effort', p_adjusted: .01, permutation_p_adjusted: .02 },
+    { ...saved.output!.summary!.tests[0], effect: 'Feature budget', p_adjusted: .01, permutation_p_adjusted: .02 },
+    { ...saved.output!.summary!.tests[0], effect: 'Effort:Feature budget', p_adjusted: .4, permutation_p_adjusted: null },
+  ]
+  const analysis = { ...saved, output: { ...saved.output!, summary: { ...saved.output!.summary!, findings: [old], tests } } }
+  vi.spyOn(statsApi, 'history').mockResolvedValue([analysis])
+  vi.spyOn(statsApi, 'get').mockResolvedValue(analysis)
+  mount()
+  fireEvent.click(await screen.findByRole('button', { name: /Duration/ }))
+  const list = within(await screen.findByRole('list', { name: 'Key findings' }))
+  expect(list.getAllByRole('listitem')).toHaveLength(3)
+  for (const finding of findings) expect(list.getByText(finding)).toBeVisible()
+  expect(screen.queryByText(old)).not.toBeInTheDocument()
+  expect(screen.getByText(/Explanations use fixed templates; no AI is used/)).toBeInTheDocument()
+})
+
+it('surfaces the selected distribution and saved observed summaries', async () => {
+  vi.spyOn(statsApi, 'history').mockResolvedValue([saved])
+  vi.spyOn(statsApi, 'get').mockResolvedValue(saved)
+  mount()
+  fireEvent.click(await screen.findByRole('button', { name: /Duration/ }))
+  const section = within(await screen.findByRole('region', { name: 'Metric distribution' }))
+  expect(screen.getAllByText('Gamma')[0]).toBeVisible()
+  for (const [label, number] of [
+    ['Replicates', '100'], ['Minimum', '1'], ['Maximum', '9'], ['Mean', '4'],
+    ['Standard deviation', '2'], ['Distinct values', '20'], ['Zero values', '0'],
+  ]) {
+    expect(section.getByText(label, { selector: 'dt' }).nextElementSibling).toHaveTextContent(number)
+  }
+  expect(section.getByText(/accounting for the experimental factors/)).toBeVisible()
+  const chart = within(section.getByRole('figure', { name: 'Duration observed distribution' }))
+  expect(chart.getByText('1–5')).toBeVisible()
+  expect(chart.getByText('60')).toBeVisible()
+  expect(chart.getByText('5–9')).toBeVisible()
+  expect(chart.getByText('40')).toBeVisible()
+})
+
+it('hides the distribution section when no saved observations or summaries exist', async () => {
+  const older = { ...saved, output: { ...saved.output!, summary: { ...saved.output!.summary!, distribution: undefined } } }
+  vi.spyOn(statsApi, 'history').mockResolvedValue([older])
+  vi.spyOn(statsApi, 'get').mockResolvedValue(older)
+  mount()
+  fireEvent.click(await screen.findByRole('button', { name: /Duration/ }))
+  expect((await screen.findAllByText('Gamma')).length).toBeGreaterThan(0)
+  expect(screen.queryByRole('region', { name: 'Metric distribution' })).not.toBeInTheDocument()
+  expect(screen.getByText('Treatment: A vs B')).toBeVisible()
+})
+
+it('explains missing observations instead of displaying an empty chart', async () => {
+  const older = { ...saved, output: { ...saved.output!, summary: { ...saved.output!.summary!,
+    distribution: { ...saved.output!.summary!.distribution!, plot: null },
+  } } }
+  vi.spyOn(statsApi, 'history').mockResolvedValue([older])
+  vi.spyOn(statsApi, 'get').mockResolvedValue(older)
+  mount()
+  fireEvent.click(await screen.findByRole('button', { name: /Duration/ }))
+  expect(await screen.findByText(/does not contain enough observations to draw a chart/)).toBeVisible()
+  expect(screen.queryByRole('figure')).not.toBeInTheDocument()
+})
+
+it('organizes methods into an overview with optional full technical details', async () => {
+  vi.spyOn(statsApi, 'history').mockResolvedValue([saved])
+  vi.spyOn(statsApi, 'get').mockResolvedValue(saved)
+  mount()
+  fireEvent.click(await screen.findByRole('button', { name: /Duration/ }))
+  const overview = within(await screen.findByRole('region', { name: 'What ran and why' }))
+  for (const title of ['Model selection', 'Tests and comparisons', 'Uncertainty checks', 'How to interpret it']) {
+    expect(overview.getByRole('heading', { name: title })).toBeVisible()
+  }
+  const disclosure = overview.getByText('Full technical details').closest('details')!
+  expect(disclosure).not.toHaveAttribute('open')
+  fireEvent.click(overview.getByText('Full technical details'))
+  expect(disclosure).toHaveAttribute('open')
+  expect(overview.getByText('input-snapshot')).toBeVisible()
 })
 
 it('lists reports independently and loads them only when expanded', async () => {

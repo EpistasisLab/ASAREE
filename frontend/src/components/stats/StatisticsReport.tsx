@@ -4,6 +4,16 @@ import { statsApi } from '@/api/client'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import type { StatsAnalysis } from '@/types/stats'
+import { describeStatsFindings } from '@/lib/statsFindings'
+import { AnalysisMethods } from './AnalysisMethods'
+
+const distributionNames: Record<string, string> = {
+  gaussian: 'Gaussian (normal)', gamma: 'Gamma', lognormal: 'Lognormal',
+  poisson: 'Poisson', negbin: 'Negative binomial', binomial: 'Binomial',
+  beta: 'Beta', betabinomial: 'Beta-binomial', ordinal_logit: 'Ordered categorical (cumulative logit)',
+  zip: 'Zero-inflated Poisson', zinb: 'Zero-inflated negative binomial',
+  zoib: 'Zero/one-inflated beta', gamma_hurdle: 'Hurdle Gamma',
+}
 
 function value(number: number | null, p = false) {
   if (number == null || !Number.isFinite(number)) return 'Unavailable'
@@ -21,6 +31,11 @@ export function StatisticsReport({ analysis, experiment }: { analysis: StatsAnal
   const report = analysis.output?.summary
   if (!report) return <p className="text-sm text-muted-foreground">Run an automatic analysis to create a concise report for this metric.</p>
   const resampled = !!report.resampling
+  const findings = describeStatsFindings(report.tests)
+  const distribution = report.distribution
+  const bins = distribution?.plot?.bins ?? []
+  const maximumCount = Math.max(1, ...bins.map(bin => bin.count))
+  const family = analysis.output?.family
   const metricInfo = report.metric_info ?? {
     description: report.metric_definition?.description?.trim() || 'Description not provided.',
     unit: report.metric_definition?.unit,
@@ -57,9 +72,40 @@ export function StatisticsReport({ analysis, experiment }: { analysis: StatsAnal
     </CardHeader>
     <CardContent className="space-y-5">
       <p className="text-sm text-muted-foreground">{report.description}</p>
-      {!!report.findings.length && <p className="text-sm">{report.findings.join(' ')}</p>}
+      {!!findings.length && <ul aria-label="Key findings" className="list-disc space-y-3 pl-5 text-sm">
+        {findings.map((finding, i) => <li key={i}>{finding}</li>)}
+      </ul>}
       {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
       {report.status !== 'valid' && <p role="alert" className="rounded border border-destructive p-3 text-sm">Statistical conclusions are unavailable for this metric. The reason is listed below.</p>}
+      {family && <p className="text-sm">Selected model distribution: <span className="font-medium">{distributionNames[family] ?? family}</span></p>}
+      {distribution && distribution.n > 0 && <section aria-label="Metric distribution" className="space-y-3">
+        <h3 className="text-sm font-medium">Observed distribution</h3>
+        {bins.some(bin => bin.count > 0) && <figure aria-label={`${report.metric} observed distribution`} className="space-y-2 rounded-md border border-border bg-muted/20 p-3">
+          <figcaption className="flex justify-between text-xs text-muted-foreground"><span>Metric value{metricInfo.unit ? ` (${metricInfo.unit})` : ''}</span><span>Replicates</span></figcaption>
+          <ol className="space-y-1.5">
+            {bins.map((bin, i) => <li key={i} className="grid grid-cols-[minmax(0,6rem)_minmax(0,1fr)_2rem] items-center gap-2 text-xs">
+              <span className="break-words font-mono" title={bin.label}>{bin.label}</span>
+              <span aria-hidden="true" className="h-4 overflow-hidden rounded-sm bg-muted">
+                <span className="block h-full rounded-sm bg-primary shadow-[0_0_8px_var(--primary)]" style={{ width: `${bin.count / maximumCount * 100}%` }} />
+              </span>
+              <span className="text-right font-mono">{bin.count}</span>
+            </li>)}
+          </ol>
+        </figure>}
+        {!bins.some(bin => bin.count > 0) && <p className="rounded-md border border-border bg-muted/20 p-3 text-xs text-muted-foreground">This saved report does not contain enough observations to draw a chart. Analyze this experiment version again to include it.</p>}
+        <p className="text-xs text-muted-foreground">Observed values pool the analyzed replicates across conditions. The selected model describes outcomes after accounting for the experimental factors.</p>
+        {!!metricInfo.coding.length && <p className="text-xs text-muted-foreground">Categorical outcomes use the analyzed category codes. Their numeric summaries depend on that coding.</p>}
+        <dl className="grid grid-cols-2 gap-x-4 gap-y-2 text-xs @lg:grid-cols-3">
+          {([
+            ['Replicates', distribution.n], ['Minimum', distribution.minimum], ['Maximum', distribution.maximum],
+            ['Mean', distribution.mean], ['Standard deviation', distribution.sd],
+            ['Distinct values', distribution.distinct], ['Zero values', distribution.zeros],
+          ] satisfies [string, number | null][]).map(([label, number]) => <div key={label} className="min-w-0">
+            <dt className="text-muted-foreground">{label}</dt>
+            <dd className="mt-1 break-words font-mono">{value(number)}</dd>
+          </div>)}
+        </dl>
+      </section>}
       {!!report.tests.length && <div className="overflow-x-auto"><table className="w-full text-left text-sm">
         <caption className="mb-2 text-left font-medium">Statistical tests</caption>
         <thead><tr>{['Effect', resampled ? 'Analytic adjusted p' : 'Adjusted p-value', ...(resampled ? ['Permutation adjusted p'] : []), 'Analytic result'].map(title => <th scope="col" key={title} className="border-b border-border p-3">{title}</th>)}</tr></thead>
@@ -88,11 +134,7 @@ export function StatisticsReport({ analysis, experiment }: { analysis: StatsAnal
       {!!report.warnings.length && <div className="space-y-2 text-sm text-muted-foreground" aria-label="Limitations and exclusions">
         {report.warnings.map((warning, i) => <p key={i}>{warning}</p>)}
       </div>}
-      <details className="rounded border border-border p-3 text-sm">
-        <summary className="cursor-pointer font-medium">What ran and why</summary>
-        <div className="mt-3 space-y-2 text-muted-foreground">{report.methods.map((method, i) => <p key={i}>{method}</p>)}</div>
-        <p className="mt-3 break-all font-mono text-xs text-muted-foreground">Input snapshot: {analysis.fingerprint} · Analysis: {analysis.id}</p>
-      </details>
+      <AnalysisMethods analysis={analysis} report={report} modelName={family ? distributionNames[family] ?? family : 'Model not recorded'} />
     </CardContent>
   </Card>
 }

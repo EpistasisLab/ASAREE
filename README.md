@@ -136,6 +136,15 @@ In an experiment’s **Results** panel, open **Statistics** and select **Analyze
 Statistics use only the experiment version being viewed, including when viewing history.
 The action is enabled once that version has completed whole-dataset replicates with recorded measurements.
 Reports are filtered to the selected version; rerun older unscoped reports to attach them to a version.
+Each report shows the selected model distribution and the stored observed summaries
+(replicate count, minimum, maximum, mean, standard deviation, distinct values, and zero count),
+both in the panel and the HTML download.
+The observed distribution uses a histogram or category-frequency chart. Older reports
+recover observations from their immutable input snapshot, including ordinal categories and
+binomial counts; no experiment rerun or statistical refit is needed. Missing evidence is
+explained instead of leaving an empty chart. “What ran and why” presents the model,
+tests, uncertainty checks, and interpretation in a responsive overview with optional technical details.
+Findings use plain-language templates; statistics and report generation make no LLM calls.
 Available reports appear in a collapsible list; reports without valid statistical conclusions are hidden. New reports
 show analytic factor-test p-values alongside separately Holm-adjusted permutation
 sensitivity p-values, and analytic comparison intervals alongside bootstrap
@@ -161,7 +170,7 @@ Passing that screen does not prove exchangeability. Pointwise intervals are not 
 separate metrics are exploratory rather than jointly corrected.
 
 **Download HTML report** includes the same results, test names, rationale,
-requested/completed/failed counts, seed, and limitations. No figures are generated.
+requested/completed/failed counts, seed, limitations, and a script-free observed-distribution chart.
 To regenerate the labeled synthetic examples without a database or credentials:
 
 ```bash

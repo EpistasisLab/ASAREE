@@ -50,6 +50,16 @@ export interface StatsAnalysis {
 }
 
 export interface StatsSummary {
+  distribution?: {
+    n: number
+    minimum: number
+    maximum: number
+    mean: number
+    sd: number | null
+    distinct: number
+    zeros: number
+    plot?: { kind: 'frequency' | 'histogram'; bins: { label: string; count: number }[] } | null
+  }
   metric_info?: { description: string; unit: string | null; coding: string[] }
   metric_definition?: { description?: string; unit?: string }
   version: number

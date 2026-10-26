@@ -304,6 +304,34 @@ def unavailable(source: dict, config: dict, reason: str) -> dict:
     )
 
 
+def automatic_inputs(source: dict, config: dict, plan: dict) -> tuple[dict, dict, dict]:
+    """Resolve the exact analyzed rows, shared with saved-report chart recovery."""
+    observed_levels = {}
+    for row in source["rows"]:
+        for key, value in row.get("factors", {}).items():
+            if value is not None:
+                observed_levels.setdefault(key, set()).add(json.dumps(value, sort_keys=True, default=str))
+    factors = config.get("factors") or sorted(key for key, levels in observed_levels.items() if len(levels) > 1)
+    if not factors or len(factors) > 6:
+        raise ValueError("Analysis requires between one and six varying experimental factors.")
+    treatment_labels = factor_labels(source, factors)
+    resolved = dict(
+        config, factors=factors, measurement_type=plan["measurement_type"],
+        ordinal_levels=plan["ordinal_levels"], denominator=plan["denominator"], robust=True,
+    )
+    converted_source = dict(source, rows=[
+        dict(row,
+             factors={name: treatment_labels[name].get(
+                 json.dumps(row.get("factors", {}).get(name), sort_keys=True, default=str)
+             ) for name in factors},
+             metrics={**row["metrics"], config["metric"]: plan["conversion"].get(
+                 str(row["metrics"].get(config["metric"])), row["metrics"].get(config["metric"])
+             )})
+        for row in source["rows"]
+    ])
+    return converted_source, resolved, treatment_labels
+
+
 def analyze_automatic(source: dict, config: dict) -> dict:
     """Build a plan, fit supported candidates, and expose only validated inference."""
     from asaree.services.stats_prototypes import compute, json_safe, prepare_frame
@@ -321,44 +349,8 @@ def analyze_automatic(source: dict, config: dict) -> dict:
             raise ValueError(
                 "Paired or repeated observations require a dependence model; independent-run tests withheld."
             )
-        observed_levels = {}
-        for row in source["rows"]:
-            for key, value in row.get("factors", {}).items():
-                if value is not None:
-                    observed_levels.setdefault(key, set()).add(json.dumps(value, sort_keys=True, default=str))
-        factors = config.get("factors") or sorted(key for key, levels in observed_levels.items() if len(levels) > 1)
-        if not factors or len(factors) > 6:
-            raise ValueError("Analysis requires between one and six varying experimental factors.")
-        treatment_labels = factor_labels(source, factors)
-        resolved = dict(
-            config,
-            factors=factors,
-            measurement_type=plan["measurement_type"],
-            ordinal_levels=plan["ordinal_levels"],
-            denominator=plan["denominator"],
-            robust=True,
-        )
-        converted_source = dict(
-            source,
-            rows=[
-                dict(
-                    row,
-                    factors={
-                        name: treatment_labels[name].get(
-                            json.dumps(row.get("factors", {}).get(name), sort_keys=True, default=str)
-                        )
-                        for name in factors
-                    },
-                    metrics={
-                        **row["metrics"],
-                        config["metric"]: plan["conversion"].get(
-                            str(row["metrics"].get(config["metric"])), row["metrics"].get(config["metric"])
-                        ),
-                    },
-                )
-                for row in source["rows"]
-            ],
-        )
+        converted_source, resolved, treatment_labels = automatic_inputs(source, config, plan)
+        factors = resolved["factors"]
         candidates, fitted = [], []
         candidate_families = list(plan["candidates"])
         for family in candidate_families:
@@ -470,14 +462,12 @@ def analyze_automatic(source: dict, config: dict) -> dict:
         output["summary"]["provenance"]["treatment_labels"] = {
             name: list(mapping.values()) for name, mapping in treatment_labels.items()
         }
-        output["summary"]["distribution"] = dict(
-            n=len(frame),
-            minimum=float(frame.outcome.min()),
-            maximum=float(frame.outcome.max()),
-            mean=float(frame.outcome.mean()),
-            sd=float(frame.outcome.std()),
-            distinct=int(frame.outcome.nunique()),
-            zeros=int((frame.outcome == 0).sum()),
+        from asaree.services.stats_distribution import observed_distribution
+
+        output["summary"]["distribution"] = observed_distribution(
+            frame.outcome.to_numpy(float),
+            (plan.get("category_labels") or plan.get("ordinal_levels"))
+            if plan["measurement_type"] == "ordinal" else None,
         )
         return json_safe(output)
     except (ValueError, KeyError) as exc:
@@ -752,10 +742,9 @@ def build_summary(output, source, config, plan, family, warnings):
             "Bootstrap intervals resample whole independent runs within each observed cell and refit "
             "the selected model. Factor values and trial totals stay attached to their runs."
         )
-    findings = [
-        f"{t['effect']}: analytic — {t['result'].lower()}; permutation — {t['permutation_result'].lower()}."
-        for t in tests
-    ]
+    from asaree.services.stats_findings import describe_findings
+
+    findings = describe_findings(tests)
     versions = {name: importlib.metadata.version(name) for name in ("numpy", "scipy", "statsmodels")}
     return dict(
         version=REPORT_VERSION,

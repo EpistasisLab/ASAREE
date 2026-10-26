@@ -11,6 +11,8 @@ import pytest
 import statsmodels.api as sm
 
 from asaree.services.stats_automatic import coerce_values, metric_information, plan_metric
+from asaree.services.stats_distribution import distribution_plot, saved_distribution_plot
+from asaree.services.stats_findings import describe_findings
 from asaree.services.stats_html import render_html
 from asaree.services.stats_prototypes import StatsRequest, catalog, compute, metric_definitions, prepare_frame
 from asaree.stats_sm.analysis import analyze as native_analyze
@@ -81,7 +83,14 @@ def test_numeric_text_is_converted_without_modifying_snapshot():
     assert source == original
 
 
-def test_native_gaussian_effect_and_interval_match_reference():
+def test_native_gaussian_effect_and_interval_match_reference(monkeypatch):
+    import socket
+
+    def reject_network(*args, **kwargs):
+        raise AssertionError("Statistics and report generation must not make network or LLM calls")
+
+    monkeypatch.setattr(socket.socket, "connect", reject_network)
+    monkeypatch.setattr(socket, "create_connection", reject_network)
     rng = np.random.default_rng(7)
     group = np.arange(160) % 2
     y = 2 * group + rng.normal(0, 1, 160)
@@ -95,6 +104,73 @@ def test_native_gaussian_effect_and_interval_match_reference():
     assert "Wald z-test" in effect["method"]
     assert "Wald chi-square test" in result["summary"]["tests"][0]["method"]
     assert any("Checks whether this factor contributes" in line for line in result["summary"]["methods"])
+    distribution = result["summary"]["distribution"]
+    assert distribution["n"] == len(y)
+    assert sum(bin["count"] for bin in distribution["plot"]["bins"]) == len(y)
+    np.testing.assert_allclose(
+        [distribution[key] for key in ("minimum", "maximum", "mean", "sd")],
+        [y.min(), y.max(), y.mean(), y.std(ddof=1)],
+    )
+    html = render_html(dict(output=result))
+    assert "Observed distribution" in html
+    assert "Selected model distribution: Gaussian (normal)" in html
+    assert "Standard deviation" in html
+    assert "accounting for the experimental factors" in html
+
+
+def test_html_handles_saved_reports_without_distribution_summaries():
+    summary = dict(metric="Legacy", status="valid", description="Saved report",
+                   findings=[], effects=[], tests=[], methods=[], warnings=[])
+    html = render_html(dict(output=dict(family="gamma", summary=summary)))
+    assert "Selected model distribution: Gamma" in html
+    assert "Observed distribution" not in html
+
+
+def test_plain_language_findings_describe_agreement_interactions_and_disagreement():
+    findings = describe_findings([
+        dict(effect="Effort", p_adjusted=.3, permutation_p_adjusted=.4),
+        dict(effect="Feature budget", p_adjusted=.01, permutation_p_adjusted=.02),
+        dict(effect="Effort:Feature budget", p_adjusted=.4, permutation_p_adjusted=None),
+        dict(effect="Other", p_adjusted=.01, permutation_p_adjusted=.4),
+        dict(effect="Missing", p_adjusted=None, permutation_p_adjusted=None),
+    ])
+    assert findings[0] == (
+        "Neither the main test nor the permutation check found clear evidence that Effort has an effect on this metric."
+    )
+    assert findings[1] == (
+        "Both the main test and the permutation check found evidence that Feature budget has an effect on this metric."
+    )
+    assert findings[2] == (
+        "The main test found no clear evidence that the effect of Effort changes across Feature budget settings. "
+        "A permutation check was not available for this comparison."
+    )
+    assert "two methods differ" in findings[3]
+    assert "main statistical test for Missing was unavailable" in findings[4]
+
+
+def test_histogram_conserves_observations_and_keeps_extreme_values():
+    values = np.arange(100).tolist() + [500]
+    plot = distribution_plot(values)
+    assert plot["kind"] == "histogram"
+    assert sum(bin["count"] for bin in plot["bins"]) == len(values)
+    assert plot["bins"][0]["lower"] == 0
+    assert plot["bins"][-1]["upper"] == 500
+    assert plot["bins"][-1]["count"] >= 1
+    assert distribution_plot([]) is None
+
+
+def test_frequencies_preserve_category_labels_and_counts():
+    plot = distribution_plot([0, 1, 1, 2], ["Low", "Medium", "High"])
+    assert plot["kind"] == "frequency"
+    assert plot["bins"] == [dict(label="Low", count=1), dict(label="Medium", count=2), dict(label="High", count=1)]
+
+
+def test_older_reports_plot_only_saved_observations_matching_the_summary_scale():
+    output = dict(family="gaussian", summary=dict(distribution=dict(n=3, minimum=1, maximum=3)),
+                  tables=dict(residuals=[dict(observed=value) for value in (1, 2, 3)]))
+    assert saved_distribution_plot(output)["bins"][-1]["count"] == 1
+    output["tables"]["residuals"][-1]["observed"] = 30
+    assert saved_distribution_plot(output) is None
 
 
 @pytest.mark.parametrize("robust", [False, True])
@@ -203,7 +279,7 @@ def test_metric_identities_come_from_declarations_and_producer_bindings():
     assert definitions["Explanation"]["value_type"] == "opaque"
 
 
-def test_html_escapes_custom_labels_and_never_embeds_figures_or_scripts():
+def test_html_escapes_custom_labels_and_never_embeds_images_or_scripts():
     result = analyze(
         np.random.default_rng(5).normal(size=100).tolist(),
         "<script>alert(1)</script>",

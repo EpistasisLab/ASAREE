@@ -13,6 +13,8 @@ from sqlalchemy.orm import defer
 from asaree.api.experiments import _get_owned_experiment
 from asaree.deps import CurrentUser, DbSession
 from asaree.models.stats_analysis import StatsAnalysis
+from asaree.services.stats_distribution import report_distribution
+from asaree.services.stats_findings import describe_findings
 from asaree.services.stats_prototypes import StatsRequest, catalog, prepare_frame, read_source
 from asaree.worker.enqueue import _get_pool
 
@@ -47,7 +49,13 @@ def summary(analysis: StatsAnalysis, *, detail: bool = False, report_status: str
         report_status=report_status,
     )
     if detail:
-        result["output"] = analysis.output
+        result["output"] = dict(analysis.output)
+        if report := analysis.output.get("summary"):
+            result["output"]["summary"] = dict(report, findings=describe_findings(report.get("tests", [])))
+            if distribution := report_distribution(
+                analysis.output, analysis.request["source"], analysis.request["config"],
+            ):
+                result["output"]["summary"]["distribution"] = distribution
         result["report_status"] = (analysis.output.get("summary") or {}).get("status")
         result["source"] = catalog(analysis.request["source"])
     return result

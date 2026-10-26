@@ -11,6 +11,8 @@ depends_on = None
 
 
 def upgrade() -> None:
+    # This schema may already exist from before the duplicate revision ID was
+    # corrected. Preserve its snapshots while advancing the migration stamp.
     op.create_table(
         "stats_analyses",
         sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True),
@@ -23,9 +25,10 @@ def upgrade() -> None:
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
         sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
         sa.ForeignKeyConstraint(["experiment_id"], ["research_experiments.id"], ondelete="CASCADE"),
+        if_not_exists=True,
     )
-    op.create_index("ix_stats_analyses_experiment_id", "stats_analyses", ["experiment_id"])
+    op.create_index("ix_stats_analyses_experiment_id", "stats_analyses", ["experiment_id"], if_not_exists=True)
 
 
 def downgrade() -> None:
-    op.drop_table("stats_analyses")
+    op.drop_table("stats_analyses", if_exists=True)

@@ -23,5 +23,6 @@ def test_upgrade_from_factor_index_revision_creates_stats_tables() -> None:
     config = make_config("postgresql+asyncpg://localhost/unused")
     config.output_buffer = output
     command.upgrade(config, "93a4b5c6d7e8:head", sql=True)
-    assert "CREATE TABLE stats_analyses" in output.getvalue()
-    assert "CREATE INDEX ix_stats_analyses_experiment_id" in output.getvalue()
+    # The table and index may already exist from the original, colliding ID.
+    assert "CREATE TABLE IF NOT EXISTS stats_analyses" in output.getvalue()
+    assert "CREATE INDEX IF NOT EXISTS ix_stats_analyses_experiment_id" in output.getvalue()

@@ -647,10 +647,15 @@ function StandardFactorEditorDialog({
     levelLabels: factorLevelLabels(factor),
   }, {
     open, sessionKey: pickableFields ? 'new' : factor.name,
-    signatureOf: (value) => JSON.stringify(makeDraft(
-      pickableFields ? value.selectedName : factor.name,
-      value.levelType, value.levels, value.levelLabels, value.selectedField ?? undefined,
-    )),
+    // Save normalization drops empty levels. Keep their row count in draft
+    // identity so an added row isn't mistaken for an acknowledged save.
+    signatureOf: (value) => JSON.stringify({
+      ...makeDraft(
+        pickableFields ? value.selectedName : factor.name,
+        value.levelType, value.levels, value.levelLabels, value.selectedField ?? undefined,
+      ),
+      levelCount: value.levels.length,
+    }),
   })
   const { selectedField, selectedName, levelType, levels, levelLabels } = localDraft
   function setLevels(value: SetStateAction<unknown[]>) {

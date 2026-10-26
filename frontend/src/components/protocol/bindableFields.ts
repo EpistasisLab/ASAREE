@@ -1,7 +1,8 @@
 import { sharedFactorGroup, factorScopeLabel, type SharedFactorKind } from '@/lib/sharedFactors'
 import type { ProtocolGraph } from '@/types/protocols'
 import type { Edge, Node } from '@xyflow/react'
-import type { LevelType } from './factorLevels'
+import { levelTypeOf, type LevelType } from './factorLevels'
+import type { DesignFactor } from '@/types/experiments'
 import type { McpServer } from '@/types/mcpServers'
 import { isPatternNode, patternFactorFields, PATTERN_FACTOR_PATH, patternFactorConflict } from './patternFactors'
 
@@ -354,6 +355,20 @@ export function factorBoundField(nodes: Node[], factorName: string): { nodeId: s
     }
   }
   return found
+}
+
+// Resolve an existing factor through the same field/connector choices used
+// for creation. Temporarily release only this factor's bindings in the lookup
+// so bound fields are discoverable without modifying the live canvas.
+export function factorEditorField(nodes: Node[], edges: Edge[], factor: DesignFactor): UnboundField | undefined {
+  const bindings = new Set(nodes.flatMap((node) => Object.entries(node.data.factor_bindings as Record<string, string> ?? {})
+    .filter(([, name]) => name === factor.name).map(([path]) => `${node.id}:${path}`)))
+  const unbound = nodes.map((node) => ({ ...node, data: { ...node.data,
+    factor_bindings: Object.fromEntries(Object.entries(node.data.factor_bindings as Record<string, string> ?? {})
+      .filter(([, name]) => name !== factor.name)),
+  } }))
+  return factorCreationFields(unbound, edges).find((field) =>
+    bindings.has(`${field.nodeId}:${field.fieldPath}`) && field.levelType === levelTypeOf(factor))
 }
 
 function getPath(data: Record<string, unknown>, dottedPath: string): unknown {

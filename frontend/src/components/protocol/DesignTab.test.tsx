@@ -78,7 +78,7 @@ describe('DesignTab design generation', () => {
     const openConnectorFactor = vi.fn()
     const handle: ProtocolCanvasHandle = {
       openConnectorFactor, bindFactor: vi.fn(), removeFactorBindings: vi.fn(),
-      renameFactorBindings: vi.fn(), setFactorBaseline: vi.fn(),
+      renameFactorBindings: vi.fn(), setFactorBaseline: vi.fn(), editFactor: vi.fn(),
     }
     render(<QueryClientProvider client={client}><DesignTab experiment={experiment} protocolId="protocol-1" canvasRef={{ current: handle }} onDesignUpdatePendingChange={vi.fn()} /></QueryClientProvider>)
     await user.click(screen.getByRole('button', { name: 'Add factor' }))
@@ -86,6 +86,23 @@ describe('DesignTab design generation', () => {
     await user.click(screen.getByRole('button', { name: new RegExp(label) }))
     expect(openConnectorFactor).toHaveBeenCalledWith(expect.objectContaining({ connectorFactor: expect.objectContaining({ kind, nodeId: kind, mode }) }))
     expect(screen.queryByPlaceholderText('Search fields…')).not.toBeInTheDocument()
+    client.clear()
+  })
+
+  it('opens the canvas factor dialog when editing a factor from Design', async () => {
+    const user = userEvent.setup()
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    client.setQueryData(protocolGraphQueryKey('protocol-1'), { nodes: [], edges: [] })
+    vi.spyOn(experimentsApi, 'getMeasurementCapabilities').mockResolvedValue({ outputs: {} })
+    vi.spyOn(experimentsApi, 'validateMeasurementPlan').mockResolvedValue({ valid: true, issues: [] })
+    const handle: ProtocolCanvasHandle = {
+      openConnectorFactor: vi.fn(), bindFactor: vi.fn(), removeFactorBindings: vi.fn(),
+      renameFactorBindings: vi.fn(), setFactorBaseline: vi.fn(), editFactor: vi.fn(),
+    }
+    render(<QueryClientProvider client={client}><DesignTab experiment={experiment} protocolId="protocol-1" canvasRef={{ current: handle }} onDesignUpdatePendingChange={vi.fn()} /></QueryClientProvider>)
+    await user.click(screen.getByRole('button', { name: 'Edit factor' }))
+    expect(handle.editFactor).toHaveBeenCalledExactlyOnceWith('Answer style')
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
     client.clear()
   })
 

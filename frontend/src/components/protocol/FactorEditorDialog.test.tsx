@@ -8,6 +8,31 @@ import { personasApi } from '@/api/client'
 const factorA: DesignFactor = { name: 'Model parameter', level_type: 'number', levels: [2048, 1024], level_labels: ['high', 'low'] }
 const factorB: DesignFactor = { ...factorA, levels: [1024, 2048], level_labels: ['low', 'high'] }
 
+it.each(['text', 'string', 'number'] as const)('keeps an added empty %s level until the user fills it', async (level_type) => {
+  const factor: DesignFactor = {
+    name: 'Treatment', level_type,
+    levels: level_type === 'number' ? [1, 2] : ['first', 'second'],
+    level_labels: ['one', 'two'],
+  }
+  const save = vi.fn().mockResolvedValue(undefined)
+  const props = { open: true, onOpenChange: vi.fn(), onSave: save }
+  const { rerender } = render(<FactorEditorDialog {...props} factor={factor} />)
+  fireEvent.click(screen.getByRole('button', { name: 'Add level' }))
+  expect(screen.getByLabelText('Level 3 label')).toBeInTheDocument()
+  // A refetch of unchanged saved data must not discard the incomplete row.
+  rerender(<FactorEditorDialog {...props} factor={{ ...factor, levels: [...factor.levels] }} />)
+  const label = screen.getByLabelText('Level 3 label')
+  expect(save).not.toHaveBeenCalled()
+  const value = label.parentElement!.querySelector('textarea, input:not([aria-label])')!
+  fireEvent.change(value, { target: { value: level_type === 'number' ? '3' : 'third' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Close' }))
+  await waitFor(() => expect(save).toHaveBeenCalledExactlyOnceWith({
+    ...factor,
+    levels: [...factor.levels, level_type === 'number' ? 3 : 'third'],
+    level_labels: ['one', 'two', expect.any(String)],
+  }, undefined))
+})
+
 it.each([null, '01-analyst'])('uploads to the intended persona level when both levels share persona_id %s', async (personaId) => {
   vi.spyOn(personasApi, 'list').mockResolvedValue([])
   vi.spyOn(personasApi, 'upload').mockResolvedValue({

@@ -54,11 +54,10 @@ def test_standard_upgrade_from_main_runs_one_verified_migration() -> None:
     config = make_config("postgresql+asyncpg://localhost/unused")
     config.output_buffer = output
     script = ScriptDirectory.from_config(config)
-    assert script.get_heads() == ["93a4b5c6d7e8"]
-    assert [revision.revision for revision in script.iterate_revisions("head", "8293a4b5c6d7")] == [
+    assert [revision.revision for revision in script.iterate_revisions("93a4b5c6d7e8", "8293a4b5c6d7")] == [
         "93a4b5c6d7e8"
     ]
-    command.upgrade(config, "8293a4b5c6d7:head", sql=True)
+    command.upgrade(config, "8293a4b5c6d7:93a4b5c6d7e8", sql=True)
     assert f"DROP INDEX IF EXISTS {_INDEX};" in output.getvalue()
     assert _model_index_sql() + ";" in output.getvalue()
     assert "pg_get_indexdef(indexrelid)" in output.getvalue()

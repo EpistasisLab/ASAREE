@@ -7,6 +7,7 @@ import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { datasetsApi, experimentsApi, mcpServersApi, personasApi, protocolsApi, skillsApi } from '@/api/client'
 import { protocolGraphQueryKey } from '@/lib/protocolGraph'
+import type { FactorBindingDiscrepancy } from '@/lib/factorBindings'
 import type { Experiment } from '@/types/experiments'
 import {
   defaultAgentNodeData,
@@ -20,6 +21,7 @@ import {
   defaultReasonActPatternNodeData,
   defaultScriptNodeData,
   type AgentNodeData,
+  type Protocol,
   type ProtocolGraph,
   type ProtocolNode,
   type ProtocolRun,
@@ -31,7 +33,17 @@ vi.mock('./PythonCodeEditor', () => ({
   PythonCodeEditor: ({ value }: { value: string }) => <textarea aria-label="Python code" value={value} readOnly />,
 }))
 
-function renderCanvas(graph: ProtocolGraph, experimentId: string | null = null, publishedRevision: number | null = null) {
+function renderCanvas(
+  graph: ProtocolGraph,
+  experimentId: string | null = null,
+  publishedRevision: number | null = null,
+  canvasProps: {
+    protocol?: Protocol
+    regenerationRequired?: boolean
+    unboundFactors?: string[]
+    bindingDiscrepancies?: FactorBindingDiscrepancy[]
+  } = {},
+) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   const canvasRef = createRef<ProtocolCanvasHandle>()
   const result = render(
@@ -46,6 +58,7 @@ function renderCanvas(graph: ProtocolGraph, experimentId: string | null = null, 
               initialGraph={graph}
               hasUnpublishedChanges={publishedRevision !== null}
               publishedRevision={publishedRevision}
+              {...canvasProps}
             />
           </div>
         </ReactFlowProvider>
@@ -74,6 +87,22 @@ function protocolRun(overrides: Partial<ProtocolRun> = {}): ProtocolRun {
     updated_at: '2026-10-01T12:00:00Z',
     observations: [],
     artifacts: [],
+    ...overrides,
+  }
+}
+
+function protocolFixture(overrides: Partial<Protocol> = {}): Protocol {
+  return {
+    id: 'protocol-1',
+    name: 'Protocol',
+    description: null,
+    experiment_id: 'experiment-1',
+    graph: { nodes: [], edges: [] },
+    published_revision_id: 'protocol-revision-1',
+    published_revision: 1,
+    has_unpublished_changes: false,
+    created_at: '2026-10-01T12:00:00Z',
+    updated_at: '2026-10-01T12:00:00Z',
     ...overrides,
   }
 }
@@ -973,6 +1002,18 @@ describe('ProtocolCanvas connector adds', () => {
     await screen.findByRole('button', { name: 'Stop' })
     expect(screen.getByRole('button', { name: 'Test Run' })).toBeDisabled()
     expect(screen.queryByRole('button', { name: 'Test Run running…' })).not.toBeInTheDocument()
+  })
+
+  it('shows an enabled Run experiment button next to Test Run', () => {
+    renderCanvas({ nodes: [], edges: [] }, 'experiment-1', 1, { protocol: protocolFixture() })
+
+    expect(screen.getByRole('button', { name: 'Run experiment' })).toBeEnabled()
+  })
+
+  it('disables Run experiment when the design needs regeneration', () => {
+    renderCanvas({ nodes: [], edges: [] }, 'experiment-1', 1, { protocol: protocolFixture(), regenerationRequired: true })
+
+    expect(screen.getByRole('button', { name: 'Run experiment' })).toBeDisabled()
   })
 
   it('stops the active production replicate instead of a completed Test Run', async () => {

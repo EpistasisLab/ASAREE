@@ -312,7 +312,7 @@ async def test_anthropic_missing_capability_tree_defaults_to_effort(monkeypatch:
 
     assert models[0].capabilities.supports_effort is True
     assert models[0].capabilities.supports_temperature is False
-    assert models[0].capabilities.default_effort == 'medium'
+    assert models[0].capabilities.default_effort == "medium"
 
 
 async def test_anthropic_failure_falls_back_to_the_catalog_and_scrubs_the_key(
@@ -415,10 +415,7 @@ async def test_openrouter_discovery_sends_bearer_token_when_credential_saved(
 
 
 async def test_openrouter_model_capabilities_resolve_via_motoros_registry(monkeypatch: pytest.MonkeyPatch) -> None:
-    """OpenRouter's own response has no temperature-vs-effort field -- capability
-    lookup falls back to Motoro's model_capabilities, which strips the leading
-    `vendor/` segment, so an id like this resolves against the same registry
-    entry the native Anthropic provider does."""
+    """Missing metadata preserves known registry entries, including Claude."""
     response = _FakeResponse({"data": [{"id": "anthropic/claude-opus-5", "name": "Claude Opus 5"}]})
     monkeypatch.setattr(discovery.httpx, "AsyncClient", lambda **kwargs: _SimpleClient(response, captured={}))
 
@@ -428,12 +425,98 @@ async def test_openrouter_model_capabilities_resolve_via_motoros_registry(monkey
     assert models[0].capabilities.supports_temperature is False
 
 
+@pytest.mark.parametrize(
+    ("metadata", "temperature", "levels", "default"),
+    [
+        ({"supported_parameters": ["temperature", "reasoning"], "reasoning": {"mandatory": True}}, True, [], None),
+        ({"supported_parameters": []}, False, [], None),
+        ({}, True, [], None),
+        (
+            {
+                "supported_parameters": ["temperature", "reasoning", "reasoning_effort"],
+                "reasoning": {"supported_efforts": ["xhigh", "medium", "low", "none"], "default_effort": "xhigh"},
+            },
+            False,
+            ["xhigh", "medium", "low", "none"],
+            "xhigh",
+        ),
+        (
+            {
+                "supported_parameters": ["reasoning"],
+                "reasoning": {"supported_efforts": ["high", "low", "none"], "mandatory": True},
+            },
+            False,
+            ["high", "low"],
+            "high",
+        ),
+        (
+            {"supported_parameters": ["reasoning"], "reasoning": {"supported_efforts": None}},
+            False,
+            ["none", "minimal", "low", "medium", "high", "xhigh", "max"],
+            "medium",
+        ),
+        (
+            {"supported_parameters": ["reasoning_effort"]},
+            False,
+            ["none", "minimal", "low", "medium", "high", "xhigh", "max"],
+            "medium",
+        ),
+        (
+            {
+                "supported_parameters": ["reasoning"],
+                "reasoning": {"supported_efforts": ["none", "low", "medium"], "default_effort": "none"},
+            },
+            False,
+            ["none", "low", "medium"],
+            "medium",
+        ),
+        (
+            {
+                "supported_parameters": ["reasoning"],
+                "reasoning": {"supported_efforts": ["high", "low"], "default_effort": "max"},
+            },
+            False,
+            ["high", "low"],
+            "high",
+        ),
+    ],
+)
+async def test_openrouter_reads_sampling_metadata(monkeypatch, metadata, temperature, levels, default):
+    response = _FakeResponse({"data": [{"id": "qwen/qwen3.8-27b", **metadata}]})
+    monkeypatch.setattr(discovery.httpx, "AsyncClient", lambda **kwargs: _SimpleClient(response, captured={}))
+    models, _, _ = await discovery.discover_models(provider="openrouter", setting=None)
+    caps = models[0].capabilities
+    assert caps.supports_temperature is temperature
+    assert caps.supports_effort is bool(levels)
+    assert caps.effort_levels == levels
+    assert caps.default_effort == default
+
+
+async def test_openrouter_live_metadata_overrides_claude_registry(monkeypatch):
+    response = _FakeResponse(
+        {
+            "data": [
+                {
+                    "id": "anthropic/claude-opus-5",
+                    "supported_parameters": ["temperature"],
+                }
+            ]
+        }
+    )
+    monkeypatch.setattr(discovery.httpx, "AsyncClient", lambda **kwargs: _SimpleClient(response, captured={}))
+    models, _, _ = await discovery.discover_models(provider="openrouter", setting=None)
+    assert models[0].capabilities.supports_temperature is True
+    assert models[0].capabilities.supports_effort is False
+
+
 async def test_openrouter_honours_a_custom_api_base(monkeypatch: pytest.MonkeyPatch) -> None:
     captured: dict = {}
     response = _FakeResponse({"data": []})
     monkeypatch.setattr(discovery.httpx, "AsyncClient", lambda **kwargs: _SimpleClient(response, captured=captured))
 
-    await discovery.discover_models(provider="openrouter", setting=_openrouter_setting(api_base="https://proxy.internal"))
+    await discovery.discover_models(
+        provider="openrouter", setting=_openrouter_setting(api_base="https://proxy.internal")
+    )
 
     assert captured["urls"] == ["https://proxy.internal/models"]
 
@@ -451,6 +534,16 @@ async def test_openrouter_failure_scrubs_the_key(monkeypatch: pytest.MonkeyPatch
 
 def _local_setting(api_key: str = "", api_base: str | None = "http://localhost:8000/v1") -> UserLLMSetting:
     return UserLLMSetting(provider="local", api_key_encrypted=encrypt(api_key), api_base=api_base)
+
+
+async def test_local_unknown_models_default_to_temperature_without_changing_known_claude(monkeypatch):
+    response = _FakeResponse({"data": [{"id": "qwen3.8-27b"}, {"id": "claude-opus-5"}]})
+    monkeypatch.setattr(discovery.httpx, "AsyncClient", lambda **kwargs: _SimpleClient(response, captured={}))
+    models, _, _ = await discovery.discover_models(provider="local", setting=_local_setting())
+    by_id = {model.id: model.capabilities for model in models}
+    assert by_id["qwen3.8-27b"].supports_effort is False
+    assert by_id["qwen3.8-27b"].supports_temperature is True
+    assert by_id["claude-opus-5"].supports_effort is True
 
 
 async def test_local_discovery_without_a_base_url_returns_error() -> None:

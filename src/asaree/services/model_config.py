@@ -6,7 +6,12 @@ import uuid
 from typing import Any
 
 from motoro.schemas.agent import ModelConfig
-from motoro.services.model_capabilities import ModelCapabilities, get_capabilities
+from motoro.services.model_capabilities import (
+    DEFAULT_CAPABILITIES,
+    TEMPERATURE_ONLY_CAPABILITIES,
+    ModelCapabilities,
+    get_capabilities,
+)
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from asaree.models.database import get_session
@@ -18,8 +23,9 @@ from asaree.services.user_llm_settings import get_setting
 async def resolve_model_capabilities(
     *, provider: str, model: str, db: AsyncSession, owner_id: uuid.UUID
 ) -> ModelCapabilities:
-    """Shared by custom-model lookup and execution: discovery, registry, then effort fallback."""
-    capabilities = get_capabilities(model)
+    """Shared by custom-model lookup and execution: discovery, registry, then provider default."""
+    default = TEMPERATURE_ONLY_CAPABILITIES if provider in {"openrouter", "local"} else DEFAULT_CAPABILITIES
+    capabilities = get_capabilities(model, default=default)
     if provider in SUPPORTED_PROVIDERS:
         setting = await get_setting(db, user_id=owner_id, provider=provider)
         models, _source, _note = await discover_models_cached(user_id=owner_id, provider=provider, setting=setting)

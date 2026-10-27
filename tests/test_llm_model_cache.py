@@ -224,3 +224,37 @@ async def test_invalidate_drops_only_that_users_provider_entry(monkeypatch: pyte
 async def test_invalidate_survives_a_broken_cache(monkeypatch: pytest.MonkeyPatch) -> None:
     _install(monkeypatch, _FakeRedis(fail=True))
     await cache.invalidate_models_cache(user_id=_USER_ID, provider="azure_foundry")  # must not raise
+
+
+@pytest.mark.parametrize("provider", ["openrouter", "local"])
+async def test_legacy_sampling_cache_is_replaced_and_invalidated(monkeypatch, provider):
+    redis = _FakeRedis()
+    legacy_key = f"llm:models:{_USER_ID}:{provider}"
+    redis.store[legacy_key] = cache._dump([_model("legacy")], "api", None, now=cache.time.time())
+    _install(monkeypatch, redis)
+    calls = []
+    _stub_discovery(monkeypatch, ([_model("fresh")], "api", None), calls)
+
+    models, _, _ = await cache.discover_models_cached(user_id=_USER_ID, provider=provider, setting=None)
+    assert calls == [provider]
+    assert models[0].id == "fresh"
+    assert redis.set_calls == [cache._key(_USER_ID, provider)]
+
+    await cache.discover_models_cached(user_id=_USER_ID, provider=provider, setting=None)
+    assert calls == [provider]
+    await cache.invalidate_models_cache(user_id=_USER_ID, provider=provider)
+    assert cache._key(_USER_ID, provider) not in redis.store
+
+
+async def test_openrouter_outage_never_serves_legacy_effort_metadata(monkeypatch):
+    redis = _FakeRedis()
+    redis.store[f"llm:models:{_USER_ID}:openrouter"] = cache._dump(
+        [_model()], "api", None, now=cache.time.time() - cache._FRESH_SECONDS - 1
+    )
+    _install(monkeypatch, redis)
+    _stub_discovery(monkeypatch, ([], "error", "offline"), [])
+    assert await cache.discover_models_cached(user_id=_USER_ID, provider="openrouter", setting=None) == (
+        [],
+        "error",
+        "offline",
+    )

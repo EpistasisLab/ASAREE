@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import httpx
+import litellm
 import pytest
 from fastapi import FastAPI
 from motoro.services.llm_service import UnsupportedEffortError, _sampling_kwargs
@@ -15,7 +16,7 @@ from asaree.api.llm_settings import router
 from asaree.deps import get_current_user
 from asaree.models.database import get_db
 from asaree.services import model_config as service
-from asaree.services.llm_model_discovery import ModelInfo
+from asaree.services.llm_model_discovery import ModelInfo, _capabilities_from_openrouter
 
 OWNER = uuid.UUID("11111111-1111-1111-1111-111111111111")
 
@@ -76,6 +77,52 @@ async def test_unknown_model_defaults_to_medium_effort(discovery):
         owner_id=OWNER,
     )
     assert _sampling_kwargs(config, "openai/new-model") == {"reasoning_effort": "medium"}
+
+
+@pytest.mark.parametrize("provider", ["openrouter", "local"])
+async def test_unknown_router_or_local_model_uses_temperature(discovery, provider):
+    config = await service.build_model_config(
+        {"provider": provider, "model": "qwen/qwen3.8-27b", "effort": "medium", "temperature": 0.4},
+        owner_id=OWNER,
+    )
+    assert _sampling_kwargs(config, "openrouter/qwen/qwen3.8-27b") == {"temperature": 0.4}
+
+
+async def test_openrouter_claude_keeps_effort_without_discovery(discovery):
+    config = await service.build_model_config(
+        {"provider": "openrouter", "model": "anthropic/claude-opus-5", "effort": "high"},
+        owner_id=OWNER,
+    )
+    assert _sampling_kwargs(config, "openrouter/anthropic/claude-opus-5")["reasoning_effort"] == "high"
+
+
+async def test_openrouter_live_effort_survives_stale_litellm_model_map(discovery, monkeypatch):
+    # Qwen's live catalog exposes effort even when the installed LiteLLM map doesn't.
+    model = "qwen/qwen3.8-27b"
+    capabilities = _capabilities_from_openrouter(
+        {
+            "id": model,
+            "supported_parameters": ["temperature", "reasoning", "reasoning_effort"],
+            "reasoning": {
+                "supported_efforts": ["xhigh", "medium", "low", "none"],
+                "default_effort": "xhigh",
+            },
+        }
+    )
+    discovery.return_value = ([ModelInfo(id=model, label=None, capabilities=capabilities)], "api", None)
+    monkeypatch.setattr(litellm, "supports_reasoning", lambda **kwargs: False)
+
+    with pytest.raises(litellm.UnsupportedParamsError, match="reasoning_effort"):
+        litellm.utils.get_optional_params(model=model, custom_llm_provider="openrouter", reasoning_effort="medium")
+
+    config = await service.build_model_config(
+        {"provider": "openrouter", "model": model, "effort": "medium"},
+        owner_id=OWNER,
+    )
+    kwargs = _sampling_kwargs(config, f"openrouter/{model}")
+    assert kwargs == {"reasoning_effort": "medium", "allowed_openai_params": ["reasoning_effort"]}
+    mapped = litellm.utils.get_optional_params(model=model, custom_llm_provider="openrouter", **kwargs)
+    assert mapped["reasoning_effort"] == "medium"
 
 
 async def test_explicit_custom_temperature_override_is_preserved(discovery):

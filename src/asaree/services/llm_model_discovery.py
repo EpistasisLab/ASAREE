@@ -56,6 +56,7 @@ from motoro.services.model_capabilities import (
     CATALOG,
     DEFAULT_EFFORT,
     EFFORT_LEVELS_FULL,
+    TEMPERATURE_ONLY_CAPABILITIES,
     ModelCapabilities,
     get_capabilities,
 )
@@ -251,18 +252,57 @@ async def _discover_anthropic(setting: UserLLMSetting) -> tuple[list[ModelInfo],
     return models, "api", None
 
 
+def _capabilities_from_openrouter(entry: dict[str, Any]) -> ModelCapabilities:
+    """Prefer live sampling metadata, then the registry with a temperature default.
+
+    Reasoning support alone need not expose effort selection (some models only
+    accept a token budget). Like the other providers, effort-capable entries
+    select the effort dial rather than showing temperature alongside it.
+    """
+    fallback = get_capabilities(entry["id"], default=TEMPERATURE_ONLY_CAPABILITIES)
+    if "supported_parameters" not in entry and "reasoning" not in entry:
+        return fallback
+
+    parameters = entry.get("supported_parameters") or []
+    reasoning = entry.get("reasoning") or {}
+    gateway_levels = ["none", "minimal", *EFFORT_LEVELS_FULL]
+    if "supported_efforts" in reasoning:
+        # null means every gateway effort is accepted; omission means no selector.
+        levels = reasoning["supported_efforts"]
+        levels = list(gateway_levels if levels is None else levels)
+    elif "reasoning" not in entry and "reasoning_effort" in parameters:
+        # Older listings expose the parameter without a per-model effort ladder.
+        levels = list(fallback.effort_levels if fallback.supports_effort else gateway_levels)
+    else:
+        levels = []
+    if reasoning.get("mandatory"):
+        levels = [level for level in levels if level != "none"]
+
+    default = reasoning.get("default_effort")
+    if default not in levels or default == "none":
+        default = (
+            DEFAULT_EFFORT
+            if DEFAULT_EFFORT in levels
+            else next((level for level in levels if level != "none"), levels[0] if levels else None)
+        )
+    return ModelCapabilities(
+        supports_temperature=(
+            "temperature" in parameters if "supported_parameters" in entry else fallback.supports_temperature
+        )
+        and not levels,
+        supports_effort=bool(levels),
+        effort_levels=levels,
+        default_effort=default,
+    )
+
+
 async def _discover_openrouter(setting: UserLLMSetting | None) -> tuple[list[ModelInfo], str, str | None]:
     """Live model list from OpenRouter's own public catalog.
 
     Unlike every other live listing here, this needs no credential -- OpenRouter
     documents GET /models as public, so a saved key is only used (as a bearer
-    token) when present, never required. The response has price/context data
-    but no explicit temperature-vs-effort field the way Anthropic's does, so
-    per-model capabilities fall back to Motoro's own get_capabilities(), which
-    strips the leading `vendor/` segment before matching (see
-    model_capabilities._normalize) -- an id like "anthropic/claude-opus-5"
-    resolves against the exact same registry entry the native Anthropic
-    provider does.
+    token) when present, never required. Read supported_parameters and the
+    per-model reasoning ladder rather than assuming every model accepts effort.
     """
     base = (setting.api_base if setting and setting.api_base else _OPENROUTER_DEFAULT_API_BASE).rstrip("/")
     headers = {}
@@ -286,7 +326,7 @@ async def _discover_openrouter(setting: UserLLMSetting | None) -> tuple[list[Mod
 
     models = sorted(
         (
-            ModelInfo(id=m["id"], label=m.get("name"), capabilities=get_capabilities(m["id"]))
+            ModelInfo(id=m["id"], label=m.get("name"), capabilities=_capabilities_from_openrouter(m))
             for m in data
             if m.get("id")
         ),
@@ -320,7 +360,15 @@ async def _discover_local(setting: UserLLMSetting) -> tuple[list[ModelInfo], str
         return [], "error", fallback_note
 
     models = sorted(
-        (ModelInfo(id=m["id"], label=None, capabilities=get_capabilities(m["id"])) for m in data if m.get("id")),
+        (
+            ModelInfo(
+                id=m["id"],
+                label=None,
+                capabilities=get_capabilities(m["id"], default=TEMPERATURE_ONLY_CAPABILITIES),
+            )
+            for m in data
+            if m.get("id")
+        ),
         key=lambda m: m.id,
     )
     if not models:

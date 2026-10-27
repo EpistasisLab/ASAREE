@@ -159,7 +159,7 @@ it('surfaces the selected distribution and saved observed summaries', async () =
     expect(section.getByText(label, { selector: 'dt' }).nextElementSibling).toHaveTextContent(number)
   }
   expect(section.getByText(/accounting for the experimental factors/)).toBeVisible()
-  const chart = within(section.getByRole('figure', { name: 'Duration observed distribution' }))
+  const chart = within(section.getByRole('figure', { name: 'Duration observed distribution histogram' }))
   expect(chart.getByText('1–5')).toBeVisible()
   expect(chart.getByText('60')).toBeVisible()
   expect(chart.getByText('5–9')).toBeVisible()

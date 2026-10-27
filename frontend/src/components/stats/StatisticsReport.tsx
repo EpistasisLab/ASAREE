@@ -80,17 +80,25 @@ export function StatisticsReport({ analysis, experiment }: { analysis: StatsAnal
       {family && <p className="text-sm">Selected model distribution: <span className="font-medium">{distributionNames[family] ?? family}</span></p>}
       {distribution && distribution.n > 0 && <section aria-label="Metric distribution" className="space-y-3">
         <h3 className="text-sm font-medium">Observed distribution</h3>
-        {bins.some(bin => bin.count > 0) && <figure aria-label={`${report.metric} observed distribution`} className="space-y-2 rounded-md border border-border bg-muted/20 p-3">
-          <figcaption className="flex justify-between text-xs text-muted-foreground"><span>Metric value{metricInfo.unit ? ` (${metricInfo.unit})` : ''}</span><span>Replicates</span></figcaption>
-          <ol className="space-y-1.5">
-            {bins.map((bin, i) => <li key={i} className="grid grid-cols-[minmax(0,6rem)_minmax(0,1fr)_2rem] items-center gap-2 text-xs">
-              <span className="break-words font-mono" title={bin.label}>{bin.label}</span>
-              <span aria-hidden="true" className="h-4 overflow-hidden rounded-sm bg-muted">
-                <span className="block h-full rounded-sm bg-primary shadow-[0_0_8px_var(--primary)]" style={{ width: `${bin.count / maximumCount * 100}%` }} />
-              </span>
-              <span className="text-right font-mono">{bin.count}</span>
-            </li>)}
-          </ol>
+        {bins.some(bin => bin.count > 0) && <figure aria-label={`${report.metric} observed distribution histogram`} className="space-y-2 rounded-md border border-border bg-muted/20 p-3">
+          <figcaption className="text-xs text-muted-foreground">Histogram</figcaption>
+          <div className="flex gap-2">
+            <span className="flex h-32 select-none items-center text-xs text-muted-foreground [writing-mode:vertical-rl] rotate-180">Replicates</span>
+            <div className="min-w-0 flex-1 space-y-1.5">
+              <ol className="flex gap-0.5">
+                {bins.map((bin, i) => <li key={i} className="flex min-w-0 flex-1 flex-col" title={bin.label}>
+                  <span className="flex h-32 w-full items-end border-b border-border">
+                    {bin.count > 0 && <span aria-hidden="true" className="w-full rounded-t-sm bg-primary shadow-[0_0_8px_var(--primary)]" style={{ height: `${bin.count / maximumCount * 100}%` }} />}
+                  </span>
+                  <span className="pt-1 text-center font-mono text-[10px] leading-tight text-muted-foreground">
+                    <span className="block break-words">{bin.label}</span>
+                    <span className="block">{bin.count}</span>
+                  </span>
+                </li>)}
+              </ol>
+              <p className="text-center text-xs text-muted-foreground">Metric value{metricInfo.unit ? ` (${metricInfo.unit})` : ''}</p>
+            </div>
+          </div>
         </figure>}
         {!bins.some(bin => bin.count > 0) && <p className="rounded-md border border-border bg-muted/20 p-3 text-xs text-muted-foreground">This saved report does not contain enough observations to draw a chart. Analyze this experiment version again to include it.</p>}
         <p className="text-xs text-muted-foreground">Observed values pool the analyzed replicates across conditions. The selected model describes outcomes after accounting for the experimental factors.</p>

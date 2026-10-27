@@ -54,7 +54,8 @@ STALE_NOTE = (
 
 
 def _key(user_id: uuid.UUID, provider: str) -> str:
-    return f"llm:models:{user_id}:{provider}"
+    # v3 distinguishes unknown support and provider defaults from application policy.
+    return f"llm:models:{user_id}:{provider}:v3"
 
 
 def _dump(models: list[ModelInfo], source: str, note: str | None, *, now: float) -> str:
@@ -133,9 +134,7 @@ async def discover_models_cached(
 async def store_models_cache(*, user_id: uuid.UUID, provider: str, models: list[ModelInfo]) -> None:
     """Reuse a successful live connection check as the cached model list."""
     try:
-        await get_redis().set(
-            _key(user_id, provider), _dump(models, "api", None, now=time.time()), ex=_RETAIN_SECONDS
-        )
+        await get_redis().set(_key(user_id, provider), _dump(models, "api", None, now=time.time()), ex=_RETAIN_SECONDS)
     except Exception as e:  # noqa: BLE001 -- caching must not fail the connection check
         logger.warning("model_cache_write_failed", extra={"error": str(e)})
 

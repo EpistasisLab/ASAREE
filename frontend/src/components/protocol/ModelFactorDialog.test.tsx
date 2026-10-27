@@ -5,6 +5,10 @@ import { factorCreationFields } from './bindableFields'
 import { ModelFactorDialog } from './ModelFactorDialog'
 import { LlmConfigLevelRow } from './FactorEditorDialog'
 
+vi.mock('./useSamplingPreview', () => ({ useSamplingPreview: (caps?: { default_effort?: string }) => ({
+  data: { effort: caps?.default_effort ?? 'low', temperature: 0.5 },
+}) }))
+
 vi.mock('./useProviderModels', () => ({ useProviderModels: (_provider: string, model?: string) => ({ models: [
   { id: 'gpt-5', label: 'GPT 5', supports_temperature: true, supports_effort: false, effort_levels: [] },
   { id: 'reasoning', label: 'Reasoning model', supports_temperature: false, supports_effort: true, effort_levels: ['low', 'high'] },

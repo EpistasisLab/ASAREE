@@ -1,4 +1,4 @@
-import { modelCapabilities } from '@/lib/modelCapabilities'
+import { useSamplingPreview } from '../useSamplingPreview'
 import type { NodeProps } from '@xyflow/react'
 import { Atom, Cloud, HardDrive, Route, Sparkles } from 'lucide-react'
 import { nodeAccent } from '@/lib/nodeAccent'
@@ -73,12 +73,8 @@ export function ModelNode({ id, data, selected }: NodeProps & { data: ModelNodeD
   }
   if (capabilitiesPending) warnings.push(capabilitiesError ?? 'Model capabilities are still loading')
   if (data.config?.max_tokens == null) warnings.push('Max tokens is required')
-  // Same resolved capability metadata as ModelNodeInspector -- Temperature is required
-  // (not left to Motoro's own silent 0.7 default) whenever it's the field
-  // actually offered for this model.
-  if (!capabilitiesPending && modelCapabilities(resolvedCapabilities ?? selectedModelInfo, data.config?.resolved_capabilities).supports_temperature && data.config?.temperature == null) {
-    warnings.push('Temperature is required')
-  }
+  const sampling = useSamplingPreview(resolvedCapabilities ?? selectedModelInfo, modelName ?? '', data.config?.temperature, data.config?.effort)
+  if (sampling.error) warnings.push(sampling.error.message)
 
   if (factor) return <ModelFactorGroup id={id} factor={factor} selected={selected} warning={warnings} />
 

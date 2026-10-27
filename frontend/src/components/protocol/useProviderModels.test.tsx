@@ -55,7 +55,7 @@ it.each([
     id: 'model', type: 'model_openai', position: { x: 0, y: 0 },
     data: { label: 'Model', config: { provider: 'openai', model, max_tokens: 1000 } } as ModelNodeData,
   }], [], client)
-  expect(issues.flatMap((issue) => issue.issues)).toEqual(temperature ? ['Temperature is required'] : [])
+  expect(issues.flatMap((issue) => issue.issues)).toEqual([])
   unmount()
   client.clear()
 })

@@ -1,6 +1,6 @@
 import { PersonaFactorEditor } from './PersonaFactorEditor'
 import type { ModelCapabilities } from '@/types/llmSettings'
-import { modelCapabilities } from '@/lib/modelCapabilities'
+import { SamplingControls } from './SamplingControls'
 import { SubAgentFactorEditor } from './SubAgentFactorEditor'
 import type { ProtocolGraph } from '@/types/protocols'
 import { useEffect, useId, useMemo, useState, type SetStateAction } from 'react'
@@ -66,10 +66,6 @@ export function LlmConfigLevelRow({ value, onChange }: { value: StructuredLevel;
   const provider = (value.provider as string) || 'anthropic'
   const { modelsQuery, models, capabilities: resolvedCapabilities, capabilitiesPending, capabilitiesError } = useProviderModels(provider, value.model as string | undefined, value.resolved_capabilities as ModelCapabilities | undefined)
   const selectedModelInfo = models.find((m) => m.id === value.model)
-  const capabilities = modelCapabilities(resolvedCapabilities ?? selectedModelInfo, value.resolved_capabilities as ModelCapabilities | undefined)
-  const showTemperature = !capabilitiesPending && capabilities.supports_temperature
-  const showEffort = !capabilitiesPending && capabilities.supports_effort
-  const effortLevels = capabilities.effort_levels
 
   function patch(patch: StructuredLevel) {
     onChange({ ...value, ...patch })
@@ -79,7 +75,7 @@ export function LlmConfigLevelRow({ value, onChange }: { value: StructuredLevel;
     <div className="grid grid-cols-2 gap-2 rounded-lg border p-2">
       <div className="space-y-1">
         <Label className="text-xs">Provider</Label>
-        <Select value={provider} onValueChange={(v) => v && patch({ provider: v, model: '', resolved_capabilities: null })}>
+        <Select value={provider} onValueChange={(v) => v && patch({ provider: v, model: '', resolved_capabilities: null, temperature: null, effort: null })}>
           <SelectTrigger className="h-8 w-full">
             <SelectValue>{() => PROVIDER_META[provider]?.label ?? provider}</SelectValue>
           </SelectTrigger>
@@ -98,40 +94,13 @@ export function LlmConfigLevelRow({ value, onChange }: { value: StructuredLevel;
           value={(value.model as string) ?? ''}
           models={models}
           isLoading={modelsQuery.isLoading}
-          onChange={(model) => patch({ model, resolved_capabilities: null })}
+          onChange={(model) => patch({ model, resolved_capabilities: null, temperature: null, effort: null })}
         />
       </div>
       {capabilitiesPending && <p role="status" className="col-span-2 text-xs text-muted-foreground">{capabilitiesError ?? 'Resolving model capabilities…'}</p>}
-      {showTemperature && <div className="space-y-1">
-        <Label className="text-xs">Temperature</Label>
-        <Input
-          className="h-8"
-          type="number"
-          step="0.1"
-          min="0"
-          max="2"
-          value={(value.temperature as number | undefined) ?? ''}
-          onChange={(e) => patch({ temperature: e.target.value === '' ? null : Number(e.target.value) })}
-        />
-      </div>}
-      {showEffort && (
-        <div className="space-y-1">
-          <Label className="text-xs">Effort</Label>
-          <Select value={(value.effort as string) || '__none__'} onValueChange={(v) => patch({ effort: v === '__none__' ? null : v })}>
-            <SelectTrigger className="h-8 w-full">
-              <SelectValue>{(v: string) => (v === '__none__' ? `Default (${capabilities.default_effort})` : v)}</SelectValue>
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="__none__">Default ({capabilities.default_effort})</SelectItem>
-              {effortLevels.map((level) => (
-                <SelectItem key={level} value={level}>
-                  {level}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
-      )}
+      <SamplingControls capabilities={capabilitiesPending ? undefined : resolvedCapabilities ?? selectedModelInfo}
+        model={String(value.model ?? '')} temperature={value.temperature as number | null | undefined}
+        effort={value.effort as string | null | undefined} onChange={patch} />
       <div className="space-y-1">
         <Label className="text-xs">Max tokens</Label>
         <Input

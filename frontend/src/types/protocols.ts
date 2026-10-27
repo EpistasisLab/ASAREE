@@ -285,6 +285,7 @@ export interface AgentModelConfigData {
   temperature?: number | null
   effort?: string | null
   resolved_capabilities?: ModelCapabilities | null
+  // Unset sampling values use the provider default or Motoro's fallback.
   // Nullable so ModelNodeInspector's Input can be backspaced to empty without
   // snapping to a forced value -- null is a real, persisted "not set yet"
   // state flagged by ModelNode's warning triangle and nodeConfigIssues.ts's
@@ -569,26 +570,26 @@ export interface ModelNodeData {
 // every one of its agents/critics, well under Motoro's own
 // ModelConfig cap of 200000.
 export function defaultAnthropicModelNodeData(label = 'Anthropic'): ModelNodeData {
-  return { label, config: { provider: 'anthropic', model: '', temperature: 0.7, max_tokens: 128000 } }
+  return { label, config: { provider: 'anthropic', model: '', temperature: null, effort: null, max_tokens: 128000 } }
 }
 
 export function defaultOpenAiModelNodeData(label = 'OpenAI'): ModelNodeData {
-  return { label, config: { provider: 'openai', model: '', temperature: 0.7, max_tokens: 128000 } }
+  return { label, config: { provider: 'openai', model: '', temperature: null, effort: null, max_tokens: 128000 } }
 }
 
 export function defaultAzureFoundryModelNodeData(label = 'Azure AI Foundry'): ModelNodeData {
-  return { label, config: { provider: 'azure_foundry', model: '', temperature: 0.7, max_tokens: 128000 } }
+  return { label, config: { provider: 'azure_foundry', model: '', temperature: null, effort: null, max_tokens: 128000 } }
 }
 
 export function defaultOpenRouterModelNodeData(label = 'OpenRouter'): ModelNodeData {
-  return { label, config: { provider: 'openrouter', model: '', temperature: 0.7, max_tokens: 128000 } }
+  return { label, config: { provider: 'openrouter', model: '', temperature: null, effort: null, max_tokens: 128000 } }
 }
 
 // Every provider starts empty so adding a Model node never silently chooses a
 // model the user's credential may not expose. The Model field's required-field
 // warning remains until the user makes an explicit catalog/custom selection.
 export function defaultLocalModelNodeData(label = 'Local'): ModelNodeData {
-  return { label, config: { provider: 'local', model: '', temperature: 0.7, max_tokens: 128000 } }
+  return { label, config: { provider: 'local', model: '', temperature: null, effort: null, max_tokens: 128000 } }
 }
 
 // A "Memory" node -- visual/validation scaffolding only for now. Wiring one

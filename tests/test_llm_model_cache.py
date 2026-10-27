@@ -64,7 +64,7 @@ def _model(model_id: str = "claude-opus-4-7") -> ModelInfo:
 
 async def test_fresh_cache_hit_does_not_call_the_provider(monkeypatch: pytest.MonkeyPatch) -> None:
     redis = _FakeRedis()
-    key = f"llm:models:{_USER_ID}:azure_foundry"
+    key = cache._key(_USER_ID, "azure_foundry")
     redis.store[key] = cache._dump([_model()], "api", None, now=cache.time.time())
     _install(monkeypatch, redis)
     calls: list[str] = []
@@ -136,7 +136,7 @@ async def test_stale_entry_is_served_when_the_provider_is_unreachable(monkeypatc
     # An empty dropdown is exactly what ModelField's free-text escape hatch
     # exists to survive, so a transient provider failure must not produce one.
     redis = _FakeRedis()
-    key = f"llm:models:{_USER_ID}:azure_foundry"
+    key = cache._key(_USER_ID, "azure_foundry")
     redis.store[key] = cache._dump([_model()], "api", None, now=cache.time.time() - cache._FRESH_SECONDS - 1)
     _install(monkeypatch, redis)
     calls: list[str] = []
@@ -152,7 +152,7 @@ async def test_stale_entry_is_served_when_the_provider_is_unreachable(monkeypatc
 
 async def test_stale_entry_is_replaced_when_rediscovery_succeeds(monkeypatch: pytest.MonkeyPatch) -> None:
     redis = _FakeRedis()
-    key = f"llm:models:{_USER_ID}:azure_foundry"
+    key = cache._key(_USER_ID, "azure_foundry")
     redis.store[key] = cache._dump([_model("old-deployment")], "api", None, now=cache.time.time() - 10**6)
     _install(monkeypatch, redis)
     _stub_discovery(monkeypatch, ([_model("new-deployment")], "api", None), [])
@@ -167,7 +167,7 @@ async def test_stale_entry_is_replaced_when_rediscovery_succeeds(monkeypatch: py
 async def test_unreadable_payload_falls_back_to_rediscovery(monkeypatch: pytest.MonkeyPatch) -> None:
     # Leftovers from an older shape of this module must not 500 the endpoint.
     redis = _FakeRedis()
-    key = f"llm:models:{_USER_ID}:azure_foundry"
+    key = cache._key(_USER_ID, "azure_foundry")
     redis.store[key] = json.dumps({"unexpected": "shape"})
     _install(monkeypatch, redis)
     _stub_discovery(monkeypatch, ([_model()], "api", None), [])
@@ -198,7 +198,7 @@ async def test_cache_is_scoped_per_user(monkeypatch: pytest.MonkeyPatch) -> None
     other_user = uuid.UUID("22222222-2222-2222-2222-222222222222")
     redis = _FakeRedis()
     mine = cache._dump([_model("mine")], "api", None, now=cache.time.time())
-    redis.store[f"llm:models:{_USER_ID}:azure_foundry"] = mine
+    redis.store[cache._key(_USER_ID, "azure_foundry")] = mine
     _install(monkeypatch, redis)
     _stub_discovery(monkeypatch, ([_model("theirs")], "api", None), [])
 
@@ -209,8 +209,8 @@ async def test_cache_is_scoped_per_user(monkeypatch: pytest.MonkeyPatch) -> None
 
 async def test_invalidate_drops_only_that_users_provider_entry(monkeypatch: pytest.MonkeyPatch) -> None:
     redis = _FakeRedis()
-    mine = f"llm:models:{_USER_ID}:azure_foundry"
-    other_provider = f"llm:models:{_USER_ID}:openai"
+    mine = cache._key(_USER_ID, "azure_foundry")
+    other_provider = cache._key(_USER_ID, "openai")
     redis.store[mine] = "x"
     redis.store[other_provider] = "y"
     _install(monkeypatch, redis)

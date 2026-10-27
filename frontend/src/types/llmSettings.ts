@@ -46,10 +46,21 @@ export const LLM_PROVIDER_LABELS: Record<LLMProvider, string> = Object.fromEntri
 // response tells the Inspector both which models to list AND which control
 // to show for whichever one is selected.
 export interface ModelCapabilities {
-  supports_temperature: boolean
-  supports_effort: boolean
-  effort_levels: string[]
+  supports_temperature: boolean | null
+  supports_effort: boolean | null
+  default_temperature?: number | null
+  effort_levels: string[] | null
   default_effort?: string | null
+  temperature_effort_levels?: string[] | null
+}
+
+export interface ResolvedSampling {
+  temperature: number | null
+  effort: string | null
+  temperature_source: 'explicit' | 'advertised_default' | 'application_fallback' | 'omitted'
+  effort_source: 'explicit' | 'advertised_default' | 'application_fallback' | 'omitted'
+  temperature_omission_reason: string | null
+  effort_omission_reason: string | null
 }
 
 export interface LLMModelInfo extends ModelCapabilities {

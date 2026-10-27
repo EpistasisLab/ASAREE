@@ -21,9 +21,9 @@ Nor is "temperature is being replaced by effort" quite true, which is why the
 two are separate booleans rather than one enum. On OpenAI's 5.1+ families the
 same model accepts *either* dial -- temperature is legal precisely when
 ``reasoning_effort`` is ``none`` -- so support is a property of the request
-mode, not only of the model. ModelCapabilities flattens that to "which dial
-do we show", which is right for Anthropic (adaptive thinking is always on, so
-temperature is simply rejected) and an approximation for OpenAI.
+mode, not only of the model. ModelCapabilities preserves both controls and
+their mode restrictions independently; Motoro's shared resolver validates
+the selected combination and chooses defaults without changing those facts.
 
 Azure Foundry deployments are the opposite of Anthropic's: per-resource, so nothing short
 of asking that resource can know what's actually deployed there. The listing
@@ -54,9 +54,7 @@ from typing import Any
 import httpx
 from motoro.services.model_capabilities import (
     CATALOG,
-    DEFAULT_EFFORT,
     EFFORT_LEVELS_FULL,
-    TEMPERATURE_ONLY_CAPABILITIES,
     ModelCapabilities,
     get_capabilities,
 )
@@ -169,23 +167,24 @@ def _capabilities_from_anthropic(caps: dict[str, Any], model: str = "") -> Model
     sonnet-4-6/opus-4-6 have no xhigh, the 5-series has the full set) and
     older models like haiku-4-5/sonnet-4-5 report effort unsupported outright.
 
-    ``supports_temperature`` is the one value NOT stated by the API -- there
-    is no temperature leaf in the tree. Inferring it as "the inverse of
-    effort" reproduces exactly what _REGISTRY already encodes by hand, and
-    matches the underlying reason both exist: these models run adaptive
-    thinking (note "thinking.types.enabled.supported": false alongside
-    "adaptive": true) and 400 on an explicit temperature.
+    The current API does not state temperature support or sampling defaults.
+    Preserve those independent facts from the registry unless explicitly
+    advertised, and leave missing defaults unknown for Motoro to resolve.
     """
     effort = caps.get("effort") or {}
     if "supported" not in effort:
         return get_capabilities(model)
     supports_effort = bool(effort.get("supported"))
     levels = [level for level in EFFORT_LEVELS_FULL if (effort.get(level) or {}).get("supported")]
+    registry = get_capabilities(model)
+    default = effort.get("default_effort", registry.default_effort)
+    temperature = caps.get("temperature") or {}
     return ModelCapabilities(
-        supports_temperature=not supports_effort,
+        supports_temperature=temperature.get("supported", registry.supports_temperature),
+        default_temperature=temperature.get("default", registry.default_temperature),
         supports_effort=supports_effort,
-        effort_levels=levels,
-        default_effort=(DEFAULT_EFFORT if DEFAULT_EFFORT in levels else levels[0]) if levels else None,
+        effort_levels=levels if levels or not supports_effort else None,
+        default_effort=default if supports_effort and default in levels else None,
     )
 
 
@@ -253,46 +252,46 @@ async def _discover_anthropic(setting: UserLLMSetting) -> tuple[list[ModelInfo],
 
 
 def _capabilities_from_openrouter(entry: dict[str, Any]) -> ModelCapabilities:
-    """Prefer live sampling metadata, then the registry with a temperature default.
-
-    Reasoning support alone need not expose effort selection (some models only
-    accept a token budget). Like the other providers, effort-capable entries
-    select the effort dial rather than showing temperature alongside it.
-    """
-    fallback = get_capabilities(entry["id"], default=TEMPERATURE_ONLY_CAPABILITIES)
+    """Read factual support and defaults independently; Motoro owns fallback policy."""
+    fallback = get_capabilities(entry["id"])
     if "supported_parameters" not in entry and "reasoning" not in entry:
         return fallback
 
     parameters = entry.get("supported_parameters") or []
     reasoning = entry.get("reasoning") or {}
-    gateway_levels = ["none", "minimal", *EFFORT_LEVELS_FULL]
+    supports_effort = False
+    levels = None
     if "supported_efforts" in reasoning:
         # null means every gateway effort is accepted; omission means no selector.
-        levels = reasoning["supported_efforts"]
-        levels = list(gateway_levels if levels is None else levels)
+        supports_effort = True
+        advertised = reasoning["supported_efforts"]
+        levels = list(["none", "minimal", *EFFORT_LEVELS_FULL] if advertised is None else advertised)
     elif "reasoning" not in entry and "reasoning_effort" in parameters:
         # Older listings expose the parameter without a per-model effort ladder.
-        levels = list(fallback.effort_levels if fallback.supports_effort else gateway_levels)
-    else:
-        levels = []
-    if reasoning.get("mandatory"):
+        supports_effort = True
+        levels = fallback.effort_levels
+    if reasoning.get("mandatory") and levels is not None:
         levels = [level for level in levels if level != "none"]
-
+    if levels == []:
+        supports_effort = False
     default = reasoning.get("default_effort")
-    if default not in levels or default == "none":
-        default = (
-            DEFAULT_EFFORT
-            if DEFAULT_EFFORT in levels
-            else next((level for level in levels if level != "none"), levels[0] if levels else None)
-        )
+    if not supports_effort or (levels is not None and default not in levels):
+        default = None
+    supports_temperature = (
+        "temperature" in parameters if "supported_parameters" in entry else fallback.supports_temperature
+    )
+    restrictions = fallback.temperature_effort_levels
+    if restrictions is not None and levels is not None:
+        restrictions = [level for level in restrictions if level in levels]
     return ModelCapabilities(
-        supports_temperature=(
-            "temperature" in parameters if "supported_parameters" in entry else fallback.supports_temperature
-        )
-        and not levels,
-        supports_effort=bool(levels),
+        supports_temperature=supports_temperature,
+        default_temperature=(entry.get("default_parameters") or {}).get("temperature")
+        if supports_temperature is True
+        else None,
+        supports_effort=supports_effort,
         effort_levels=levels,
         default_effort=default,
+        temperature_effort_levels=restrictions if supports_temperature is True and supports_effort else None,
     )
 
 
@@ -364,7 +363,7 @@ async def _discover_local(setting: UserLLMSetting) -> tuple[list[ModelInfo], str
             ModelInfo(
                 id=m["id"],
                 label=None,
-                capabilities=get_capabilities(m["id"], default=TEMPERATURE_ONLY_CAPABILITIES),
+                capabilities=get_capabilities(m["id"]),
             )
             for m in data
             if m.get("id")

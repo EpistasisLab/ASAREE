@@ -54,10 +54,8 @@ STALE_NOTE = (
 
 
 def _key(user_id: uuid.UUID, provider: str) -> str:
-    # Pre-v2 router/local entries inherited effort-only capabilities for unknown
-    # models. Never serve those entries, including during a discovery outage.
-    version = ":v2" if provider in {"openrouter", "local"} else ""
-    return f"llm:models:{user_id}:{provider}{version}"
+    # v3 distinguishes unknown support and provider defaults from application policy.
+    return f"llm:models:{user_id}:{provider}:v3"
 
 
 def _dump(models: list[ModelInfo], source: str, note: str | None, *, now: float) -> str:

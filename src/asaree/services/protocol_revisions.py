@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import copy
 import uuid
 from datetime import UTC, datetime
 
@@ -22,6 +21,7 @@ from asaree.services.datasets import get_dataset_by_name
 from asaree.services.design_revisions import get_current_revision
 from asaree.services.experiment_versions import experiment_settings, publication_matches_experiment
 from asaree.services.protocol_graph_schema import functional_protocol_graph_hash
+from asaree.services.sampling_snapshots import freeze_sampling
 
 
 async def get_revision(db: AsyncSession, revision_id: uuid.UUID) -> ProtocolRevision | None:
@@ -181,7 +181,10 @@ async def publish_protocol(
         revision=(highest or 0) + 1,
         name=name,
         note=note,
-        graph=copy.deepcopy(protocol.graph),
+        graph=await freeze_sampling(
+            protocol.graph, design_spec=experiment.design_spec if experiment is not None else None,
+            owner_id=owner_id or protocol.owner_id,
+        ),
         experiment_snapshot=experiment_settings(experiment) if experiment is not None else None,
         design_revision_id=design.id if design is not None else None,
         published_at=datetime.now(UTC),

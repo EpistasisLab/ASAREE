@@ -105,6 +105,7 @@ from asaree.services.protocol_runs import (
 from asaree.services.protocols import get_protocol
 from asaree.services.run_tools import PINNED_TOOL_CONFIG, gather_run_tools
 from asaree.services.runtime_metrics import _reason_act_state, finalize_attempt_measurement
+from asaree.services.sampling_snapshots import published_model_config
 from asaree.services.shared_factors import GROUP_SPECS, validate_shared_factor_groups
 from asaree.services.skill_factors import validate_skill_factors
 from asaree.services.system_mcp_servers import (
@@ -1978,7 +1979,7 @@ def _resolve_model_config(graph: dict[str, Any], node_id: str) -> dict[str, Any]
     source = nodes.get(edges[0]["source"])
     if source is None:
         return {}
-    return (source.get("data") or {}).get("config") or {}
+    return published_model_config(graph, (source.get("data") or {}).get("config") or {})
 
 
 def _resolve_dataset_configs(

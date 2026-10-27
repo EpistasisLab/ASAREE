@@ -23,6 +23,7 @@ from motoro.schemas.pattern import PatternConfig
 from pydantic import BaseModel
 
 from asaree.deps import CurrentUser
+from asaree.services.model_config import resolve_execution_model_config
 
 router = APIRouter(prefix="/agents", tags=["agents"])
 
@@ -70,7 +71,7 @@ async def create_agent_endpoint(body: CreateAgentRequest, user: CurrentUser) -> 
         goal=body.goal,
         description=body.description,
         system_prompt=body.system_prompt,
-        model_config=body.model_config_data,
+        model_config=await resolve_execution_model_config(body.model_config_data, owner_id=user.id),
         pattern_config=body.pattern_config.model_dump() if body.pattern_config else None,
         tool_config=body.tool_config,
         memory_config=body.memory_config.model_dump() if body.memory_config else None,
@@ -116,7 +117,9 @@ async def update_agent_endpoint(agent_id: uuid.UUID, body: UpdateAgentRequest, u
             goal=body.goal,
             description=body.description,
             system_prompt=body.system_prompt,
-            model_config=body.model_config_data,
+            model_config=await resolve_execution_model_config(body.model_config_data, owner_id=user.id)
+            if body.model_config_data is not None
+            else None,
             pattern_config=body.pattern_config.model_dump() if body.pattern_config else None,
             tool_config=body.tool_config,
             memory_config=body.memory_config.model_dump() if body.memory_config else None,

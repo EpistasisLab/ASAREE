@@ -12,8 +12,6 @@ export function modelCapabilities(discovered?: ModelCapabilities, override?: Mod
   const capabilities = override ?? discovered ?? UNRESOLVED_CAPABILITIES
   return {
     ...capabilities,
-    default_effort: capabilities.supports_effort
-      ? capabilities.default_effort ?? (capabilities.effort_levels.includes('medium') ? 'medium' : capabilities.effort_levels[0])
-      : null,
+    effort_levels: capabilities.effort_levels ?? [],
   }
 }

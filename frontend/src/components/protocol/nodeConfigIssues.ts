@@ -1,4 +1,4 @@
-import { modelCapabilities } from '@/lib/modelCapabilities'
+import { samplingKey } from './useSamplingPreview'
 import type { QueryClient } from '@tanstack/react-query'
 import type { Edge, Node } from '@xyflow/react'
 import { toPersistedGraph } from '@/lib/protocolGraph'
@@ -113,9 +113,8 @@ export function findNodeConfigIssues(
             ? 'Could not resolve model capabilities. Try again.'
             : 'Model capabilities are still loading')
         }
-        if (resolved && modelCapabilities(resolved).supports_temperature && config?.temperature == null) {
-          issues.push('Temperature is required')
-        }
+        const samplingError = queryClient.getQueryState(samplingKey(resolved, config?.model ?? '', config?.temperature, config?.effort))?.error
+        if (samplingError) issues.push(samplingError.message)
         break
       }
       case 'mcp_tool':

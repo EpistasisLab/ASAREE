@@ -11,6 +11,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, HTTPException, Query
 from motoro.services.model_capabilities import ModelCapabilities
+from motoro.services.sampling import ResolvedSampling, SamplingConfigurationError, resolve_sampling
 from pydantic import BaseModel
 
 from asaree.deps import CurrentUser, DbSession
@@ -55,13 +56,9 @@ class LLMSettingResponse(BaseModel):
     azure_project_endpoint: str | None
 
 
-class LLMModelInfoResponse(BaseModel):
+class LLMModelInfoResponse(ModelCapabilities):
     id: str
     label: str | None
-    supports_temperature: bool
-    supports_effort: bool
-    effort_levels: list[str]
-    default_effort: str | None
     # Unlike the three above, this one doesn't come from Motoro's
     # ModelCapabilities registry -- it's litellm's own function-calling flag,
     # the same oracle ``model_supports_tool_calling`` uses to pick an agent's
@@ -83,10 +80,7 @@ def _model_response(model: ModelInfo, provider: str) -> LLMModelInfoResponse:
     return LLMModelInfoResponse(
         id=model.id,
         label=model.label,
-        supports_temperature=model.capabilities.supports_temperature,
-        supports_effort=model.capabilities.supports_effort,
-        effort_levels=model.capabilities.effort_levels,
-        default_effort=model.capabilities.default_effort,
+        **model.capabilities.model_dump(),
         supports_tool_calling=model_tool_calling_support(provider, model.id),
     )
 
@@ -99,6 +93,22 @@ class LLMConnectionCheckResponse(BaseModel):
     detail: str
     endpoint: str | None
     models: list[LLMModelInfoResponse] | None = None
+
+
+class SamplingPreviewRequest(BaseModel):
+    capabilities: ModelCapabilities
+    model: str = "<unspecified>"
+    temperature: float | None = None
+    effort: str | None = None
+
+
+@router.post("/sampling", response_model=ResolvedSampling)
+async def sampling_preview_endpoint(body: SamplingPreviewRequest, user: CurrentUser) -> ResolvedSampling:
+    """Use execution's resolver for defaults and validation without calling a model."""
+    try:
+        return resolve_sampling(body.capabilities, temperature=body.temperature, effort=body.effort, model=body.model)
+    except SamplingConfigurationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @router.put("", response_model=LLMSettingResponse, status_code=201)

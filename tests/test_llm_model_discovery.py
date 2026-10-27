@@ -271,7 +271,7 @@ async def test_anthropic_reads_effort_levels_from_the_live_capability_tree(
     assert captured["urls"] == ["https://api.anthropic.com/v1/models"]
 
 
-async def test_anthropic_default_effort_prefers_medium_but_falls_back(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_anthropic_missing_defaults_are_not_fabricated(monkeypatch: pytest.MonkeyPatch) -> None:
     page = {
         "data": [
             {"id": "has-medium", "display_name": "A", "capabilities": {"effort": _effort("low", "medium", "high")}},
@@ -284,8 +284,8 @@ async def test_anthropic_default_effort_prefers_medium_but_falls_back(monkeypatc
     models, _, _ = await discovery.discover_models(provider="anthropic", setting=_anthropic_setting())
     by_id = {m.id: m for m in models}
 
-    assert by_id["has-medium"].capabilities.default_effort == "medium"
-    assert by_id["no-medium"].capabilities.default_effort == "high"  # first available, not a missing "medium"
+    assert by_id["has-medium"].capabilities.default_effort is None
+    assert by_id["no-medium"].capabilities.default_effort is None
 
 
 async def test_anthropic_follows_pagination(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -303,16 +303,16 @@ async def test_anthropic_follows_pagination(monkeypatch: pytest.MonkeyPatch) -> 
     assert captured["params"][1]["after_id"] == "first"
 
 
-async def test_anthropic_missing_capability_tree_defaults_to_effort(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_anthropic_missing_capability_tree_remains_unknown(monkeypatch: pytest.MonkeyPatch) -> None:
     # Missing metadata uses the same effort fallback as request construction.
     page = {"data": [{"id": "mystery-model", "display_name": "Mystery"}], "has_more": False}
     monkeypatch.setattr(discovery.httpx, "AsyncClient", lambda **kwargs: _PagingClient([page], {}))
 
     models, _, _ = await discovery.discover_models(provider="anthropic", setting=_anthropic_setting())
 
-    assert models[0].capabilities.supports_effort is True
-    assert models[0].capabilities.supports_temperature is False
-    assert models[0].capabilities.default_effort == 'medium'
+    assert models[0].capabilities.supports_effort is None
+    assert models[0].capabilities.supports_temperature is None
+    assert models[0].capabilities.default_effort is None
 
 
 async def test_anthropic_failure_falls_back_to_the_catalog_and_scrubs_the_key(
@@ -415,10 +415,7 @@ async def test_openrouter_discovery_sends_bearer_token_when_credential_saved(
 
 
 async def test_openrouter_model_capabilities_resolve_via_motoros_registry(monkeypatch: pytest.MonkeyPatch) -> None:
-    """OpenRouter's own response has no temperature-vs-effort field -- capability
-    lookup falls back to Motoro's model_capabilities, which strips the leading
-    `vendor/` segment, so an id like this resolves against the same registry
-    entry the native Anthropic provider does."""
+    """Missing metadata preserves known registry entries, including Claude."""
     response = _FakeResponse({"data": [{"id": "anthropic/claude-opus-5", "name": "Claude Opus 5"}]})
     monkeypatch.setattr(discovery.httpx, "AsyncClient", lambda **kwargs: _SimpleClient(response, captured={}))
 
@@ -428,12 +425,132 @@ async def test_openrouter_model_capabilities_resolve_via_motoros_registry(monkey
     assert models[0].capabilities.supports_temperature is False
 
 
+@pytest.mark.parametrize(
+    ("metadata", "temperature", "effort", "levels", "default"),
+    [
+        (
+            {"supported_parameters": ["temperature", "reasoning"], "reasoning": {"mandatory": True}},
+            True,
+            False,
+            None,
+            None,
+        ),
+        ({"supported_parameters": []}, False, False, None, None),
+        ({}, None, None, None, None),
+        (
+            {
+                "supported_parameters": ["temperature", "reasoning_effort"],
+                "reasoning": {"supported_efforts": ["xhigh", "medium", "low", "none"], "default_effort": "xhigh"},
+            },
+            True,
+            True,
+            ["xhigh", "medium", "low", "none"],
+            "xhigh",
+        ),
+        (
+            {
+                "supported_parameters": ["reasoning"],
+                "reasoning": {"supported_efforts": ["high", "low", "none"], "mandatory": True},
+            },
+            False,
+            True,
+            ["high", "low"],
+            None,
+        ),
+        (
+            {"supported_parameters": ["reasoning"], "reasoning": {"supported_efforts": None}},
+            False,
+            True,
+            ["none", "minimal", "low", "medium", "high", "xhigh", "max"],
+            None,
+        ),
+        ({"supported_parameters": ["reasoning_effort"]}, False, True, None, None),
+        (
+            {
+                "supported_parameters": ["reasoning"],
+                "reasoning": {"supported_efforts": ["none", "low", "medium"], "default_effort": "none"},
+            },
+            False,
+            True,
+            ["none", "low", "medium"],
+            "none",
+        ),
+        (
+            {
+                "supported_parameters": ["reasoning"],
+                "reasoning": {"supported_efforts": ["high", "low"], "default_effort": "max"},
+            },
+            False,
+            True,
+            ["high", "low"],
+            None,
+        ),
+    ],
+)
+async def test_openrouter_reads_sampling_metadata(monkeypatch, metadata, temperature, effort, levels, default):
+    response = _FakeResponse({"data": [{"id": "qwen/qwen3.8-27b", **metadata}]})
+    monkeypatch.setattr(discovery.httpx, "AsyncClient", lambda **kwargs: _SimpleClient(response, captured={}))
+    models, _, _ = await discovery.discover_models(provider="openrouter", setting=None)
+    caps = models[0].capabilities
+    assert caps.supports_temperature is temperature
+    assert caps.supports_effort is effort
+    assert caps.effort_levels == levels
+    assert caps.default_effort == default
+
+
+@pytest.mark.parametrize("default", [0.0, 1.0, None])
+def test_openrouter_temperature_defaults_and_known_mode_restrictions(default):
+    caps = discovery._capabilities_from_openrouter(
+        {
+            "id": "openai/gpt-5.2",
+            "supported_parameters": ["temperature", "reasoning_effort"],
+            "default_parameters": {"temperature": default},
+            "reasoning": {"supported_efforts": ["none", "low", "high"], "default_effort": "none"},
+        }
+    )
+    assert caps.default_temperature == default
+    assert caps.supports_temperature is caps.supports_effort is True
+    assert caps.temperature_effort_levels == ["none"]
+
+
+def test_anthropic_explicit_defaults_and_independent_temperature_support():
+    caps = discovery._capabilities_from_anthropic(
+        {
+            "temperature": {"supported": True, "default": 0.0},
+            "effort": {"supported": True, "low": {"supported": True}, "default_effort": "low"},
+        },
+        "custom-model",
+    )
+    assert caps.supports_temperature is caps.supports_effort is True
+    assert caps.default_temperature == 0.0
+    assert caps.default_effort == "low"
+
+
+async def test_openrouter_live_metadata_overrides_claude_registry(monkeypatch):
+    response = _FakeResponse(
+        {
+            "data": [
+                {
+                    "id": "anthropic/claude-opus-5",
+                    "supported_parameters": ["temperature"],
+                }
+            ]
+        }
+    )
+    monkeypatch.setattr(discovery.httpx, "AsyncClient", lambda **kwargs: _SimpleClient(response, captured={}))
+    models, _, _ = await discovery.discover_models(provider="openrouter", setting=None)
+    assert models[0].capabilities.supports_temperature is True
+    assert models[0].capabilities.supports_effort is False
+
+
 async def test_openrouter_honours_a_custom_api_base(monkeypatch: pytest.MonkeyPatch) -> None:
     captured: dict = {}
     response = _FakeResponse({"data": []})
     monkeypatch.setattr(discovery.httpx, "AsyncClient", lambda **kwargs: _SimpleClient(response, captured=captured))
 
-    await discovery.discover_models(provider="openrouter", setting=_openrouter_setting(api_base="https://proxy.internal"))
+    await discovery.discover_models(
+        provider="openrouter", setting=_openrouter_setting(api_base="https://proxy.internal")
+    )
 
     assert captured["urls"] == ["https://proxy.internal/models"]
 
@@ -451,6 +568,16 @@ async def test_openrouter_failure_scrubs_the_key(monkeypatch: pytest.MonkeyPatch
 
 def _local_setting(api_key: str = "", api_base: str | None = "http://localhost:8000/v1") -> UserLLMSetting:
     return UserLLMSetting(provider="local", api_key_encrypted=encrypt(api_key), api_base=api_base)
+
+
+async def test_local_unknown_models_remain_unknown_without_changing_known_claude(monkeypatch):
+    response = _FakeResponse({"data": [{"id": "qwen3.8-27b"}, {"id": "claude-opus-5"}]})
+    monkeypatch.setattr(discovery.httpx, "AsyncClient", lambda **kwargs: _SimpleClient(response, captured={}))
+    models, _, _ = await discovery.discover_models(provider="local", setting=_local_setting())
+    by_id = {model.id: model.capabilities for model in models}
+    assert by_id["qwen3.8-27b"].supports_effort is None
+    assert by_id["qwen3.8-27b"].supports_temperature is None
+    assert by_id["claude-opus-5"].supports_effort is True
 
 
 async def test_local_discovery_without_a_base_url_returns_error() -> None:

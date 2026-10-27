@@ -1,4 +1,4 @@
-import { modelCapabilities } from '@/lib/modelCapabilities'
+import { SamplingControls } from './SamplingControls'
 import { useState } from 'react'
 import { Check, LoaderCircle, PlugZap, Sparkles, Split, Trash2 } from 'lucide-react'
 import { nodeAccent } from '@/lib/nodeAccent'
@@ -64,13 +64,6 @@ export function ModelNodeInspector({
   const credentialCheck = useConnectionCheck(provider as LLMProvider | undefined)
   const configForEffort = node?.data.config
   const selectedModelInfo = models.find((m) => m.id === configForEffort?.model)
-  const capabilities = modelCapabilities(resolvedCapabilities ?? selectedModelInfo, configForEffort?.resolved_capabilities)
-  const showEffort = !capabilitiesPending && capabilities.supports_effort
-  const effortLevels = capabilities.effort_levels
-  const defaultEffort = capabilities.default_effort
-
-  // Unset effort follows the resolved model default without mutating the draft.
-
   if (!node) return null
   const data = node.data
   const config = data.config
@@ -78,9 +71,6 @@ export function ModelNodeInspector({
   const meta = PROVIDER_META[provider!] ?? { label: provider, icon: Sparkles }
   const Icon = meta.icon
   const ACCENT = nodeAccent('model')
-
-  // Custom IDs use the backend resolver too; show no guessed control while loading.
-  const showTemperature = !capabilitiesPending && capabilities.supports_temperature
 
   // Deliberately off-catalog: a model id set here that the fetched list
   // doesn't contain, once there IS a list to compare against (an empty list
@@ -90,12 +80,6 @@ export function ModelNodeInspector({
   const missingFields: string[] = []
   if (!config.model) missingFields.push('Model')
   if (config.max_tokens == null) missingFields.push('Max tokens')
-  // Only required when shown: a model that doesn't support temperature (see
-  // showTemperature above) has no field to fill in, so it's not flagged.
-  // For models that DO support it, leaving it unset would otherwise let
-  // Motoro's own ModelConfig default (0.7) apply silently -- required so
-  // that value is always an explicit choice, not an invisible fallback.
-  if (showTemperature && config.temperature == null) missingFields.push('Temperature')
   if (capabilitiesPending) missingFields.push(capabilitiesError ?? 'Model capabilities are still loading')
 
   function requestClose() {
@@ -213,7 +197,7 @@ export function ModelNodeInspector({
             value={config.model}
             models={models}
             isLoading={modelsQuery.isLoading}
-            onChange={(model) => patchConfig({ model, resolved_capabilities: null })}
+            onChange={(model) => patchConfig({ model, resolved_capabilities: null, temperature: null, effort: null })}
           />
           {modelsQuery.data?.source === 'error' && modelsQuery.data.note && (
             <p className="text-xs text-muted-foreground">{modelsQuery.data.note}</p>
@@ -253,48 +237,8 @@ export function ModelNodeInspector({
       {capabilitiesError && <Button variant="outline" size="sm" onClick={() => void retryCapabilities()}>Retry</Button>}
 
       <div className="grid grid-cols-3 gap-4">
-        {showTemperature && (
-          <div className="space-y-1.5">
-            <Label htmlFor="llm-temperature" className="flex items-center gap-1.5">
-              Temperature
-            </Label>
-            <Input
-              id="llm-temperature"
-              type="number"
-              step="0.1"
-              min="0"
-              max="2"
-              value={config.temperature ?? ''}
-              onChange={(e) => patchConfig({ temperature: e.target.value === '' ? null : Number(e.target.value) })}
-            />
-          </div>
-        )}
-        {showEffort && (
-          <div className="space-y-1.5">
-            <Label className="flex items-center gap-1.5">
-              Effort
-            </Label>
-            <Select
-              value={config.effort ?? '__none__'}
-              onValueChange={(value) => {
-                if (value === null) return
-                patchConfig({ effort: value === '__none__' ? null : value })
-              }}
-            >
-              <SelectTrigger className="w-full">
-                <SelectValue>{(value: string) => (value === '__none__' ? `Default (${defaultEffort})` : value)}</SelectValue>
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="__none__">Default ({defaultEffort})</SelectItem>
-                {effortLevels.map((level) => (
-                  <SelectItem key={level} value={level}>
-                    {level}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-        )}
+        <SamplingControls capabilities={capabilitiesPending ? undefined : resolvedCapabilities ?? selectedModelInfo}
+          model={config.model} temperature={config.temperature} effort={config.effort} onChange={patchConfig} />
         <div className="space-y-1.5">
           <Label htmlFor="llm-max-tokens" className="flex items-center gap-1.5">
             Max tokens

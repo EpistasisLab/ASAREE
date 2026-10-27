@@ -160,7 +160,7 @@ export function parseLevelValue(raw: string, type: LevelType): unknown {
 export function emptyStructuredLevel(type: LevelType): unknown {
   switch (type) {
     case 'model_config':
-      return { provider: 'anthropic', model: '', temperature: 0.7, max_tokens: 128000 }
+      return { provider: 'anthropic', model: '', temperature: null, effort: null, max_tokens: 128000 }
     case 'tool_config':
       return { server_id: null, server_name: null, tool_names: [], enabled: true }
     case 'pattern':

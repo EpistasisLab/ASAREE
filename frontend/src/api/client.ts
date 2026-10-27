@@ -27,7 +27,7 @@ import type {
   CellSummary,
   Trial,
 } from '@/types/experiments'
-import type { LLMConnectionCheck, LLMProvider, LLMSetting, LLMSettingModelsResponse, ModelCapabilities } from '@/types/llmSettings'
+import type { LLMConnectionCheck, LLMProvider, LLMSetting, LLMSettingModelsResponse, ModelCapabilities, ResolvedSampling } from '@/types/llmSettings'
 import type { McpOAuthAuthorization, McpServer } from '@/types/mcpServers'
 import type { OkfBundle, OkfDocument } from '@/types/okf'
 import type { CellRunBatch, DatasetRowSchema, PromptPreview, Protocol, ProtocolGraph, ProtocolRevision, ProtocolRun, TestRun } from '@/types/protocols'
@@ -666,6 +666,8 @@ export const llmSettingsApi = {
   listModels: (provider: string) => request<LLMSettingModelsResponse>(`/llm-settings/${provider}/models`),
   modelCapabilities: (provider: string, model: string) =>
     request<ModelCapabilities>(`/llm-settings/${provider}/model-capabilities?${new URLSearchParams({ model })}`),
+  sampling: (data: { capabilities: ModelCapabilities; model: string; temperature?: number | null; effort?: string | null }) =>
+    request<ResolvedSampling>('/llm-settings/sampling', { method: 'POST', body: data }),
   // Zero-token liveness check against the stored credential -- a free
   // authenticated GET per provider, never an inference call. On demand only
   // (a button, not an on-render fetch): it's free in tokens but it's still

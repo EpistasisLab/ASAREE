@@ -166,6 +166,25 @@ it('surfaces the selected distribution and saved observed summaries', async () =
   expect(chart.getByText('40')).toBeVisible()
 })
 
+it('draws one dot per replicate when the saved plot keeps raw values', async () => {
+  const plotted: StatsAnalysis = { ...saved, output: { ...saved.output!, summary: { ...saved.output!.summary!,
+    distribution: { ...saved.output!.summary!.distribution!,
+      plot: { kind: 'histogram',
+        bins: [{ label: '1–5', count: 3 }, { label: '5–9', count: 2 }],
+        values: [1, 2, 2, 6, 9] } } } } }
+  vi.spyOn(statsApi, 'history').mockResolvedValue([plotted])
+  vi.spyOn(statsApi, 'get').mockResolvedValue(plotted)
+  mount()
+  fireEvent.click(await screen.findByRole('button', { name: /Duration/ }))
+  const chart = within(await screen.findByRole('figure', { name: 'Duration observed distribution' }))
+  expect(chart.getByText('Each dot is one replicate')).toBeInTheDocument()
+  expect(chart.getAllByTitle('2')).toHaveLength(2)
+  expect(chart.getByTitle('9')).toBeInTheDocument()
+  expect(chart.getByText('1')).toBeInTheDocument()
+  expect(chart.getByText('Metric value (seconds)')).toBeInTheDocument()
+  expect(chart.queryByText('1–5')).not.toBeInTheDocument()
+})
+
 it('hides the distribution section when no saved observations or summaries exist', async () => {
   const older = { ...saved, output: { ...saved.output!, summary: { ...saved.output!.summary!, distribution: undefined } } }
   vi.spyOn(statsApi, 'history').mockResolvedValue([older])

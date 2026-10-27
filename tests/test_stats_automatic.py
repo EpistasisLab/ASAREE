@@ -113,6 +113,7 @@ def test_native_gaussian_effect_and_interval_match_reference(monkeypatch):
     )
     html = render_html(dict(output=result))
     assert "Observed distribution" in html
+    assert "Each dot is one replicate" in html
     assert "Selected model distribution: Gaussian (normal)" in html
     assert "Standard deviation" in html
     assert "accounting for the experimental factors" in html
@@ -156,7 +157,14 @@ def test_histogram_conserves_observations_and_keeps_extreme_values():
     assert plot["bins"][0]["lower"] == 0
     assert plot["bins"][-1]["upper"] == 500
     assert plot["bins"][-1]["count"] >= 1
+    assert plot["values"] == [float(f"{v:.6g}") for v in values]
     assert distribution_plot([]) is None
+
+
+def test_histogram_values_are_bounded_so_dot_strips_stay_legible():
+    plot = distribution_plot(np.arange(2000.0).tolist())
+    assert "values" not in plot
+    assert sum(bin["count"] for bin in plot["bins"]) == 2000
 
 
 def test_frequencies_preserve_category_labels_and_counts():

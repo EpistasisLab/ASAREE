@@ -4,6 +4,9 @@ import math
 
 import numpy as np
 
+# Beyond this many replicates a dot strip crowds, so the plot carries only bins.
+MAX_DOTS = 1024
+
 
 def distribution_plot(values, category_labels=None) -> dict | None:
     values = np.asarray(values, dtype=float)
@@ -21,10 +24,15 @@ def distribution_plot(values, category_labels=None) -> dict | None:
             bins.append(dict(label=label, count=int(count)))
         return dict(kind="frequency", bins=bins)
     counts, edges = np.histogram(values, bins=min(12, max(5, math.ceil(math.sqrt(len(values))))))
-    return dict(kind="histogram", bins=[
+    plot = dict(kind="histogram", bins=[
         dict(label=f"{low:.4g}–{high:.4g}", count=int(count), lower=float(low), upper=float(high))
         for low, high, count in zip(edges[:-1], edges[1:], counts, strict=True)
     ])
+    # Raw observations let the report draw a dot strip; bins remain the fallback
+    # for reports stored before this key existed.
+    if len(values) <= MAX_DOTS:
+        plot["values"] = [float(f"{v:.6g}") for v in values]
+    return plot
 
 
 def observed_distribution(values, category_labels=None) -> dict:

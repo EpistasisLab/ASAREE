@@ -25,6 +25,18 @@ function interval(low: number | null | undefined, high: number | null | undefine
   return low == null || high == null ? 'Unavailable' : `${value(low)} to ${value(high)}`
 }
 
+// One dot per replicate, placed by value; duplicates stack in three rows so
+// overlapping points stay legible without inventing a second axis.
+function dotPositions(values: number[], minimum: number, maximum: number) {
+  const range = maximum - minimum || 1
+  const seen = new Map<number, number>()
+  return values.map(dot => {
+    const rank = seen.get(dot) ?? 0
+    seen.set(dot, rank + 1)
+    return { dot, left: `${((dot - minimum) / range) * 100}%`, bottom: (rank % 3) * 10 }
+  })
+}
+
 export function StatisticsReport({ analysis, experiment }: { analysis: StatsAnalysis; experiment: string }) {
   const [error, setError] = useState('')
   const [downloading, setDownloading] = useState(false)
@@ -35,6 +47,10 @@ export function StatisticsReport({ analysis, experiment }: { analysis: StatsAnal
   const distribution = report.distribution
   const bins = distribution?.plot?.bins ?? []
   const maximumCount = Math.max(1, ...bins.map(bin => bin.count))
+  const plot = distribution?.plot
+  const dots = plot && plot.kind === 'histogram' && plot.values?.length
+    ? dotPositions(plot.values, distribution?.minimum ?? 0, distribution?.maximum ?? 1)
+    : null
   const family = analysis.output?.family
   const metricInfo = report.metric_info ?? {
     description: report.metric_definition?.description?.trim() || 'Description not provided.',
@@ -80,7 +96,20 @@ export function StatisticsReport({ analysis, experiment }: { analysis: StatsAnal
       {family && <p className="text-sm">Selected model distribution: <span className="font-medium">{distributionNames[family] ?? family}</span></p>}
       {distribution && distribution.n > 0 && <section aria-label="Metric distribution" className="space-y-3">
         <h3 className="text-sm font-medium">Observed distribution</h3>
-        {bins.some(bin => bin.count > 0) && <figure aria-label={`${report.metric} observed distribution histogram`} className="space-y-2 rounded-md border border-border bg-muted/20 p-3">
+        {dots ? <figure aria-label={`${report.metric} observed distribution`} className="space-y-2 rounded-md border border-border bg-muted/20 p-3">
+          <figcaption className="text-xs text-muted-foreground">Each dot is one replicate</figcaption>
+          <div className="relative h-10">
+            {dots.map(({ dot, left, bottom }, i) => <span key={i} title={value(dot)} aria-hidden="true"
+              className="absolute size-2 -translate-x-1/2 rounded-full bg-primary shadow-[0_0_6px_var(--primary)]"
+              style={{ left, bottom: `${bottom}px` }} />)}
+            <span aria-hidden="true" className="absolute inset-x-0 bottom-0 border-b border-border" />
+          </div>
+          <div className="flex justify-between font-mono text-[10px] text-muted-foreground">
+            <span>{value(distribution.minimum)}</span>
+            <span>{value(distribution.maximum)}</span>
+          </div>
+          <p className="text-center text-xs text-muted-foreground">Metric value{metricInfo.unit ? ` (${metricInfo.unit})` : ''}</p>
+        </figure> : bins.some(bin => bin.count > 0) ? <figure aria-label={`${report.metric} observed distribution histogram`} className="space-y-2 rounded-md border border-border bg-muted/20 p-3">
           <figcaption className="text-xs text-muted-foreground">Histogram</figcaption>
           <div className="flex gap-2">
             <span className="flex h-32 select-none items-center text-xs text-muted-foreground [writing-mode:vertical-rl] rotate-180">Replicates</span>
@@ -99,8 +128,7 @@ export function StatisticsReport({ analysis, experiment }: { analysis: StatsAnal
               <p className="text-center text-xs text-muted-foreground">Metric value{metricInfo.unit ? ` (${metricInfo.unit})` : ''}</p>
             </div>
           </div>
-        </figure>}
-        {!bins.some(bin => bin.count > 0) && <p className="rounded-md border border-border bg-muted/20 p-3 text-xs text-muted-foreground">This saved report does not contain enough observations to draw a chart. Analyze this experiment version again to include it.</p>}
+        </figure> : <p className="rounded-md border border-border bg-muted/20 p-3 text-xs text-muted-foreground">This saved report does not contain enough observations to draw a chart. Analyze this experiment version again to include it.</p>}
         <p className="text-xs text-muted-foreground">Observed values pool the analyzed replicates across conditions. The selected model describes outcomes after accounting for the experimental factors.</p>
         {!!metricInfo.coding.length && <p className="text-xs text-muted-foreground">Categorical outcomes use the analyzed category codes. Their numeric summaries depend on that coding.</p>}
         <dl className="grid grid-cols-2 gap-x-4 gap-y-2 text-xs @lg:grid-cols-3">

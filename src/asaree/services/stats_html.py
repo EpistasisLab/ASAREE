@@ -99,7 +99,25 @@ def render_html(analysis: dict) -> str:
     if distribution and distribution.get("n", 0) > 0:
         distribution_section += "<h2>Observed distribution</h2>"
         plot = saved_distribution_plot(output)
-        if plot and plot.get("bins"):
+        if plot and plot.get("values"):
+            values = plot["values"]
+            minimum, maximum = min(values), max(values)
+            span = maximum - minimum or 1.0
+            seen: dict[float, int] = {}
+            dots = []
+            for dot in values:
+                rank = seen.get(dot, 0)
+                seen[dot] = rank + 1
+                dots.append(
+                    f'<span class="dot" style="left:{100 * (dot - minimum) / span:.4f}%;bottom:{rank % 3 * 10}px"'
+                    f' title="{text(dot)}"></span>'
+                )
+            distribution_section += (
+                '<figure aria-label="Observed distribution"><figcaption>Each dot is one replicate</figcaption>'
+                f'<div class="dots">{"".join(dots)}</div>'
+                f'<p class="dot-scale"><span>{text(minimum)}</span><span>{text(maximum)}</span></p></figure>'
+            )
+        elif plot and plot.get("bins"):
             maximum = max(1, *(bin["count"] for bin in plot["bins"]))
             bars = "".join(
                 f'<li><span>{text(bin["label"])}</span><span class="track">'
@@ -184,6 +202,9 @@ th{{background:#eff3f6}}pre{{white-space:pre-wrap;overflow-wrap:anywhere;font-si
 .distribution{{list-style:none;padding:0}}.distribution li{{display:grid;grid-template-columns:minmax(0,9rem) 1fr 3rem;
 gap:12px;align-items:center;font:12px monospace;margin:8px 0;overflow-wrap:anywhere}}
 .track{{height:16px;background:#eff3f6}}.bar{{display:block;height:100%;background:#167fa2}}
+.dots{{position:relative;height:40px;border-bottom:1px solid #cbd5e1;margin:12px 0 0}}
+.dot{{position:absolute;width:8px;height:8px;margin-left:-4px;border-radius:50%;background:#167fa2}}
+.dot-scale{{display:flex;justify-content:space-between;font:12px monospace;color:#526170;margin:4px 0 12px}}
 .methodology{{margin:24px 0;border:1px solid #b6d9e4;border-radius:12px;overflow:hidden}}
 .methodology header{{padding:20px;background:#eef8fb;border-bottom:1px solid #b6d9e4}}
 .methodology h2,.methodology h3{{margin:4px 0 12px}}.methodology p{{font-size:13px}}

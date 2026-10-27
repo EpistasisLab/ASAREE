@@ -88,6 +88,37 @@ def test_legacy_graphs_remain_readable(graph):
     assert _resolve_model_config(graph, "agent") == graph["nodes"][0]["data"]["config"]
 
 
+@pytest.mark.parametrize("node_type", ["persona", "step"])
+async def test_publication_without_model_nodes_preserves_graph_shape(node_type):
+    graph = {"nodes": [{"id": "node", "type": node_type, "data": {}}], "edges": []}
+    frozen = await sampling_snapshots.freeze_sampling(graph, design_spec=None, owner_id=uuid.uuid4())
+    assert frozen == graph
+    assert frozen is not graph
+
+
+async def test_empty_model_config_is_frozen_using_the_same_defaults_as_execution(monkeypatch, graph):
+    from motoro.schemas.agent import ModelConfig
+    from motoro.services.model_capabilities import get_capabilities
+
+    graph["nodes"][0]["data"] = {"config": {}}
+    calls = []
+
+    async def build(data, **kwargs):
+        calls.append(data)
+        config = ModelConfig(**data)
+        config.resolved_capabilities = get_capabilities(config.model)
+        return config
+
+    monkeypatch.setattr(sampling_snapshots, "build_model_config", build)
+    frozen = await sampling_snapshots.freeze_sampling(graph, design_spec=None, owner_id=uuid.uuid4())
+    config = ModelConfig(**_resolve_model_config(frozen, "agent"))
+    assert config.model == ModelConfig().model
+    assert config.resolved_capabilities is not None
+    assert _sampling_kwargs(config, config.model) == _sampling_kwargs(ModelConfig(), config.model)
+    assert calls == [{}]
+    assert graph["nodes"][0]["data"]["config"] == {}
+
+
 async def test_whole_model_factor_freezes_each_models_defaults_and_fallbacks(monkeypatch, graph):
     from motoro.schemas.agent import ModelConfig
 

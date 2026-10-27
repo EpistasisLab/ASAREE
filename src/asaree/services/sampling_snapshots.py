@@ -61,12 +61,13 @@ async def freeze_sampling(
         for selection in itertools.chain([{}], selections):
             patched = apply_factor_bindings({"nodes": [node], "edges": []}, selection)
             config = patched["nodes"][0].get("data", {}).get("config") or {}
-            if not config.get("model"):
-                continue
+            # An empty Model config still executes with ModelConfig's defaults.
+            # Freeze it through the same construction path as an explicit model.
             key = _config_key(config)
             if key not in snapshots:
                 snapshots[key] = _pin_config(await build_model_config(config, owner_id=owner_id))
-    frozen[_SNAPSHOT_KEY] = snapshots
+    if snapshots:
+        frozen[_SNAPSHOT_KEY] = snapshots
     return frozen
 
 

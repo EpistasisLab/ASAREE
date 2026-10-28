@@ -339,7 +339,8 @@ def prepare_frame(source: dict, config: dict) -> pd.DataFrame:
 
 def json_safe(value: Any) -> Any:
     if isinstance(value, pd.DataFrame):
-        return json.loads(value.to_json(orient="records"))
+        # to_json rounds to 10 decimal places, which stores p = 1e-11 as 0.0.
+        return json_safe(value.to_dict(orient="records"))
     if isinstance(value, np.ndarray):
         return json_safe(value.tolist())
     if isinstance(value, dict):

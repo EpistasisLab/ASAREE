@@ -56,7 +56,7 @@ def test_incomplete_bootstrap_has_counts_and_no_intervals(monkeypatch, failure):
     assert metadata["failed"] == metadata["attempted"] == (20 if failure == "fit" else 0)
 
 
-def test_factorial_permutations_have_adjusted_p_counts_and_reproducible_stream():
+def test_factorial_permutations_have_counts_and_reproducible_stream():
     frame, _, _, _, _, config = bootstrap_input()
     frame["factor_1"] = np.tile(["C", "D"], 30)
     config.update(factors=["Treatment", "Setting"], family="gaussian")
@@ -64,11 +64,13 @@ def test_factorial_permutations_have_adjusted_p_counts_and_reproducible_stream()
     second, _ = native_permutations(frame, config)
     assert reason is None
     assert first == second
-    assert {row["term"] for row in first} == {"factor_0", "factor_1", "factor_0:factor_1"}
+    # Interactions are resampled with the fitted model's own statistic elsewhere.
+    assert {row["term"] for row in first} == {"factor_0", "factor_1"}
     for row in first:
         assert row["n_perm"] == 99
-        assert 0.01 <= row["p_perm"] <= row["p_holm"] <= 1
-    assert "Freedman-Lane" in first[-1]["method"]
+        assert 0.01 <= row["p_perm"] <= 1
+        assert row["F_obs"] >= 0
+        assert "within strata" in row["method"]
 
 
 def test_unequal_trial_totals_explain_why_permutation_is_withheld():
@@ -78,18 +80,6 @@ def test_unequal_trial_totals_explain_why_permutation_is_withheld():
     rows, reason = native_permutations(frame, config)
     assert rows == []
     assert "unequal trial totals" in reason
-
-
-def test_nongaussian_interaction_permutation_is_withheld_instead_of_assuming_exchangeable_errors():
-    frame, _, _, _, _, config = bootstrap_input()
-    frame["factor_1"] = np.tile(["C", "D"], 30)
-    config.update(factors=["Treatment", "Setting"], family="gamma")
-    rows, reason = native_permutations(frame, config)
-    assert reason is None
-    assert all(np.isfinite(row["p_holm"]) for row in rows[:2])
-    assert np.isnan(rows[-1]["p_holm"])
-    assert rows[-1]["n_perm"] == 0
-    assert "non-Gaussian" in rows[-1]["reason"]
 
 
 def test_automatic_report_preserves_analytic_inference_when_bootstrap_cannot_finish(monkeypatch):

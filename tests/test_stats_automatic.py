@@ -103,7 +103,8 @@ def test_native_gaussian_effect_and_interval_match_reference(monkeypatch):
     np.testing.assert_allclose([effect["ci_low"], effect["ci_high"]], reference.conf_int().ravel(), atol=1e-8)
     assert "Wald z-test" in effect["method"]
     assert "Wald chi-square test" in result["summary"]["tests"][0]["method"]
-    assert any("Checks whether this factor contributes" in line for line in result["summary"]["methods"])
+    assert any("Factor tests — Target: Treatment" in line for line in result["summary"]["methods"])
+    assert result["summary"]["covariance"]["computed"] == "HC3"
     distribution = result["summary"]["distribution"]
     assert distribution["n"] == len(y)
     assert sum(bin["count"] for bin in distribution["plot"]["bins"]) == len(y)
@@ -116,7 +117,8 @@ def test_native_gaussian_effect_and_interval_match_reference(monkeypatch):
     assert "Each dot is one replicate" not in html
     assert "Freedman–Diaconis" in html
     assert "Regression Model Selection" in html
-    assert "Selected regression model distribution: Gaussian (normal)" in html
+    assert "<dt>Selected model</dt><dd>Gaussian (normal)</dd>" in html
+    assert "ΔAIC vs best usable" in html
     assert "Standard deviation" in html
     assert "accounting for the experimental factors" in html
 
@@ -241,16 +243,16 @@ def test_nongaussian_comparisons_have_response_scale_uncertainty(kind):
     assert effect["ci_low"] < effect["ci_high"]
     assert 0 <= effect["p_adjusted"] <= 1
     assert "Delta-method Wald z-test" in effect["method"]
-    assert "predicted average" in effect["purpose"]
+    assert "Mean predicted" in effect["target"]
     assert effect["bootstrap_ci_low"] < effect["bootstrap_ci_high"]
     assert result["summary"]["resampling"]["bootstrap"]["attempted"] == 20
     assert result["summary"]["tests"][0]["permutation_p_adjusted"] is not None
     html = render_html(dict(output=result))
     assert effect["method"] in html
-    assert "Confidence intervals —" in html
+    assert "<h3>Bootstrap intervals</h3>" in html
     assert "Analytic 95% interval" in html
     assert "Bootstrap 95% interval" in html
-    assert "Permutation adjusted p" in html
+    assert "Resampling adjusted p" in html
     json.dumps(result, allow_nan=False)
 
 

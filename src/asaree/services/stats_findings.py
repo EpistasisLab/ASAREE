@@ -15,6 +15,7 @@ def describe_findings(tests: list[dict]) -> list[str]:
         interaction = len(factors) > 1
         main = evidence(test.get("p_adjusted"))
         check = evidence(test.get("permutation_p_adjusted"))
+        name = test.get("resampling_name") or "permutation check"
         if interaction:
             subject = (
                 f"the effect of {factors[0]} changes across {factors[1]} settings"
@@ -24,8 +25,8 @@ def describe_findings(tests: list[dict]) -> list[str]:
             subject = f"{factors[0]} has an effect on this metric"
         if main is not None and check == main:
             findings.append(
-                f"Both the main test and the permutation check found evidence that {subject}."
-                if main else f"Neither the main test nor the permutation check found clear evidence that {subject}."
+                f"Both the main test and the {name} found evidence that {subject}."
+                if main else f"Neither the main test nor the {name} found clear evidence that {subject}."
             )
             continue
         conclusion = (
@@ -34,12 +35,15 @@ def describe_findings(tests: list[dict]) -> list[str]:
         )
         if main is None:
             conclusion = f"The main statistical test for {' and '.join(factors)} was unavailable."
+            if check is None:
+                findings.append(f"{conclusion[:-1]}, and so was its {name}.")
+                continue
         if check is None:
-            sensitivity = "A permutation check was not available for this comparison."
+            sensitivity = f"A {name} was not available for this comparison."
         else:
             sensitivity = (
-                f"The permutation check found evidence that {subject}."
-                if check else f"The permutation check found no clear evidence that {subject}."
+                f"The {name} found evidence that {subject}."
+                if check else f"The {name} found no clear evidence that {subject}."
             )
             if main is not None:
                 sensitivity += " The two methods differ; interpret this finding cautiously."

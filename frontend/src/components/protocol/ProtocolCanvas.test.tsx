@@ -164,6 +164,7 @@ describe('ProtocolCanvas connector adds', () => {
     fireEvent.click(screen.getByRole('button', { name: /^Personas/ }))
     expect(screen.getByPlaceholderText('Search personas…')).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: /^Analyst/ }))
+    fireEvent.click(screen.getByRole('button', { name: 'Add persona node' }))
     await waitFor(() => {
       const graph = client.getQueryData<ProtocolGraph>(protocolGraphQueryKey('protocol-1'))!
       const persona = graph.nodes.find(node => node.type === 'persona')!

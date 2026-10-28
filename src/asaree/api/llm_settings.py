@@ -26,10 +26,8 @@ from asaree.services.user_llm_settings import delete_setting, get_setting, list_
 
 router = APIRouter(prefix="/llm-settings", tags=["llm-settings"])
 
-# Only the Azure Foundry path makes a real outbound call using the user's own
-# key (Anthropic/OpenAI resolve from a static, in-process catalog) -- capped
-# defensively so a retry loop can't hammer Azure with it, same posture ARES
-# already takes for the same call.
+# Bound provider discovery independently of connection checks. Motoro decides
+# which providers use a live listing or a catalog; ASAREE owns request limits.
 _DISCOVERY_MAX_ATTEMPTS = 10
 _DISCOVERY_WINDOW_SECONDS = 60
 

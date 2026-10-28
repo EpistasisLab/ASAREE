@@ -11,13 +11,15 @@ import pytest
 from fastapi import FastAPI
 from motoro.services.llm_service import UnsupportedEffortError, _sampling_kwargs
 from motoro.services.model_capabilities import TEMPERATURE_ONLY_CAPABILITIES, ModelCapabilities
+from motoro.services.provider_types import ProviderConfig
+from motoro.services.providers import discover_models
 from motoro.services.sampling import resolve_sampling
 
 from asaree.api.llm_settings import router
 from asaree.deps import get_current_user
 from asaree.models.database import get_db
 from asaree.services import model_config as service
-from asaree.services.llm_model_discovery import ModelInfo, _capabilities_from_openrouter
+from asaree.services.llm_model_discovery import ModelInfo
 
 OWNER = uuid.UUID("11111111-1111-1111-1111-111111111111")
 
@@ -101,16 +103,27 @@ async def test_openrouter_claude_keeps_effort_without_discovery(discovery):
 async def test_openrouter_live_effort_survives_stale_litellm_model_map(discovery, monkeypatch):
     # Qwen's live catalog exposes effort even when the installed LiteLLM map doesn't.
     model = "qwen/qwen3.8-27b"
-    capabilities = _capabilities_from_openrouter(
-        {
-            "id": model,
-            "supported_parameters": ["temperature", "reasoning", "reasoning_effort"],
-            "reasoning": {
-                "supported_efforts": ["xhigh", "medium", "low", "none"],
-                "default_effort": "xhigh",
-            },
-        }
+    listing = await discover_models(
+        ProviderConfig(provider="openrouter"),
+        transport=httpx.MockTransport(
+            lambda request: httpx.Response(
+                200,
+                json={
+                    "data": [
+                        {
+                            "id": model,
+                            "supported_parameters": ["temperature", "reasoning", "reasoning_effort"],
+                            "reasoning": {
+                                "supported_efforts": ["xhigh", "medium", "low", "none"],
+                                "default_effort": "xhigh",
+                            },
+                        }
+                    ]
+                },
+            )
+        ),
     )
+    capabilities = listing.models[0].capabilities
     discovery.return_value = ([ModelInfo(id=model, label=None, capabilities=capabilities)], "api", None)
     monkeypatch.setattr(litellm, "supports_reasoning", lambda **kwargs: False)
 

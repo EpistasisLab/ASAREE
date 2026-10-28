@@ -36,8 +36,6 @@ import logging
 import time
 import uuid
 
-from motoro.services.model_capabilities import ModelCapabilities
-
 from asaree.models.user_llm_setting import UserLLMSetting
 from asaree.redis_client import get_redis
 from asaree.services.llm_model_discovery import ModelInfo, discover_models
@@ -54,8 +52,8 @@ STALE_NOTE = (
 
 
 def _key(user_id: uuid.UUID, provider: str) -> str:
-    # v3 distinguishes unknown support and provider defaults from application policy.
-    return f"llm:models:{user_id}:{provider}:v3"
+    # v4 preserves Motoro's defaults and provenance; older entries lost those facts.
+    return f"llm:models:{user_id}:{provider}:v4"
 
 
 def _dump(models: list[ModelInfo], source: str, note: str | None, *, now: float) -> str:
@@ -64,21 +62,14 @@ def _dump(models: list[ModelInfo], source: str, note: str | None, *, now: float)
             "fresh_until": now + _FRESH_SECONDS,
             "source": source,
             "note": note,
-            "models": [{"id": m.id, "label": m.label, "capabilities": m.capabilities.model_dump()} for m in models],
+            "models": [m.model_dump(mode="json") for m in models],
         }
     )
 
 
 def _load(raw: str) -> tuple[list[ModelInfo], str, str | None, float]:
     payload = json.loads(raw)
-    models = [
-        ModelInfo(
-            id=entry["id"],
-            label=entry["label"],
-            capabilities=ModelCapabilities.model_validate(entry["capabilities"]),
-        )
-        for entry in payload["models"]
-    ]
+    models = [ModelInfo.model_validate(entry) for entry in payload["models"]]
     return models, payload["source"], payload["note"], float(payload["fresh_until"])
 
 
@@ -90,13 +81,12 @@ async def discover_models_cached(
     Every Redis interaction is best-effort: a cache that's down must degrade
     to "call the provider every time," never to an error page.
     """
-    redis = get_redis()
     key = _key(user_id, provider)
     now = time.time()
 
     cached_raw: str | None = None
     try:
-        cached_raw = await redis.get(key)
+        cached_raw = await get_redis().get(key)
     except Exception as e:  # noqa: BLE001 -- any redis failure is a cache miss, not an outage
         logger.warning("model_cache_read_failed", extra={"error": str(e)})
 
@@ -124,7 +114,7 @@ async def discover_models_cached(
 
     if source == "api":
         try:
-            await redis.set(key, _dump(models, source, note, now=now), ex=_RETAIN_SECONDS)
+            await get_redis().set(key, _dump(models, source, note, now=now), ex=_RETAIN_SECONDS)
         except Exception as e:  # noqa: BLE001 -- failing to cache is not failing to answer
             logger.warning("model_cache_write_failed", extra={"error": str(e)})
 

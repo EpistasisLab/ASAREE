@@ -3,8 +3,11 @@ real network call in an automated test)."""
 
 from __future__ import annotations
 
+import json
+
 import httpx
 import pytest
+from motoro.services import providers
 
 from asaree.models.user_llm_setting import UserLLMSetting
 from asaree.services import llm_model_discovery as discovery
@@ -54,6 +57,7 @@ async def test_discover_models_unsupported_provider_returns_error() -> None:
 class _FakeResponse:
     def __init__(self, json_data: dict, status_code: int = 200) -> None:
         self._json_data = json_data
+        self.text = json.dumps(json_data)
         self.status_code = status_code
 
     def raise_for_status(self) -> None:
@@ -94,13 +98,13 @@ async def test_discover_models_azure_without_a_project_endpoint_asks_for_one_wit
     def _explode(**kwargs: object) -> None:
         raise AssertionError("no HTTP call should be made without a project endpoint")
 
-    monkeypatch.setattr(discovery.httpx, "AsyncClient", _explode)
+    monkeypatch.setattr(providers.httpx, "AsyncClient", _explode)
 
     models, source, note = await discovery.discover_models(provider="azure_foundry", setting=_foundry_setting())
 
     assert models == []
     assert source == "error"
-    assert note == discovery.NO_PROJECT_ENDPOINT_NOTE
+    assert note == providers.NO_PROJECT_ENDPOINT_NOTE
     assert "Project endpoint" in note
 
 
@@ -130,7 +134,7 @@ async def test_discover_models_azure_project_endpoint_maps_real_response_shape(m
         }
     )
     monkeypatch.setattr(
-        discovery.httpx,
+        providers.httpx,
         "AsyncClient",
         lambda **kwargs: _FakeAsyncClient(fake_response, captured_headers=captured_headers),
     )
@@ -162,7 +166,7 @@ async def test_discover_models_azure_hits_only_the_project_deployments_url(
             captured_urls.append(url)
             return _FakeResponse({"value": []})
 
-    monkeypatch.setattr(discovery.httpx, "AsyncClient", lambda **kwargs: _RecordingClient())
+    monkeypatch.setattr(providers.httpx, "AsyncClient", lambda **kwargs: _RecordingClient())
 
     setting = _foundry_setting(azure_project_endpoint=_PROJECT_ENDPOINT)
     await discovery.discover_models(provider="azure_foundry", setting=setting)
@@ -173,7 +177,7 @@ async def test_discover_models_azure_hits_only_the_project_deployments_url(
 async def test_discover_models_azure_project_endpoint_failure_scrubs_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
     fake_response = _FakeResponse({}, status_code=401)
     monkeypatch.setattr(
-        discovery.httpx, "AsyncClient", lambda **kwargs: _FakeAsyncClient(fake_response, captured_headers=[])
+        providers.httpx, "AsyncClient", lambda **kwargs: _FakeAsyncClient(fake_response, captured_headers=[])
     )
 
     setting = _foundry_setting(azure_project_endpoint=_PROJECT_ENDPOINT)
@@ -217,7 +221,7 @@ class _PagingClient:
 
     async def get(self, url: str, *, params: dict, headers: dict) -> _FakeResponse:
         self._captured.setdefault("urls", []).append(url)
-        self._captured.setdefault("params", []).append(params)
+        self._captured.setdefault("params", []).append(dict(params))
         self._captured["headers"] = headers
         return _FakeResponse(self._pages.pop(0))
 
@@ -246,7 +250,7 @@ async def test_anthropic_reads_effort_levels_from_the_live_capability_tree(
         ],
         "has_more": False,
     }
-    monkeypatch.setattr(discovery.httpx, "AsyncClient", lambda **kwargs: _PagingClient([page], captured))
+    monkeypatch.setattr(providers.httpx, "AsyncClient", lambda **kwargs: _PagingClient([page], captured))
 
     models, source, note = await discovery.discover_models(provider="anthropic", setting=_anthropic_setting())
 
@@ -279,7 +283,7 @@ async def test_anthropic_missing_defaults_are_not_fabricated(monkeypatch: pytest
         ],
         "has_more": False,
     }
-    monkeypatch.setattr(discovery.httpx, "AsyncClient", lambda **kwargs: _PagingClient([page], {}))
+    monkeypatch.setattr(providers.httpx, "AsyncClient", lambda **kwargs: _PagingClient([page], {}))
 
     models, _, _ = await discovery.discover_models(provider="anthropic", setting=_anthropic_setting())
     by_id = {m.id: m for m in models}
@@ -294,7 +298,7 @@ async def test_anthropic_follows_pagination(monkeypatch: pytest.MonkeyPatch) -> 
         {"data": [{"id": "first", "capabilities": {}}], "has_more": True, "last_id": "first"},
         {"data": [{"id": "second", "capabilities": {}}], "has_more": False},
     ]
-    monkeypatch.setattr(discovery.httpx, "AsyncClient", lambda **kwargs: _PagingClient(pages, captured))
+    monkeypatch.setattr(providers.httpx, "AsyncClient", lambda **kwargs: _PagingClient(pages, captured))
 
     models, source, _ = await discovery.discover_models(provider="anthropic", setting=_anthropic_setting())
 
@@ -306,7 +310,7 @@ async def test_anthropic_follows_pagination(monkeypatch: pytest.MonkeyPatch) -> 
 async def test_anthropic_missing_capability_tree_remains_unknown(monkeypatch: pytest.MonkeyPatch) -> None:
     # Missing metadata uses the same effort fallback as request construction.
     page = {"data": [{"id": "mystery-model", "display_name": "Mystery"}], "has_more": False}
-    monkeypatch.setattr(discovery.httpx, "AsyncClient", lambda **kwargs: _PagingClient([page], {}))
+    monkeypatch.setattr(providers.httpx, "AsyncClient", lambda **kwargs: _PagingClient([page], {}))
 
     models, _, _ = await discovery.discover_models(provider="anthropic", setting=_anthropic_setting())
 
@@ -321,7 +325,7 @@ async def test_anthropic_failure_falls_back_to_the_catalog_and_scrubs_the_key(
     # A stale catalog beats an empty dropdown, and "static" keeps callers from
     # flagging ids this list can't vouch for.
     monkeypatch.setattr(
-        discovery.httpx,
+        providers.httpx,
         "AsyncClient",
         lambda **kwargs: _FakeAsyncClient(_FakeResponse({}, status_code=401), captured_headers=[]),
     )
@@ -337,7 +341,7 @@ async def test_anthropic_failure_falls_back_to_the_catalog_and_scrubs_the_key(
 async def test_anthropic_honours_a_custom_api_base(monkeypatch: pytest.MonkeyPatch) -> None:
     captured: dict = {}
     monkeypatch.setattr(
-        discovery.httpx,
+        providers.httpx,
         "AsyncClient",
         lambda **kwargs: _PagingClient([{"data": [], "has_more": False}], captured),
     )
@@ -351,7 +355,7 @@ async def test_anthropic_honours_a_custom_api_base(monkeypatch: pytest.MonkeyPat
 
 async def test_anthropic_empty_listing_falls_back_to_the_catalog(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
-        discovery.httpx, "AsyncClient", lambda **kwargs: _PagingClient([{"data": [], "has_more": False}], {})
+        providers.httpx, "AsyncClient", lambda **kwargs: _PagingClient([{"data": [], "has_more": False}], {})
     )
 
     models, source, _ = await discovery.discover_models(provider="anthropic", setting=_anthropic_setting())
@@ -377,7 +381,7 @@ class _SimpleClient:
     async def __aexit__(self, *exc_info: object) -> None:
         return None
 
-    async def get(self, url: str, *, headers: dict) -> _FakeResponse:
+    async def get(self, url: str, *, headers: dict, params: dict | None = None) -> _FakeResponse:
         self._captured.setdefault("urls", []).append(url)
         self._captured["headers"] = headers
         return self._response
@@ -391,7 +395,7 @@ async def test_openrouter_discovery_needs_no_credential(monkeypatch: pytest.Monk
     """Unlike every other live listing here, OpenRouter's catalog is public."""
     captured: dict = {}
     response = _FakeResponse({"data": [{"id": "anthropic/claude-sonnet-5", "name": "Claude Sonnet 5"}]})
-    monkeypatch.setattr(discovery.httpx, "AsyncClient", lambda **kwargs: _SimpleClient(response, captured=captured))
+    monkeypatch.setattr(providers.httpx, "AsyncClient", lambda **kwargs: _SimpleClient(response, captured=captured))
 
     models, source, note = await discovery.discover_models(provider="openrouter", setting=None)
 
@@ -407,7 +411,7 @@ async def test_openrouter_discovery_sends_bearer_token_when_credential_saved(
 ) -> None:
     captured: dict = {}
     response = _FakeResponse({"data": []})
-    monkeypatch.setattr(discovery.httpx, "AsyncClient", lambda **kwargs: _SimpleClient(response, captured=captured))
+    monkeypatch.setattr(providers.httpx, "AsyncClient", lambda **kwargs: _SimpleClient(response, captured=captured))
 
     await discovery.discover_models(provider="openrouter", setting=_openrouter_setting())
 
@@ -417,7 +421,7 @@ async def test_openrouter_discovery_sends_bearer_token_when_credential_saved(
 async def test_openrouter_model_capabilities_resolve_via_motoros_registry(monkeypatch: pytest.MonkeyPatch) -> None:
     """Missing metadata preserves known registry entries, including Claude."""
     response = _FakeResponse({"data": [{"id": "anthropic/claude-opus-5", "name": "Claude Opus 5"}]})
-    monkeypatch.setattr(discovery.httpx, "AsyncClient", lambda **kwargs: _SimpleClient(response, captured={}))
+    monkeypatch.setattr(providers.httpx, "AsyncClient", lambda **kwargs: _SimpleClient(response, captured={}))
 
     models, _, _ = await discovery.discover_models(provider="openrouter", setting=None)
 
@@ -489,7 +493,7 @@ async def test_openrouter_model_capabilities_resolve_via_motoros_registry(monkey
 )
 async def test_openrouter_reads_sampling_metadata(monkeypatch, metadata, temperature, effort, levels, default):
     response = _FakeResponse({"data": [{"id": "qwen/qwen3.8-27b", **metadata}]})
-    monkeypatch.setattr(discovery.httpx, "AsyncClient", lambda **kwargs: _SimpleClient(response, captured={}))
+    monkeypatch.setattr(providers.httpx, "AsyncClient", lambda **kwargs: _SimpleClient(response, captured={}))
     models, _, _ = await discovery.discover_models(provider="openrouter", setting=None)
     caps = models[0].capabilities
     assert caps.supports_temperature is temperature
@@ -499,28 +503,33 @@ async def test_openrouter_reads_sampling_metadata(monkeypatch, metadata, tempera
 
 
 @pytest.mark.parametrize("default", [0.0, 1.0, None])
-def test_openrouter_temperature_defaults_and_known_mode_restrictions(default):
-    caps = discovery._capabilities_from_openrouter(
-        {
-            "id": "openai/gpt-5.2",
-            "supported_parameters": ["temperature", "reasoning_effort"],
-            "default_parameters": {"temperature": default},
-            "reasoning": {"supported_efforts": ["none", "low", "high"], "default_effort": "none"},
-        }
-    )
+async def test_openrouter_temperature_defaults_and_known_mode_restrictions(monkeypatch, default):
+    entry = {
+        "id": "openai/gpt-5.2",
+        "supported_parameters": ["temperature", "reasoning_effort"],
+        "default_parameters": {"temperature": default},
+        "reasoning": {"supported_efforts": ["none", "low", "high"], "default_effort": "none"},
+    }
+    response = _FakeResponse({"data": [entry]})
+    monkeypatch.setattr(providers.httpx, "AsyncClient", lambda **kwargs: _SimpleClient(response, captured={}))
+    models, _, _ = await discovery.discover_models(provider="openrouter", setting=None)
+    caps = models[0].capabilities
     assert caps.default_temperature == default
     assert caps.supports_temperature is caps.supports_effort is True
     assert caps.temperature_effort_levels == ["none"]
 
 
-def test_anthropic_explicit_defaults_and_independent_temperature_support():
-    caps = discovery._capabilities_from_anthropic(
-        {
+async def test_anthropic_explicit_defaults_and_independent_temperature_support(monkeypatch):
+    entry = {
+        "id": "custom-model",
+        "capabilities": {
             "temperature": {"supported": True, "default": 0.0},
             "effort": {"supported": True, "low": {"supported": True}, "default_effort": "low"},
         },
-        "custom-model",
-    )
+    }
+    monkeypatch.setattr(providers.httpx, "AsyncClient", lambda **kwargs: _PagingClient([{"data": [entry]}], {}))
+    models, _, _ = await discovery.discover_models(provider="anthropic", setting=_anthropic_setting())
+    caps = models[0].capabilities
     assert caps.supports_temperature is caps.supports_effort is True
     assert caps.default_temperature == 0.0
     assert caps.default_effort == "low"
@@ -537,7 +546,7 @@ async def test_openrouter_live_metadata_overrides_claude_registry(monkeypatch):
             ]
         }
     )
-    monkeypatch.setattr(discovery.httpx, "AsyncClient", lambda **kwargs: _SimpleClient(response, captured={}))
+    monkeypatch.setattr(providers.httpx, "AsyncClient", lambda **kwargs: _SimpleClient(response, captured={}))
     models, _, _ = await discovery.discover_models(provider="openrouter", setting=None)
     assert models[0].capabilities.supports_temperature is True
     assert models[0].capabilities.supports_effort is False
@@ -546,7 +555,7 @@ async def test_openrouter_live_metadata_overrides_claude_registry(monkeypatch):
 async def test_openrouter_honours_a_custom_api_base(monkeypatch: pytest.MonkeyPatch) -> None:
     captured: dict = {}
     response = _FakeResponse({"data": []})
-    monkeypatch.setattr(discovery.httpx, "AsyncClient", lambda **kwargs: _SimpleClient(response, captured=captured))
+    monkeypatch.setattr(providers.httpx, "AsyncClient", lambda **kwargs: _SimpleClient(response, captured=captured))
 
     await discovery.discover_models(
         provider="openrouter", setting=_openrouter_setting(api_base="https://proxy.internal")
@@ -557,7 +566,7 @@ async def test_openrouter_honours_a_custom_api_base(monkeypatch: pytest.MonkeyPa
 
 async def test_openrouter_failure_scrubs_the_key(monkeypatch: pytest.MonkeyPatch) -> None:
     response = _FakeResponse({}, status_code=401)
-    monkeypatch.setattr(discovery.httpx, "AsyncClient", lambda **kwargs: _SimpleClient(response, captured={}))
+    monkeypatch.setattr(providers.httpx, "AsyncClient", lambda **kwargs: _SimpleClient(response, captured={}))
 
     models, source, note = await discovery.discover_models(provider="openrouter", setting=_openrouter_setting())
 
@@ -572,7 +581,7 @@ def _local_setting(api_key: str = "", api_base: str | None = "http://localhost:8
 
 async def test_local_unknown_models_remain_unknown_without_changing_known_claude(monkeypatch):
     response = _FakeResponse({"data": [{"id": "qwen3.8-27b"}, {"id": "claude-opus-5"}]})
-    monkeypatch.setattr(discovery.httpx, "AsyncClient", lambda **kwargs: _SimpleClient(response, captured={}))
+    monkeypatch.setattr(providers.httpx, "AsyncClient", lambda **kwargs: _SimpleClient(response, captured={}))
     models, _, _ = await discovery.discover_models(provider="local", setting=_local_setting())
     by_id = {model.id: model.capabilities for model in models}
     assert by_id["qwen3.8-27b"].supports_effort is None
@@ -590,7 +599,7 @@ async def test_local_discovery_without_a_base_url_returns_error() -> None:
 async def test_local_discovery_uses_placeholder_key_when_unset(monkeypatch: pytest.MonkeyPatch) -> None:
     captured: dict = {}
     response = _FakeResponse({"data": [{"id": "llama-3-70b-instruct"}]})
-    monkeypatch.setattr(discovery.httpx, "AsyncClient", lambda **kwargs: _SimpleClient(response, captured=captured))
+    monkeypatch.setattr(providers.httpx, "AsyncClient", lambda **kwargs: _SimpleClient(response, captured=captured))
 
     models, source, note = await discovery.discover_models(provider="local", setting=_local_setting())
 
@@ -607,7 +616,7 @@ async def test_local_discovery_no_listing_route_surfaces_as_error_source_so_the_
     a real error -- but ModelNodeInspector.tsx only renders `note` when
     `source == "error"`, so that's the source used to actually surface it."""
     response = _FakeResponse({}, status_code=404)
-    monkeypatch.setattr(discovery.httpx, "AsyncClient", lambda **kwargs: _SimpleClient(response, captured={}))
+    monkeypatch.setattr(providers.httpx, "AsyncClient", lambda **kwargs: _SimpleClient(response, captured={}))
 
     models, source, note = await discovery.discover_models(provider="local", setting=_local_setting())
 
@@ -623,7 +632,7 @@ async def test_openai_stays_on_the_curated_catalog_without_calling_out(monkeypat
     def _explode(**kwargs: object) -> None:
         raise AssertionError("openai discovery should make no HTTP call")
 
-    monkeypatch.setattr(discovery.httpx, "AsyncClient", _explode)
+    monkeypatch.setattr(providers.httpx, "AsyncClient", _explode)
 
     setting = UserLLMSetting(provider="openai", api_key_encrypted=encrypt("secret-key"), api_base=None)
     models, source, note = await discovery.discover_models(provider="openai", setting=setting)

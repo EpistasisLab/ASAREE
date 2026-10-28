@@ -22,6 +22,53 @@ function setup() {
 
 const confirmButton = () => screen.getByRole('button', { name: 'Add persona node' })
 
+async function deleteSavedPersona() {
+  fireEvent.click(screen.getByRole('button', { name: 'Create / manage personas' }))
+  const dialog = await screen.findByRole('dialog')
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Delete' }))
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Confirm delete' }))
+  await within(dialog).findByText('No saved personas yet.')
+  fireEvent.keyDown(dialog, { key: 'Escape', code: 'Escape' })
+  await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+}
+
+it('clears a deleted selection and prevents adding an empty node', async () => {
+  vi.spyOn(personasApi, 'list').mockResolvedValue([saved])
+  vi.spyOn(personasApi, 'remove').mockImplementation(async () => {
+    vi.mocked(personasApi.list).mockResolvedValue([])
+  })
+  const pick = setup()
+  fireEvent.click(await screen.findByRole('button', { name: /Careful analyst/ }))
+  await deleteSavedPersona()
+  expect(confirmButton()).toBeDisabled()
+  expect(screen.getByRole('button', { name: 'Clear' })).toBeDisabled()
+  expect(screen.getByText('Select one or more personas or traits to combine into a node.')).toBeInTheDocument()
+  fireEvent.click(confirmButton())
+  expect(pick).not.toHaveBeenCalled()
+})
+
+it('removes deleted entries from the count and preserves the remaining selection order', async () => {
+  vi.spyOn(personasApi, 'list').mockResolvedValue([saved])
+  vi.spyOn(personasApi, 'remove').mockImplementation(async () => {
+    vi.mocked(personasApi.list).mockResolvedValue([])
+  })
+  const pick = setup()
+  fireEvent.click(await screen.findByRole('button', { name: /Careful analyst/ }))
+  fireEvent.click(screen.getByRole('button', { name: /Low Agreeableness/ }))
+  fireEvent.click(screen.getByRole('button', { name: /High Openness/ }))
+  await deleteSavedPersona()
+  expect(screen.getByText(/2 selected .* Low Agreeableness \+ High Openness/)).toBeInTheDocument()
+  expect(within(screen.getByRole('button', { name: /Low Agreeableness/ })).getByLabelText('Selected 1')).toBeInTheDocument()
+  expect(within(screen.getByRole('button', { name: /High Openness/ })).getByLabelText('Selected 2')).toBeInTheDocument()
+  fireEvent.click(confirmButton())
+  expect(pick).toHaveBeenCalledWith(expect.objectContaining({
+    persona_ids: ['12-low-agreeableness', '05-high-openness'],
+    persona_label: 'Low Agreeableness + High Openness',
+    persona_text: `${prompt('12-low-agreeableness')}\n\n${prompt('05-high-openness')}`,
+    persona_sources: [],
+  }))
+})
+
 it('groups built-ins into Personas and Traits, and saved personas separately', async () => {
   vi.spyOn(personasApi, 'list').mockResolvedValue([saved])
   setup()

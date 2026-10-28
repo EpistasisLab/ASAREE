@@ -16,7 +16,6 @@ from fastapi import FastAPI
 from motoro.schemas.agent import ModelConfig
 from motoro.services import providers
 from motoro.services.provider_types import ProviderConfig
-from pydantic import ValidationError
 
 from asaree.api import llm_settings as api
 from asaree.deps import get_current_user
@@ -27,7 +26,7 @@ from asaree.services.llm_connection_check import check_connection
 from asaree.services.llm_model_discovery import discover_models
 from asaree.services.user_llm_settings import encrypt
 
-REVISION = "1a1955144230dab0db5c7b390d5b292f101da490"
+REVISION = "542ff11b5e081bac7d3f3a4ccabb421098f47586"
 PROVIDERS = ["anthropic", "openai", "azure_foundry", "openrouter", "local"]
 OWNER = uuid.UUID("11111111-1111-1111-1111-111111111111")
 SECRET = "provider-secret-for-tests"
@@ -184,11 +183,6 @@ async def test_cache_client_creation_failure_is_a_cache_miss(monkeypatch):
     discover.assert_awaited_once()
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=ValidationError,
-    reason="Motoro 1a195514: ProviderConfig must accept the baseline Azure resource-name trailing slash",
-)
 def test_azure_resource_name_trailing_slash_keeps_existing_inference_connection():
     config = ProviderConfig(provider="azure_foundry", api_key=SECRET, api_base="my-resource/")
     connection = providers.get_inference_connection(config, model="prod-chat")
@@ -196,12 +190,11 @@ def test_azure_resource_name_trailing_slash_keeps_existing_inference_connection(
     assert connection["model"] == "azure_ai/prod-chat"
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=ValidationError,
-    reason="Motoro 1a195514: Azure resource-name validation must not prevent the no-project inconclusive check",
-)
-async def test_azure_resource_name_trailing_slash_without_project_stays_inconclusive():
+async def test_azure_resource_name_trailing_slash_without_project_stays_inconclusive(monkeypatch):
+    def no_network(**kwargs):
+        raise AssertionError("No provider request should be made without a project endpoint")
+
+    monkeypatch.setattr(providers.httpx, "AsyncClient", no_network)
     saved = setting("azure_foundry")
     saved.api_base = "my-resource/"
     saved.azure_project_endpoint = None

@@ -1,4 +1,4 @@
-import { useId, useState } from 'react'
+import { useEffect, useId, useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { ArrowLeft, Plus, Upload, User, X } from 'lucide-react'
 import { personasApi } from '@/api/client'
@@ -10,7 +10,7 @@ import { nodeAccent } from '@/lib/nodeAccent'
 import { cardAccent } from '@/lib/utils'
 import type { PersonaNodeConfig } from '@/types/protocols'
 import { PersonaLibraryDialog } from './PersonaLibraryDialog'
-import { BASELINE_PERSONA_ID } from './personaLibrary'
+import { BASELINE_PERSONA_ID, PERSONA_LIBRARY } from './personaLibrary'
 import { configForSavedPersona, usePersonaLibrary, type PersonaChoice } from './usePersonaLibrary'
 
 const GROUPS: { kind: PersonaChoice['kind']; title: string }[] = [
@@ -33,6 +33,16 @@ export function PersonaBrowserPanel({ onPick, onBack, onClose }: {
   const uploadId = useId()
   const client = useQueryClient()
   const { query, choices, selectionConfig } = usePersonaLibrary()
+  useEffect(() => {
+    // A library deletion must also update the pending selection and its order.
+    // Wait for library data so loading/errors don't discard saved selections.
+    if (!query.data) return
+    const available = new Set([...PERSONA_LIBRARY, ...query.data].map(entry => entry.id))
+    setSelected(current => {
+      const next = current.filter(id => available.has(id))
+      return next.length === current.length ? current : next
+    })
+  }, [query.data])
   const upload = useMutation({
     mutationFn: personasApi.upload,
     onSuccess: () => client.invalidateQueries({ queryKey: ['personas'] }),
@@ -56,6 +66,7 @@ export function PersonaBrowserPanel({ onPick, onBack, onClose }: {
   const previewChars = picked.reduce((sum, choice) => sum + choice.prompt.length, 0)
 
   function confirm() {
+    if (!picked.length || picked.length !== selected.length) return
     const only = selected.length === 1 ? query.data?.find(persona => persona.id === selected[0]) : undefined
     onPick(only ? configForSavedPersona(only) : selectionConfig(selected))
   }
@@ -105,7 +116,7 @@ export function PersonaBrowserPanel({ onPick, onBack, onClose }: {
       </p>
       <div className="flex items-center justify-end gap-2">
         <Button variant="ghost" size="sm" disabled={!selected.length} onClick={() => setSelected([])}>Clear</Button>
-        <Button size="sm" disabled={!selected.length} onClick={confirm}>Add persona node</Button>
+        <Button size="sm" disabled={!picked.length || picked.length !== selected.length} onClick={confirm}>Add persona node</Button>
       </div>
     </div>
     {managing && <PersonaLibraryDialog open onOpenChange={setManaging} onPick={persona => { toggle(persona.id); setManaging(false) }} />}

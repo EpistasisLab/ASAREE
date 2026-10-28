@@ -71,7 +71,7 @@ function ReportRow({ experiment, analysis }: { experiment: string; analysis: Sta
       className="flex w-full cursor-pointer items-center gap-2 p-3 text-left text-xs transition-colors hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring">
       <ChevronRight aria-hidden="true" className={`size-3.5 shrink-0 transition-transform ${open ? 'rotate-90' : ''}`} />
       <span className="min-w-0 flex-1 space-y-1">
-        <span className="block break-words font-medium">{analysis.config.metric}</span>
+        <span className="block break-words text-[0.95625rem] font-semibold">{analysis.config.metric}</span>
         <span className="block text-muted-foreground">{new Date(analysis.created_at).toLocaleString()}</span>
       </span>
     </button>

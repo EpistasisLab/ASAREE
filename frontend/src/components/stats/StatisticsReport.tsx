@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { Download } from 'lucide-react'
 import { statsApi } from '@/api/client'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Card, CardContent, CardDescription, CardHeader } from '@/components/ui/card'
 import type { StatsAnalysis } from '@/types/stats'
 import { describeStatsFindings } from '@/lib/statsFindings'
 import { AnalysisMethods } from './AnalysisMethods'
@@ -64,10 +64,9 @@ export function StatisticsReport({ analysis, experiment }: { analysis: StatsAnal
   }
   return <Card>
     <CardHeader>
-      <div className="flex flex-col items-start gap-3 @2xl:flex-row @2xl:items-center @2xl:justify-between">
-        <CardTitle className="min-w-0 break-words">{report.metric}</CardTitle>
-        <Button variant="outline" onClick={() => void download()} disabled={downloading}>
-          <Download className="size-4" />{downloading ? 'Downloading…' : 'Download HTML report'}
+      <div className="flex justify-start p-3 mb-2">
+        <Button variant="outline" size="sm" onClick={() => void download()} disabled={downloading}>
+          <Download className="size-3.5" />{downloading ? 'Downloading…' : 'Download HTML report'}
         </Button>
       </div>
       <CardDescription>{metricInfo.description}</CardDescription>

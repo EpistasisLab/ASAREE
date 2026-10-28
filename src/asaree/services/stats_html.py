@@ -93,41 +93,42 @@ def render_html(analysis: dict) -> str:
     distribution_section = ""
     if family:
         distribution_section += (
-            f"<p>Selected model distribution: {text(DISTRIBUTION_NAMES.get(family, family))}</p>"
+            f"<p>Selected regression model distribution: {text(DISTRIBUTION_NAMES.get(family, family))}</p>"
         )
     distribution = summary.get("distribution")
     if distribution and distribution.get("n", 0) > 0:
         distribution_section += "<h2>Observed distribution</h2>"
         plot = saved_distribution_plot(output)
-        if plot and plot.get("values"):
-            values = plot["values"]
-            minimum, maximum = min(values), max(values)
-            span = maximum - minimum or 1.0
-            seen: dict[float, int] = {}
-            dots = []
-            for dot in values:
-                rank = seen.get(dot, 0)
-                seen[dot] = rank + 1
-                dots.append(
-                    f'<span class="dot" style="left:{100 * (dot - minimum) / span:.4f}%;bottom:{rank % 3 * 10}px"'
-                    f' title="{text(dot)}"></span>'
-                )
-            distribution_section += (
-                '<figure aria-label="Observed distribution"><figcaption>Each dot is one replicate</figcaption>'
-                f'<div class="dots">{"".join(dots)}</div>'
-                f'<p class="dot-scale"><span>{text(minimum)}</span><span>{text(maximum)}</span></p></figure>'
-            )
-        elif plot and plot.get("bins"):
-            maximum = max(1, *(bin["count"] for bin in plot["bins"]))
+        if plot and plot.get("bins"):
+            bins = plot["bins"]
+            step = max(1, math.ceil(max(bin["count"] for bin in bins) / 4))
+            maximum = step * 4
             bars = "".join(
-                f'<li><span>{text(bin["label"])}</span><span class="track">'
-                f'<span class="bar" style="width:{100 * bin["count"] / maximum:.4f}%"></span>'
-                f'</span><span>{text(bin["count"])}</span></li>'
-                for bin in plot["bins"]
+                f'<li title="{text(bin["label"])}: {text(bin["count"])} replicates">'
+                f'<span class="sr-only">{text(bin["label"])}: {text(bin["count"])} replicates</span>'
+                f'<span aria-hidden="true" class="bar" style="height:{100 * bin["count"] / maximum:.4f}%"></span></li>'
+                for bin in bins
             )
+            ticks = "".join(f'<span>{text(step * tick)}</span>' for tick in (4, 3, 2, 1, 0))
+            if plot["kind"] == "histogram":
+                low = bins[0].get("lower", distribution["minimum"])
+                high = bins[-1].get("upper", distribution["maximum"])
+                labels = "".join(f'<span>{text(low + (high - low) * tick / 4)}</span>' for tick in range(5))
+                axis = f'<div aria-hidden="true" class="numeric-ticks">{labels}</div>'
+            else:
+                labels = "".join(f'<span>{text(bin["label"])}</span>' for bin in bins)
+                axis = f'<div aria-hidden="true" class="x-ticks" style="grid-template-columns:repeat({len(bins)},minmax(0,1fr))">{labels}</div>'
+            caption = "Histogram" if plot["kind"] == "histogram" else "Observed frequencies"
+            method = f' · {text(plot["binning"])}' if plot.get("binning") else ""
+            unit = f' ({text(info["unit"])})' if info.get("unit") else ""
+            kind = "frequencies" if plot["kind"] == "frequency" else "histogram"
             distribution_section += (
-                '<figure aria-label="Observed distribution"><figcaption>Metric value · Replicate count</figcaption>'
-                f'<ol class="distribution">{bars}</ol></figure>'
+                f'<figure aria-label="Observed distribution"><figcaption>{caption}{method}</figcaption>'
+                '<div class="chart"><span class="y-title">Replicates</span>'
+                f'<div aria-hidden="true" class="y-ticks">{ticks}</div><div class="chart-body">'
+                f'<ol class="distribution {kind}">{bars}</ol>'
+                f'{axis}'
+                f'<p class="x-title">Metric value{unit}</p></div></div></figure>'
             )
         distribution_section += (
             "<p>Observed values pool the analyzed replicates across conditions. "
@@ -165,7 +166,7 @@ def render_html(analysis: dict) -> str:
         )
 
     overview = [
-        ("01", "Model selection", f"<h4>{text(DISTRIBUTION_NAMES.get(family, family))}</h4>"
+        ("01", "Regression Model Selection", f"<h4>{text(DISTRIBUTION_NAMES.get(family, family))}</h4>"
          + (f"<p>{text(summary['methods'][0])}</p>" if summary["methods"] else "")),
         ("02", "Tests and comparisons", "<h4>Factor tests</h4>" + test_methods(summary["tests"])
          + "<h4>Comparisons</h4>" + test_methods(summary["effects"])),
@@ -199,12 +200,19 @@ h1,h2{{line-height:1.25}}table{{border-collapse:collapse;width:100%;font-size:14
 th,td{{border-bottom:1px solid #cbd5e1;text-align:left;padding:10px;vertical-align:top;overflow-wrap:anywhere}}
 th{{background:#eff3f6}}pre{{white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px}}
 .test-method{{display:block;margin-top:4px;color:#526170;font-size:12px}}
-.distribution{{list-style:none;padding:0}}.distribution li{{display:grid;grid-template-columns:minmax(0,9rem) 1fr 3rem;
-gap:12px;align-items:center;font:12px monospace;margin:8px 0;overflow-wrap:anywhere}}
-.track{{height:16px;background:#eff3f6}}.bar{{display:block;height:100%;background:#167fa2}}
-.dots{{position:relative;height:40px;border-bottom:1px solid #cbd5e1;margin:12px 0 0}}
-.dot{{position:absolute;width:8px;height:8px;margin-left:-4px;border-radius:50%;background:#167fa2}}
-.dot-scale{{display:flex;justify-content:space-between;font:12px monospace;color:#526170;margin:4px 0 12px}}
+figure{{margin:20px 0;padding:20px;border:1px solid #dce6eb;border-radius:8px;break-inside:avoid}}
+figcaption{{font-size:12px;color:#526170;margin-bottom:16px}}
+.chart{{display:flex;gap:8px}}.chart-body{{flex:1;min-width:0}}
+.y-title{{writing-mode:vertical-rl;transform:rotate(180deg);height:180px;text-align:center;font-size:12px}}
+.y-ticks{{display:flex;height:180px;flex-direction:column;justify-content:space-between;text-align:right;font:11px monospace;color:#526170}}
+.distribution{{display:flex;gap:1px;list-style:none;padding:0;margin:0;height:180px;border-bottom:1px solid #94a3b8;
+background:repeating-linear-gradient(to top,transparent 0,transparent calc(25% - 1px),#dce6eb 25%)}}
+.distribution.frequencies{{gap:8px}}.distribution li{{display:flex;align-items:flex-end;flex:1;min-width:0}}
+.bar{{display:block;width:100%;background:#318eaa;border:1px solid #167fa2;box-sizing:border-box}}
+.x-ticks{{display:grid;margin-top:8px;font:10px monospace;color:#526170;overflow-wrap:anywhere}}
+.x-ticks span{{text-align:center}}.x-title{{text-align:center;font-size:12px;color:#526170}}
+.numeric-ticks{{display:flex;justify-content:space-between;gap:4px;margin-top:8px;font:10px monospace;color:#526170}}
+.sr-only{{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}}
 .methodology{{margin:24px 0;border:1px solid #b6d9e4;border-radius:12px;overflow:hidden}}
 .methodology header{{padding:20px;background:#eef8fb;border-bottom:1px solid #b6d9e4}}
 .methodology h2,.methodology h3{{margin:4px 0 12px}}.methodology p{{font-size:13px}}

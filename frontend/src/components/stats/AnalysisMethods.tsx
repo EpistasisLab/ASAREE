@@ -47,7 +47,7 @@ export function AnalysisMethods({ analysis, report, modelName }: {
       </div>
     </header>
     <div className="grid gap-3 p-3 @2xl:grid-cols-2 @lg:p-4">
-      <MethodStep number="01" title="Model selection" icon={<Activity className="size-3.5" />}>
+      <MethodStep number="01" title="Regression Model Selection" icon={<Activity className="size-3.5" />}>
         <p className="break-words text-base font-semibold">{modelName}</p>
         {report.methods[0] && <p className="text-xs leading-relaxed text-muted-foreground">{report.methods[0]}</p>}
         {!!factorNames.length && <div className="flex flex-wrap gap-1.5">{factorNames.map(name => <span key={name} className="max-w-full break-words rounded border border-border bg-muted/40 px-2 py-1 text-[10px]">{name}</span>)}</div>}

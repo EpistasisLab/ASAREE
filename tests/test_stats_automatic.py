@@ -113,8 +113,10 @@ def test_native_gaussian_effect_and_interval_match_reference(monkeypatch):
     )
     html = render_html(dict(output=result))
     assert "Observed distribution" in html
-    assert "Each dot is one replicate" in html
-    assert "Selected model distribution: Gaussian (normal)" in html
+    assert "Each dot is one replicate" not in html
+    assert "Freedman–Diaconis" in html
+    assert "Regression Model Selection" in html
+    assert "Selected regression model distribution: Gaussian (normal)" in html
     assert "Standard deviation" in html
     assert "accounting for the experimental factors" in html
 
@@ -123,7 +125,7 @@ def test_html_handles_saved_reports_without_distribution_summaries():
     summary = dict(metric="Legacy", status="valid", description="Saved report",
                    findings=[], effects=[], tests=[], methods=[], warnings=[])
     html = render_html(dict(output=dict(family="gamma", summary=summary)))
-    assert "Selected model distribution: Gamma" in html
+    assert "Selected regression model distribution: Gamma" in html
     assert "Observed distribution" not in html
 
 
@@ -157,14 +159,33 @@ def test_histogram_conserves_observations_and_keeps_extreme_values():
     assert plot["bins"][0]["lower"] == 0
     assert plot["bins"][-1]["upper"] == 500
     assert plot["bins"][-1]["count"] >= 1
-    assert plot["values"] == [float(f"{v:.6g}") for v in values]
+    assert "values" not in plot
     assert distribution_plot([]) is None
 
 
-def test_histogram_values_are_bounded_so_dot_strips_stay_legible():
+def test_histogram_uses_freedman_diaconis_width():
     plot = distribution_plot(np.arange(2000.0).tolist())
     assert "values" not in plot
     assert sum(bin["count"] for bin in plot["bins"]) == 2000
+    expected = np.histogram_bin_edges(np.arange(2000.0), bins="fd")
+    np.testing.assert_allclose([bin["lower"] for bin in plot["bins"]] + [plot["bins"][-1]["upper"]], expected)
+
+
+def test_histogram_falls_back_for_zero_iqr_and_caps_outlier_driven_bins():
+    flat = distribution_plot([0] * 100 + list(range(1, 20)))
+    assert flat["binning"] == "Sturges (zero interquartile range)"
+    assert sum(bin["count"] for bin in flat["bins"]) == 119
+    extreme = distribution_plot(list(range(100)) + [1e9])
+    assert len(extreme["bins"]) == 40
+    assert "limited to 40 bins" in extreme["binning"]
+    assert sum(bin["count"] for bin in extreme["bins"]) == 101
+    assert extreme["bins"][-1]["upper"] == 1e9
+
+
+def test_saved_dot_strip_is_rebinned_from_saved_values():
+    values = list(range(100))
+    output = dict(summary=dict(distribution=dict(plot=dict(kind="histogram", values=values, bins=[]))))
+    assert saved_distribution_plot(output) == distribution_plot(values)
 
 
 def test_frequencies_preserve_category_labels_and_counts():

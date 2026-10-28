@@ -4,8 +4,8 @@ import math
 
 import numpy as np
 
-# Beyond this many replicates a dot strip crowds, so the plot carries only bins.
-MAX_DOTS = 1024
+# Bound chart complexity when extreme outliers imply very small bin widths.
+MAX_BINS = 40
 
 
 def distribution_plot(values, category_labels=None) -> dict | None:
@@ -23,16 +23,16 @@ def distribution_plot(values, category_labels=None) -> dict | None:
             )
             bins.append(dict(label=label, count=int(count)))
         return dict(kind="frequency", bins=bins)
-    counts, edges = np.histogram(values, bins=min(12, max(5, math.ceil(math.sqrt(len(values))))))
-    plot = dict(kind="histogram", bins=[
+    # Freedman–Diaconis adapts to sample size and spread; Sturges handles zero IQR.
+    width = 2 * float(np.subtract(*np.percentile(values, [75, 25]))) / np.cbrt(len(values))
+    requested = float(values.max() - values.min()) / width if width > 0 else math.ceil(math.log2(len(values)) + 1)
+    counts, edges = np.histogram(values, bins=max(1, math.ceil(min(MAX_BINS, requested))))
+    return dict(kind="histogram", binning=(
+        "Freedman–Diaconis" if width > 0 else "Sturges (zero interquartile range)"
+    ) + ("; limited to 40 bins for readability" if requested > MAX_BINS else ""), bins=[
         dict(label=f"{low:.4g}–{high:.4g}", count=int(count), lower=float(low), upper=float(high))
         for low, high, count in zip(edges[:-1], edges[1:], counts, strict=True)
     ])
-    # Raw observations let the report draw a dot strip; bins remain the fallback
-    # for reports stored before this key existed.
-    if len(values) <= MAX_DOTS:
-        plot["values"] = [float(f"{v:.6g}") for v in values]
-    return plot
 
 
 def observed_distribution(values, category_labels=None) -> dict:
@@ -69,7 +69,7 @@ def snapshot_distribution(output: dict, source: dict, config: dict) -> dict | No
 def report_distribution(output: dict, source: dict, config: dict) -> dict | None:
     stored = (output.get("summary") or {}).get("distribution")
     if stored and stored.get("plot"):
-        return dict(stored)
+        return dict(stored, plot=saved_distribution_plot(output))
     recovered = snapshot_distribution(output, source, config)
     if recovered:
         return recovered
@@ -84,7 +84,11 @@ def saved_distribution_plot(output: dict, source: dict | None = None, config: di
     """
     distribution = (output.get("summary") or {}).get("distribution") or {}
     if distribution.get("plot"):
-        return distribution["plot"]
+        plot = distribution["plot"]
+        # Upgrade historical dot strips using saved observations, never live data.
+        if plot.get("kind") == "histogram" and plot.get("values"):
+            return distribution_plot(plot["values"])
+        return plot
     if source is not None and config is not None:
         recovered = snapshot_distribution(output, source, config)
         if recovered:

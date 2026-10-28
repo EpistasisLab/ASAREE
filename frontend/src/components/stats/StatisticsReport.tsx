@@ -25,18 +25,6 @@ function interval(low: number | null | undefined, high: number | null | undefine
   return low == null || high == null ? 'Unavailable' : `${value(low)} to ${value(high)}`
 }
 
-// One dot per replicate, placed by value; duplicates stack in three rows so
-// overlapping points stay legible without inventing a second axis.
-function dotPositions(values: number[], minimum: number, maximum: number) {
-  const range = maximum - minimum || 1
-  const seen = new Map<number, number>()
-  return values.map(dot => {
-    const rank = seen.get(dot) ?? 0
-    seen.set(dot, rank + 1)
-    return { dot, left: `${((dot - minimum) / range) * 100}%`, bottom: (rank % 3) * 10 }
-  })
-}
-
 export function StatisticsReport({ analysis, experiment }: { analysis: StatsAnalysis; experiment: string }) {
   const [error, setError] = useState('')
   const [downloading, setDownloading] = useState(false)
@@ -46,11 +34,11 @@ export function StatisticsReport({ analysis, experiment }: { analysis: StatsAnal
   const findings = describeStatsFindings(report.tests)
   const distribution = report.distribution
   const bins = distribution?.plot?.bins ?? []
-  const maximumCount = Math.max(1, ...bins.map(bin => bin.count))
+  const tickStep = Math.max(1, Math.ceil(Math.max(1, ...bins.map(bin => bin.count)) / 4))
+  const maximumCount = tickStep * 4
   const plot = distribution?.plot
-  const dots = plot && plot.kind === 'histogram' && plot.values?.length
-    ? dotPositions(plot.values, distribution?.minimum ?? 0, distribution?.maximum ?? 1)
-    : null
+  const axisMinimum = bins[0]?.lower ?? distribution?.minimum ?? 0
+  const axisMaximum = bins.at(-1)?.upper ?? distribution?.maximum ?? 1
   const family = analysis.output?.family
   const metricInfo = report.metric_info ?? {
     description: report.metric_definition?.description?.trim() || 'Description not provided.',
@@ -93,38 +81,29 @@ export function StatisticsReport({ analysis, experiment }: { analysis: StatsAnal
       </ul>}
       {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
       {report.status !== 'valid' && <p role="alert" className="rounded border border-destructive p-3 text-sm">Statistical conclusions are unavailable for this metric. The reason is listed below.</p>}
-      {family && <p className="text-sm">Selected model distribution: <span className="font-medium">{distributionNames[family] ?? family}</span></p>}
+      {family && <p className="text-sm">Selected regression model distribution: <span className="font-medium">{distributionNames[family] ?? family}</span></p>}
       {distribution && distribution.n > 0 && <section aria-label="Metric distribution" className="space-y-3">
         <h3 className="text-sm font-medium">Observed distribution</h3>
-        {dots ? <figure aria-label={`${report.metric} observed distribution`} className="space-y-2 rounded-md border border-border bg-muted/20 p-3">
-          <figcaption className="text-xs text-muted-foreground">Each dot is one replicate</figcaption>
-          <div className="relative h-10">
-            {dots.map(({ dot, left, bottom }, i) => <span key={i} title={value(dot)} aria-hidden="true"
-              className="absolute size-2 -translate-x-1/2 rounded-full bg-primary shadow-[0_0_6px_var(--primary)]"
-              style={{ left, bottom: `${bottom}px` }} />)}
-            <span aria-hidden="true" className="absolute inset-x-0 bottom-0 border-b border-border" />
-          </div>
-          <div className="flex justify-between font-mono text-[10px] text-muted-foreground">
-            <span>{value(distribution.minimum)}</span>
-            <span>{value(distribution.maximum)}</span>
-          </div>
-          <p className="text-center text-xs text-muted-foreground">Metric value{metricInfo.unit ? ` (${metricInfo.unit})` : ''}</p>
-        </figure> : bins.some(bin => bin.count > 0) ? <figure aria-label={`${report.metric} observed distribution histogram`} className="space-y-2 rounded-md border border-border bg-muted/20 p-3">
-          <figcaption className="text-xs text-muted-foreground">Histogram</figcaption>
+        {bins.some(bin => bin.count > 0) ? <figure aria-label={`${report.metric} observed distribution histogram`} className="space-y-3 rounded-lg border border-border bg-muted/20 p-4">
+          <figcaption className="text-xs text-muted-foreground">{plot?.kind === 'frequency' ? 'Observed frequencies' : 'Histogram'}{plot?.binning ? ` · ${plot.binning}` : ''}</figcaption>
           <div className="flex gap-2">
-            <span className="flex h-32 select-none items-center text-xs text-muted-foreground [writing-mode:vertical-rl] rotate-180">Replicates</span>
-            <div className="min-w-0 flex-1 space-y-1.5">
-              <ol className="flex gap-0.5">
-                {bins.map((bin, i) => <li key={i} className="flex min-w-0 flex-1 flex-col" title={bin.label}>
-                  <span className="flex h-32 w-full items-end border-b border-border">
-                    {bin.count > 0 && <span aria-hidden="true" className="w-full rounded-t-sm bg-primary shadow-[0_0_8px_var(--primary)]" style={{ height: `${bin.count / maximumCount * 100}%` }} />}
-                  </span>
-                  <span className="pt-1 text-center font-mono text-[10px] leading-tight text-muted-foreground">
-                    <span className="block break-words">{bin.label}</span>
-                    <span className="block">{bin.count}</span>
-                  </span>
+            <span className="flex h-40 select-none items-center text-xs text-muted-foreground [writing-mode:vertical-rl] rotate-180">Replicates</span>
+            <div aria-hidden="true" className="flex h-40 flex-col justify-between text-right font-mono text-[10px] text-muted-foreground">
+              {[4, 3, 2, 1, 0].map(tick => <span key={tick}>{value(tick * tickStep)}</span>)}
+            </div>
+            <div className="min-w-0 flex-1 space-y-2">
+              <ol className={`flex border-b border-border ${plot?.kind === 'frequency' ? 'gap-2' : 'gap-px'}`}>
+                {bins.map((bin, i) => <li key={i} className="relative flex h-40 min-w-0 flex-1 items-end" title={`${bin.label}: ${bin.count} replicates`}>
+                  <span className="sr-only">{bin.label}: {bin.count} replicates</span>
+                  <span aria-hidden="true" className="pointer-events-none absolute inset-0 border-t border-border/50 bg-[repeating-linear-gradient(to_top,transparent_0,transparent_calc(25%-1px),var(--border)_25%)] opacity-40" />
+                  {bin.count > 0 && <span aria-hidden="true" className="relative w-full border border-primary/70 bg-primary/60" style={{ height: `${bin.count / maximumCount * 100}%` }} />}
                 </li>)}
               </ol>
+              {plot?.kind === 'frequency' ? <div aria-hidden="true" className="grid gap-2 font-mono text-[10px] text-muted-foreground" style={{ gridTemplateColumns: `repeat(${bins.length}, minmax(0, 1fr))` }}>
+                {bins.map((bin, i) => <span key={i} className="min-w-0 break-words text-center">{bin.label}</span>)}
+              </div> : <div aria-hidden="true" className="flex justify-between gap-1 font-mono text-[10px] text-muted-foreground">
+                {[0, 1, 2, 3, 4].map(tick => <span key={tick}>{value(axisMinimum + (axisMaximum - axisMinimum) * tick / 4)}</span>)}
+              </div>}
               <p className="text-center text-xs text-muted-foreground">Metric value{metricInfo.unit ? ` (${metricInfo.unit})` : ''}</p>
             </div>
           </div>

@@ -160,13 +160,11 @@ it('surfaces the selected distribution and saved observed summaries', async () =
   }
   expect(section.getByText(/accounting for the experimental factors/)).toBeVisible()
   const chart = within(section.getByRole('figure', { name: 'Duration observed distribution histogram' }))
-  expect(chart.getByText('1–5')).toBeVisible()
-  expect(chart.getByText('60')).toBeVisible()
-  expect(chart.getByText('5–9')).toBeVisible()
-  expect(chart.getByText('40')).toBeVisible()
+  expect(chart.getByTitle('1–5: 60 replicates')).toBeVisible()
+  expect(chart.getByTitle('5–9: 40 replicates')).toBeVisible()
 })
 
-it('draws one dot per replicate when the saved plot keeps raw values', async () => {
+it('renders histogram bars even when a saved plot keeps raw values', async () => {
   const plotted: StatsAnalysis = { ...saved, output: { ...saved.output!, summary: { ...saved.output!.summary!,
     distribution: { ...saved.output!.summary!.distribution!,
       plot: { kind: 'histogram',
@@ -176,13 +174,11 @@ it('draws one dot per replicate when the saved plot keeps raw values', async () 
   vi.spyOn(statsApi, 'get').mockResolvedValue(plotted)
   mount()
   fireEvent.click(await screen.findByRole('button', { name: /Duration/ }))
-  const chart = within(await screen.findByRole('figure', { name: 'Duration observed distribution' }))
-  expect(chart.getByText('Each dot is one replicate')).toBeInTheDocument()
-  expect(chart.getAllByTitle('2')).toHaveLength(2)
-  expect(chart.getByTitle('9')).toBeInTheDocument()
-  expect(chart.getByText('1')).toBeInTheDocument()
+  const chart = within(await screen.findByRole('figure', { name: 'Duration observed distribution histogram' }))
+  expect(chart.queryByText('Each dot is one replicate')).not.toBeInTheDocument()
+  expect(chart.getByTitle('1–5: 3 replicates')).toBeVisible()
+  expect(chart.getByTitle('5–9: 2 replicates')).toBeVisible()
   expect(chart.getByText('Metric value (seconds)')).toBeInTheDocument()
-  expect(chart.queryByText('1–5')).not.toBeInTheDocument()
 })
 
 it('hides the distribution section when no saved observations or summaries exist', async () => {
@@ -214,7 +210,7 @@ it('organizes methods into an overview with optional full technical details', as
   mount()
   fireEvent.click(await screen.findByRole('button', { name: /Duration/ }))
   const overview = within(await screen.findByRole('region', { name: 'What ran and why' }))
-  for (const title of ['Model selection', 'Tests and comparisons', 'Uncertainty checks', 'How to interpret it']) {
+  for (const title of ['Regression Model Selection', 'Tests and comparisons', 'Uncertainty checks', 'How to interpret it']) {
     expect(overview.getByRole('heading', { name: title })).toBeVisible()
   }
   const disclosure = overview.getByText('Full technical details').closest('details')!

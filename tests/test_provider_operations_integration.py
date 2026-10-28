@@ -15,7 +15,8 @@ import pytest
 from fastapi import FastAPI
 from motoro.schemas.agent import ModelConfig
 from motoro.services import providers
-from motoro.services.provider_types import ProviderConfig
+from motoro.services.llm_service import _sampling_kwargs
+from motoro.services.provider_types import ModelListing, ProviderConfig
 
 from asaree.api import llm_settings as api
 from asaree.deps import get_current_user
@@ -26,7 +27,7 @@ from asaree.services.llm_connection_check import check_connection
 from asaree.services.llm_model_discovery import discover_models
 from asaree.services.user_llm_settings import encrypt
 
-REVISION = "542ff11b5e081bac7d3f3a4ccabb421098f47586"
+REVISION = "8420016bb9ed5e76f79d2df5abaccb0887319d55"
 PROVIDERS = ["anthropic", "openai", "azure_foundry", "openrouter", "local"]
 OWNER = uuid.UUID("11111111-1111-1111-1111-111111111111")
 SECRET = "provider-secret-for-tests"
@@ -140,6 +141,69 @@ async def test_defaults_and_provenance_survive_cache_and_execution(monkeypatch):
     )
     assert config.temperature == 0.7
     assert config.resolved_capabilities.default_temperature == 0
+
+
+@pytest.mark.parametrize("provider", ["openrouter", "anthropic"])
+@pytest.mark.parametrize("preference", [None, 0.7])
+async def test_defaults_without_support_survive_application_cache_without_changing_sampling(
+    monkeypatch, provider, preference
+):
+    model = "defaults-only/model"
+    entry = (
+        {"id": model, "default_parameters": {"temperature": 0}}
+        if provider == "openrouter"
+        else {"id": model, "capabilities": {"temperature": {"default": 0}}}
+    )
+    transport = httpx.MockTransport(lambda request: httpx.Response(200, json={"data": [entry]}))
+    client = httpx.AsyncClient
+    monkeypatch.setattr(providers.httpx, "AsyncClient", lambda **kw: client(**{**kw, "transport": transport}))
+    saved = setting(provider)
+    models, source, note = await discover_models(provider=provider, setting=saved)
+    assert source == "api"
+    live = ModelListing(models=models, source=source, note=note)
+    encoded = llm_model_cache._dump(models, source, note, now=100)
+    cached_models, cached_source, cached_note, _ = llm_model_cache._load(encoded)
+    cached = ModelListing(models=cached_models, source=cached_source, note=cached_note)
+    assert cached == live
+
+    for listing in (live, cached):
+        metadata = providers.get_model_metadata(model=model, listing=listing)
+        defaults = providers.get_model_defaults(model=model, listing=listing)
+        for info in (listing.models[0], metadata):
+            assert info.defaults.temperature.known is True
+            assert info.defaults.temperature.value == 0
+            assert info.defaults.temperature.source == "provider"
+            assert info.capabilities.supports_temperature is None
+            assert info.capabilities.default_temperature is None
+            assert info.capability_sources["supports_temperature"] == "unknown"
+        assert defaults == metadata.defaults
+        assert defaults.temperature.known is True
+        assert defaults.temperature.value == 0
+        assert defaults.temperature.source == "provider"
+
+    monkeypatch.setattr(model_config, "get_setting", AsyncMock(return_value=saved))
+    monkeypatch.setattr(
+        model_config, "discover_models_cached", AsyncMock(return_value=(cached_models, cached_source, cached_note))
+    )
+    metadata = await model_config.resolve_model_metadata(provider=provider, model=model, db=None, owner_id=OWNER)
+    assert metadata == live.models[0]
+
+    @asynccontextmanager
+    async def session():
+        yield None
+
+    monkeypatch.setattr(model_config, "get_session", session)
+    data = {"provider": provider, "model": model}
+    if preference is not None:
+        data["temperature"] = preference
+    original = ModelConfig(**data)
+    expected_sampling = _sampling_kwargs(original, f"{provider}/{model}")
+    resolved = await model_config.build_model_config(data, owner_id=OWNER)
+    assert resolved.temperature == original.temperature
+    assert resolved.effort == original.effort
+    assert resolved.resolved_capabilities == metadata.capabilities
+    assert _sampling_kwargs(resolved, f"{provider}/{model}") == expected_sampling == {}
+    assert providers.get_model_defaults(model=model, listing=cached) == metadata.defaults
 
 
 @pytest.mark.parametrize("provider", PROVIDERS)

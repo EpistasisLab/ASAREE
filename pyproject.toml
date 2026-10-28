@@ -92,7 +92,7 @@ dev = [
 ]
 
 [tool.uv.sources]
-motoro = { git = "https://github.com/EpistasisLab/motoro.git", rev = "542ff11b5e081bac7d3f3a4ccabb421098f47586" }
+motoro = { git = "https://github.com/EpistasisLab/motoro.git", rev = "8420016bb9ed5e76f79d2df5abaccb0887319d55" }
 asaree-workspace-core = { path = "workspace-core", editable = true }
 # Every mcp-servers/ package is declared here, including asaree-sklearn-core
 # (which the six servers each depend on): uv resolves `tool.uv.sources` from

@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Cloud, LoaderCircle, X } from 'lucide-react'
-import { llmSettingsApi } from '@/api/client'
+import { ApiError, llmSettingsApi } from '@/api/client'
 import { ConnectionStatusBadge, useConnectionCheck } from '@/components/LlmConnectionCheck'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
@@ -242,7 +242,13 @@ export function CreateCredentialDialog({
               </div>
             )}
 
-            {saveMutation.isError && <p className="text-sm text-destructive">Could not save this credential. Please try again.</p>}
+            {saveMutation.isError && (
+              <p role="alert" className="text-sm text-destructive">
+                {saveMutation.error instanceof ApiError && saveMutation.error.status === 422 && saveMutation.error.message
+                  ? saveMutation.error.message
+                  : "Could not save this credential. Please try again."}
+              </p>
+            )}
 
             {saveMutation.isSuccess && (
               <div className="space-y-1.5 rounded-lg border bg-muted/30 px-3 py-2.5">

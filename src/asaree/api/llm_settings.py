@@ -20,6 +20,7 @@ from asaree.services.llm_connection_check import check_connection
 from asaree.services.llm_model_cache import discover_models_cached, invalidate_models_cache, store_models_cache
 from asaree.services.llm_model_discovery import ModelInfo
 from asaree.services.model_config import resolve_model_capabilities
+from asaree.services.provider_config import ProviderConfigurationError
 from asaree.services.rate_limit import check_rate_limit, record_attempt
 from asaree.services.tool_calling import model_tool_calling_support
 from asaree.services.user_llm_settings import delete_setting, get_setting, list_settings, upsert_setting
@@ -115,14 +116,17 @@ async def upsert_llm_setting_endpoint(
 ) -> LLMSettingResponse:
     if body.provider not in SUPPORTED_PROVIDERS:
         raise HTTPException(status_code=422, detail=f"provider must be one of {sorted(SUPPORTED_PROVIDERS)}")
-    setting = await upsert_setting(
-        db,
-        user_id=user.id,
-        provider=body.provider,
-        api_key=body.api_key,
-        api_base=body.api_base,
-        azure_project_endpoint=body.azure_project_endpoint,
-    )
+    try:
+        setting = await upsert_setting(
+            db,
+            user_id=user.id,
+            provider=body.provider,
+            api_key=body.api_key,
+            api_base=body.api_base,
+            azure_project_endpoint=body.azure_project_endpoint,
+        )
+    except ProviderConfigurationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from None
     # A new key can reach a different set of models than the old one, and a
     # changed Azure project endpoint points at an entirely different set of
     # deployments -- either way the cached list is now about a credential
@@ -182,7 +186,10 @@ async def check_connection_endpoint(provider: str, user: CurrentUser, db: DbSess
     if setting is None:
         raise HTTPException(status_code=404, detail="No credential saved for this provider.")
 
-    result = await check_connection(provider=provider, setting=setting)
+    try:
+        result = await check_connection(provider=provider, setting=setting)
+    except ProviderConfigurationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from None
     if provider == "azure_foundry" and result.status == "ok" and result.models is not None:
         await store_models_cache(user_id=user.id, provider=provider, models=result.models)
     return LLMConnectionCheckResponse(
@@ -214,7 +221,10 @@ async def list_models_endpoint(provider: str, user: CurrentUser, db: DbSession) 
     await record_attempt(key, window_seconds=_DISCOVERY_WINDOW_SECONDS)
 
     setting = await get_setting(db, user_id=user.id, provider=provider)
-    models, source, note = await discover_models_cached(user_id=user.id, provider=provider, setting=setting)
+    try:
+        models, source, note = await discover_models_cached(user_id=user.id, provider=provider, setting=setting)
+    except ProviderConfigurationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from None
     return LLMSettingModelsResponse(
         models=[_model_response(model, provider) for model in models],
         source=source,
@@ -230,4 +240,7 @@ async def model_capabilities_endpoint(
         raise HTTPException(status_code=422, detail=f"provider must be one of {sorted(SUPPORTED_PROVIDERS)}")
     if not model.strip():
         raise HTTPException(status_code=422, detail="model must not be blank")
-    return await resolve_model_capabilities(provider=provider, model=model, db=db, owner_id=user.id)
+    try:
+        return await resolve_model_capabilities(provider=provider, model=model, db=db, owner_id=user.id)
+    except ProviderConfigurationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from None

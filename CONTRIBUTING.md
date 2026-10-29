@@ -1,6 +1,6 @@
 # Development and releases
 
-`develop` is the default and integration branch. `main` holds released code.
+`main` is the default branch and holds released code. `develop` is the integration branch.
 Use tagged releases for reproducible installations and production deployments.
 
 | Work | Branch from | PR target | Merge method |
@@ -19,6 +19,11 @@ Create a feature branch from current `origin/develop`, keep changes on that
 branch, and open a draft PR targeting `develop`. Complete focused local checks,
 then wait for GitHub CI, resolve review conversations, mark the PR ready, and
 squash-merge. Verify CI on the resulting `develop` commit as well as the PR.
+
+GitHub defaults new PRs to `main`; explicitly select `develop` for feature/fix
+PRs. With gh, use `gh pr create --base develop --draft`. The required backend CI
+check rejects `feat/*` and `fix/*` PRs targeting `main`; release PRs from `develop`
+and hotfix PRs can target `main`.
 
 Both long-lived branches require PRs, resolved review conversations, and these
 GitHub Actions checks on an up-to-date branch:

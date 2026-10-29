@@ -51,6 +51,19 @@ jobs:
       ASAREE_MIGRATIONS_TEST_DATABASE_URL: postgresql+asyncpg://agentic:agentic@localhost:5432/motoro
 
     steps:
+      - name: Check pull request target
+        if: github.event_name == 'pull_request'
+        env:
+          PR_BASE: ${{ github.base_ref }}
+          PR_HEAD: ${{ github.head_ref }}
+        run: |
+          case "$PR_BASE:$PR_HEAD" in
+            main:feat/*|main:fix/*)
+              echo "::error::Feature and fix PRs must target develop. Change this PR's base branch to develop."
+              exit 1
+              ;;
+          esac
+
       - uses: actions/checkout@v6
 
       # No setup-python step on purpose: `requires-python = ">=3.12"` plus uv's

@@ -1,7 +1,6 @@
 """Translate saved application credentials without provider routing or I/O."""
 
 from typing import Literal, cast
-from urllib.parse import urlsplit
 
 from motoro.services.provider_types import ProviderConfig
 
@@ -23,18 +22,12 @@ def make_provider_config(
     *, provider: str, api_key: str | None, api_base: str | None = None, azure_project_endpoint: str | None = None
 ) -> ProviderConfig:
     try:
-        config = ProviderConfig(
+        return ProviderConfig(
             provider=cast(Literal["anthropic", "openai", "azure_foundry", "openrouter", "local"], provider),
             api_key=api_key,
             api_base=normalize_optional_endpoint(api_base),
             azure_project_endpoint=normalize_optional_endpoint(azure_project_endpoint),
         )
-        # urllib's port validation is lazy. Reject malformed ports before a
-        # provider HTTP client attempts to construct a request from the URL.
-        for endpoint in (config.api_base, config.azure_project_endpoint):
-            if endpoint:
-                _ = urlsplit(endpoint).port
-        return config
     except ValueError:
         raise ProviderConfigurationError(
             "Invalid provider configuration. Check the saved endpoints; credentials must be supplied separately."

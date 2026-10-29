@@ -11,8 +11,8 @@ readme = "README.md"
 requires-python = ">=3.12"
 
 dependencies = [
-    # Pinned to the tested provider-operations handoff commit for issue #63.
-    # Never float to main; return to a release tag once this revision is released.
+    # Integration pin to Motoro develop after provider operations merged (#15).
+    # Replace with the tested Motoro release tag before ASAREE's production release.
     "motoro",
     # The on-disk versioned dataset workspace (see [tool.uv.sources] below) —
     # its own package rather than a module of `asaree`, because the domain MCP
@@ -92,7 +92,7 @@ dev = [
 ]
 
 [tool.uv.sources]
-motoro = { git = "https://github.com/EpistasisLab/motoro.git", rev = "8420016bb9ed5e76f79d2df5abaccb0887319d55" }
+motoro = { git = "https://github.com/EpistasisLab/motoro.git", rev = "227311f683e6be629ac4e7b2cc93a1ed1323d084" }
 asaree-workspace-core = { path = "workspace-core", editable = true }
 # Every mcp-servers/ package is declared here, including asaree-sklearn-core
 # (which the six servers each depend on): uv resolves `tool.uv.sources` from

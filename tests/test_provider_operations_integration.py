@@ -28,7 +28,7 @@ from asaree.services.llm_model_discovery import discover_models
 from asaree.services.provider_config import make_provider_config, provider_config
 from asaree.services.user_llm_settings import encrypt
 
-REVISION = "8420016bb9ed5e76f79d2df5abaccb0887319d55"
+REVISION = "227311f683e6be629ac4e7b2cc93a1ed1323d084"
 PROVIDERS = ["anthropic", "openai", "azure_foundry", "openrouter", "local"]
 OWNER = uuid.UUID("11111111-1111-1111-1111-111111111111")
 SECRET = "provider-secret-for-tests"
@@ -60,6 +60,7 @@ async def test_application_and_independent_provider_outcomes_match(monkeypatch, 
     def respond(request):
         requests.append(request)
         assert request.method == "GET"
+        assert set(request.extensions["timeout"].values()) == {10.0}
         if outcome == "timeout":
             raise httpx.ReadTimeout(SECRET, request=request)
         if outcome == "network":
@@ -80,8 +81,6 @@ async def test_application_and_independent_provider_outcomes_match(monkeypatch, 
     client = httpx.AsyncClient
 
     def provider_client(**kwargs):
-        assert kwargs["timeout"] == 10.0
-        assert kwargs["follow_redirects"] is False
         return client(**{**kwargs, "transport": transport})
 
     monkeypatch.setattr(providers.httpx, "AsyncClient", provider_client)

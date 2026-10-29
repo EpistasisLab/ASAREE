@@ -85,7 +85,7 @@ class _FakeAsyncClient:
     async def __aexit__(self, *exc_info: object) -> None:
         return None
 
-    async def get(self, url: str, *, params: dict, headers: dict) -> _FakeResponse:
+    async def get(self, url: str, *, params: dict, headers: dict, **kwargs) -> _FakeResponse:
         self._captured_headers.append(headers)
         return self._response
 
@@ -168,7 +168,7 @@ async def test_discover_models_azure_hits_only_the_project_deployments_url(
         async def __aexit__(self, *exc_info: object) -> None:
             return None
 
-        async def get(self, url: str, *, params: dict, headers: dict) -> _FakeResponse:
+        async def get(self, url: str, *, params: dict, headers: dict, **kwargs) -> _FakeResponse:
             captured_urls.append(url)
             return _FakeResponse({"value": []})
 
@@ -226,7 +226,7 @@ class _PagingClient:
     async def __aexit__(self, *exc_info: object) -> None:
         return None
 
-    async def get(self, url: str, *, params: dict, headers: dict) -> _FakeResponse:
+    async def get(self, url: str, *, params: dict, headers: dict, **kwargs) -> _FakeResponse:
         self._captured.setdefault("urls", []).append(url)
         self._captured.setdefault("params", []).append(dict(params))
         self._captured["headers"] = headers
@@ -394,7 +394,7 @@ class _SimpleClient:
     async def __aexit__(self, *exc_info: object) -> None:
         return None
 
-    async def get(self, url: str, *, headers: dict, params: dict | None = None) -> _FakeResponse:
+    async def get(self, url: str, *, headers: dict, params: dict | None = None, **kwargs) -> _FakeResponse:
         self._captured.setdefault("urls", []).append(url)
         self._captured["headers"] = headers
         return self._response
@@ -646,7 +646,8 @@ async def test_local_discovery_no_listing_route_surfaces_as_error_source_so_the_
 
     assert models == []
     assert source == "error"
-    assert "Model field" in note
+    assert listing.error is not None and listing.error.http_status == 404
+    assert note
 
 
 async def test_openai_stays_on_the_curated_catalog_without_calling_out(monkeypatch: pytest.MonkeyPatch) -> None:

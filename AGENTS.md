@@ -67,6 +67,8 @@ Follow [CONTRIBUTING.md](CONTRIBUTING.md): feature/fix branches start from and
 target `develop`; release and hotfix promotion into `main` is deliberate.
 Use merge commits for release/synchronization PRs. Replace temporary Motoro
 integration pins with tested release tags before ASAREE production releases.
+Require explicit user authorization before merging into `main` (including
+hotfixes), creating release tags, publishing artifacts, or deploying production.
 
 # Cost-conscious execution
 

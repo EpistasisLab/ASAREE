@@ -10,6 +10,11 @@ Use tagged releases for reproducible installations and production deployments.
 | Urgent released-code fix (`hotfix/*`) | `main` | `main` | Merge commit |
 | Synchronize a release or hotfix | `main` | `develop` | Merge commit |
 
+Merging into `main` (including hotfixes), creating release tags, publishing
+artifacts, and deploying production require explicit maintainer authorization.
+Successful CI or completion of integration work alone does not authorize these
+release operations.
+
 Create a feature branch from current `origin/develop`, keep changes on that
 branch, and open a draft PR targeting `develop`. Complete focused local checks,
 then wait for GitHub CI, resolve review conversations, mark the PR ready, and

@@ -15,7 +15,7 @@ from asaree.services.stats_distribution import distribution_plot, saved_distribu
 from asaree.services.stats_findings import describe_findings
 from asaree.services.stats_html import render_html
 from asaree.services.stats_prototypes import StatsRequest, catalog, compute, metric_definitions, prepare_frame
-from asaree.stats_sm.analysis import analyze as native_analyze
+from asaree.stats.analysis import analyze as native_analyze
 
 
 def source_for(values, name="measurement", metadata=None):

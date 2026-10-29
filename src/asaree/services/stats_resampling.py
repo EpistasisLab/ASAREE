@@ -43,7 +43,7 @@ def native_permutations(frame, config):
         scale = "response"
     interactions = {":".join(term) for term in builder.spec.terms if len(term) > 1}
     # Interactions are resampled with the fitted model's own statistic in
-    # asaree.stats_sm.resampling.interaction_null_tests; only main effects run here.
+    # asaree.stats.resampling.interaction_null_tests; only main effects run here.
     skipped = dict.fromkeys(interactions, "")
     design = builder.build(frame)
     residual = values - design @ np.linalg.lstsq(design, values, rcond=None)[0]

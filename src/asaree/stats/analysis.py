@@ -1,7 +1,8 @@
 """Fit established models; only descriptive summaries are assembled here.
 
-No imports from asaree.stats: numerical fitting and inference belong to
-statsmodels/scikit-learn, and design coding belongs to patsy.
+Numerical fitting and inference belong to statsmodels/scikit-learn, and
+design coding belongs to patsy. The custom likelihood engine in this package
+is used only where no published package covers the model.
 """
 
 from __future__ import annotations
@@ -21,7 +22,7 @@ from statsmodels.miscmodels.ordinal_model import OrderedModel
 from statsmodels.othermod.betareg import BetaModel
 from statsmodels.stats.multitest import multipletests
 
-from asaree.stats_sm.covariance import (
+from asaree.stats.covariance import (
     CovarianceUnavailableError,
     install_covariance,
     robust_covariance,
@@ -595,7 +596,7 @@ def analyze(frame: pd.DataFrame, config: dict) -> dict:
         )
     tables["contrasts"] = con
     if config.get("_resample") and result is not None and usable:
-        from asaree.stats_sm.resampling import bootstrap_intervals, interaction_null_tests
+        from asaree.stats.resampling import bootstrap_intervals, interaction_null_tests
 
         if inferable:
             boot, metadata = bootstrap_intervals(frame, x, y, grid, comparison_weights, family, config, ratio, trials)

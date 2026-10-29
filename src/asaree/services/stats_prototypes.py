@@ -364,7 +364,7 @@ def compute(backend: str, source: dict, config: dict) -> dict:
         return output
     frame = prepare_frame(source, config)
     if backend == "stats_sm":
-        from asaree.stats_sm import analyze
+        from asaree.stats.analysis import analyze
 
         output = analyze(frame, config)
     else:

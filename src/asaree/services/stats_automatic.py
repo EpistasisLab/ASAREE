@@ -15,7 +15,7 @@ import re
 import numpy as np
 from statsmodels.stats.multitest import multipletests
 
-from asaree.stats_sm.analysis import analyze
+from asaree.stats.analysis import analyze
 
 REPORT_VERSION = 3
 ORDERED_LABELS = (

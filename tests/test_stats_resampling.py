@@ -7,7 +7,7 @@ import statsmodels.api as sm
 
 from asaree.services.stats_prototypes import StatsRequest, compute
 from asaree.services.stats_resampling import native_permutations
-from asaree.stats_sm.resampling import bootstrap_intervals
+from asaree.stats.resampling import bootstrap_intervals
 
 
 def bootstrap_input():
@@ -48,7 +48,7 @@ def test_incomplete_bootstrap_has_counts_and_no_intervals(monkeypatch, failure):
         def fail(*args, **kwargs):
             raise ValueError("Deliberate refit failure")
 
-        monkeypatch.setattr("asaree.stats_sm.analysis.fit_model", fail)
+        monkeypatch.setattr("asaree.stats.analysis.fit_model", fail)
     bounds, metadata = bootstrap_intervals(frame, x, y, grid, weights, "gaussian", config, False)
     assert bounds.isna().all().all()
     assert metadata["status"] != "completed"
@@ -83,7 +83,7 @@ def test_unequal_trial_totals_explain_why_permutation_is_withheld():
 
 
 def test_automatic_report_preserves_analytic_inference_when_bootstrap_cannot_finish(monkeypatch):
-    from asaree.stats_sm import resampling
+    from asaree.stats import resampling
 
     actual = resampling.bootstrap_intervals
 

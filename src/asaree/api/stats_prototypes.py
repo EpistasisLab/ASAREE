@@ -49,7 +49,7 @@ async def replace_automatic_reports(
 @router.get("/capabilities")
 async def capabilities(user: CurrentUser, backend: Backend) -> dict:
     if backend == "stats_sm":
-        from asaree.stats_sm.analysis import FAMILIES, UNAVAILABLE
+        from asaree.stats.analysis import FAMILIES, UNAVAILABLE
 
         return dict(
             families=["auto", *FAMILIES],
@@ -217,7 +217,7 @@ async def create(
             raise HTTPException(422, str(exc)) from exc
     config = body.model_dump(mode="json", exclude={"source_analysis_id"})
     if backend == "stats_sm":
-        from asaree.stats_sm.analysis import FAMILIES as MAPPED_FAMILIES
+        from asaree.stats.analysis import FAMILIES as MAPPED_FAMILIES
 
         families = (*MAPPED_FAMILIES, "auto")
     else:

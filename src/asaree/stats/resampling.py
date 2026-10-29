@@ -11,7 +11,7 @@ from scipy import stats
 
 
 def bootstrap_intervals(frame, x, y, grid, weights, family, config, ratio, trials=None):
-    from asaree.stats_sm.analysis import converged_fit, fit_model, predict_model
+    from asaree.stats.analysis import converged_fit, fit_model, predict_model
 
     requested = config["n_boot"]
     rng = np.random.default_rng(np.random.SeedSequence([config["seed"], 1101]))
@@ -154,8 +154,8 @@ def interaction_null_tests(frame, x, y, design, family, config, trials, result, 
     Each draw refits the selected family and recomputes its HC3 Wald statistic,
     so the resampled statistic is the analytic one, not a working-scale OLS F.
     """
-    from asaree.stats_sm.analysis import converged_fit, fit_model, wald_for_term
-    from asaree.stats_sm.covariance import CovarianceUnavailableError, robust_covariance
+    from asaree.stats.analysis import converged_fit, fit_model, wald_for_term
+    from asaree.stats.covariance import CovarianceUnavailableError, robust_covariance
 
     rows = []
     requested = config["n_perm"]

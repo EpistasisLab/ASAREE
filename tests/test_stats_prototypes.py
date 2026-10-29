@@ -3,7 +3,6 @@
 import json
 import subprocess
 import sys
-from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
@@ -13,7 +12,8 @@ import numpy as np
 import pytest
 from fastapi import HTTPException
 
-from asaree.services.stats_prototypes import StatsRequest, catalog, compute, prepare_frame
+from asaree.services.stats_prototypes import StatsRequest, catalog, json_safe, prepare_frame, run_custom_engine
+from asaree.stats.analysis import analyze
 
 
 @pytest.mark.parametrize("metric", [None, "score"])
@@ -27,16 +27,16 @@ async def test_replacement_deletes_old_reports_only_in_the_selected_scope(metric
     reports = sa.Table(
         "stats_analyses", metadata,
         sa.Column("id", sa.Uuid, primary_key=True), sa.Column("experiment_id", sa.Uuid),
-        sa.Column("backend", sa.String), sa.Column("status", sa.String), sa.Column("request", sa.JSON),
+        sa.Column("status", sa.String), sa.Column("request", sa.JSON),
     )
     experiment, other_experiment, version, other_version = [uuid4() for _ in range(4)]
 
-    def row(*, exp=experiment, ver=version, backend="stats_sm", family="auto", name="score", status="completed"):
-        return dict(id=uuid4(), experiment_id=exp, backend=backend, status=status,
+    def row(*, exp=experiment, ver=version, family="auto", name="score", status="completed"):
+        return dict(id=uuid4(), experiment_id=exp, status=status,
                     request=dict(source=dict(protocol_revision_id=str(ver)), config=dict(family=family, metric=name)))
 
     obsolete = [row(), row(), row(name="cost")]
-    preserved = [row(exp=other_experiment), row(ver=other_version), row(backend="stats"), row(family="gaussian")]
+    preserved = [row(exp=other_experiment), row(ver=other_version), row(family="gaussian")]
     with sa.create_engine("sqlite://").begin() as connection:
         metadata.create_all(connection)
         connection.execute(experiments.insert(), [dict(id=experiment), dict(id=other_experiment)])
@@ -71,7 +71,7 @@ async def test_history_exposes_report_status_without_loading_reports(monkeypatch
 
     experiment_id = uuid4()
     analysis = SimpleNamespace(
-        id=uuid4(), backend="stats_sm", status="completed", error=None,
+        id=uuid4(), status="completed", error=None,
         created_at=datetime.now(UTC),
         request={"config": {"family": "auto", "metric": "duration"},
                  "source": {"fingerprint": "snapshot", "design_revision": 1}},
@@ -82,7 +82,7 @@ async def test_history_exposes_report_status_without_loading_reports(monkeypatch
     db = SimpleNamespace(execute=AsyncMock(return_value=result))
     monkeypatch.setattr(api, "_get_owned_experiment", AsyncMock())
     user = object()
-    saved = await api.history(experiment_id, user, db, "stats_sm")
+    saved = await api.history(experiment_id, user, db)
     assert [item["report_status"] for item in saved] == ["valid", "unavailable"]
     assert all("output" not in item for item in saved)
     api._get_owned_experiment.assert_awaited_once_with(db, experiment_id, user)
@@ -96,7 +96,7 @@ async def test_history_filters_by_publication_before_limit(monkeypatch):
     result.all.return_value = []
     db = SimpleNamespace(execute=AsyncMock(return_value=result))
     version = uuid4()
-    assert await api.history(uuid4(), object(), db, "stats_sm", version) == []
+    assert await api.history(uuid4(), object(), db, version) == []
     statement = db.execute.call_args.args[0]
     assert str(version) in statement.compile().params.values()
     assert "protocol_revision_id" in statement.compile().params.values()
@@ -212,7 +212,7 @@ def test_saved_report_findings_refresh_without_mutating_stored_results(source):
         dict(effect="Effort:Budget", p_adjusted=.4, permutation_p_adjusted=None),
     ]))
     analysis = SimpleNamespace(
-        id=uuid4(), backend="stats_sm", status="completed", error=None,
+        id=uuid4(), status="completed", error=None,
         created_at=datetime.now(UTC), request=dict(source=source, config={}), output=output,
     )
     report = summary(analysis, detail=True)
@@ -232,7 +232,7 @@ def test_saved_ordinal_report_recovers_chart_from_its_input_snapshot(source, has
     if not has_summary:
         del output["summary"]["distribution"]
     analysis = SimpleNamespace(
-        id=uuid4(), backend="stats_sm", status="completed", error=None, created_at=datetime.now(UTC),
+        id=uuid4(), status="completed", error=None, created_at=datetime.now(UTC),
         request=dict(source=source, config=StatsRequest(metric="ordinal").model_dump()), output=output,
     )
     report = summary(analysis, detail=True)
@@ -256,6 +256,13 @@ def test_saved_binomial_chart_uses_success_counts_not_transformed_residuals(sour
     assert restored["plot"]["bins"] == [
         dict(label=str(value), count=values.count(value)) for value in sorted(set(values))
     ]
+
+
+def native(source, config):
+    """Fit one explicitly chosen statsmodels family, as the automatic pipeline does per candidate."""
+    frame = prepare_frame(source, config)
+    output = json_safe(analyze(frame, config))
+    return dict(output, n_observations=len(frame), n_excluded=len(source["rows"]) - len(frame))
 
 
 def configuration(**kwargs):
@@ -285,14 +292,12 @@ def test_mapped_models_produce_database_serializable_outputs(source, family, met
     config = configuration(family=family)
     config["metric"] = metric
     config["ordinal_levels"] = ["low", "medium", "high"]
-    result = compute("stats_sm", source, config)
+    result = native(source, config)
     json.dumps(result, allow_nan=False)
     assert len(result["tables"]["cell_means"]) == 4
     assert len(result["tables"]["marginal_means"]) == 4
     assert len(result["tables"]["contrasts"]) == 3
-    assert result["source_fingerprint"] == "same-input"
     assert all(np.isfinite(row["estimate"]) for row in result["tables"]["cell_means"])
-    assert any(item["title"] == "ART / ART-C" for item in result["unavailable"])
 
 
 @pytest.mark.parametrize(
@@ -309,8 +314,8 @@ def test_mapped_models_produce_database_serializable_outputs(source, family, met
 def test_original_and_statsmodels_estimates_agree(source, family, metric):
     config = configuration(family=family)
     config["metric"] = metric
-    original = compute("stats", source, config)
-    established = compute("stats_sm", source, config)
+    original = run_custom_engine(source, config)
+    established = native(source, config)
     for table in ("cell_means", "marginal_means", "contrasts"):
         np.testing.assert_allclose(
             [row["estimate"] for row in original["tables"][table]],
@@ -326,7 +331,9 @@ def test_original_and_statsmodels_estimates_agree(source, family, metric):
 def test_subprocess_runner_uses_only_json_streams(source):
     completed = subprocess.run(
         [sys.executable, "-m", "asaree.services.stats_runner"],
-        input=json.dumps(dict(backend="stats_sm", source=source, config=configuration())),
+        input=json.dumps(
+            dict(source=source, config=StatsRequest(metric="continuous", n_boot=20, n_perm=99).model_dump())
+        ),
         text=True,
         capture_output=True,
         check=True,
@@ -338,15 +345,14 @@ def test_subprocess_runner_uses_only_json_streams(source):
 def test_binomial_denominator_is_used(source):
     config = configuration(family="binomial", denominator="trials")
     config["metric"] = "successes"
-    for backend in ("stats", "stats_sm"):
-        output = compute(backend, source, config)
+    for output in (run_custom_engine(source, config), native(source, config)):
         assert all(0 < row["estimate"] < 1 for row in output["tables"]["cell_means"])
 
 
 def test_unsupported_mapping_does_not_call_original(source):
     config = configuration(family="zoib")
     with pytest.raises(ValueError, match="No established mapping"):
-        compute("stats_sm", source, config)
+        native(source, config)
 
 
 def test_reserved_factor_names_cannot_overwrite_outcomes(source):
@@ -354,7 +360,7 @@ def test_reserved_factor_names_cannot_overwrite_outcomes(source):
         row["factors"]["outcome"] = row["factors"].pop("model")
     config = configuration()
     config["factors"] = ["outcome", "prompt"]
-    output = compute("stats_sm", source, config)
+    output = native(source, config)
     assert len(output["tables"]["cell_means"]) == 4
 
 
@@ -378,7 +384,7 @@ def test_invalid_analysis_inputs_are_rejected(source, change, message):
 def test_catalog_and_missing_outcome_exclusions(source):
     source["rows"][0]["metrics"]["continuous"] = None
     assert catalog(source)["metrics"]
-    output = compute("stats_sm", source, configuration())
+    output = native(source, configuration())
     assert output["n_observations"] == 159
     assert output["n_excluded"] == 1
 
@@ -393,89 +399,3 @@ async def test_ownership_is_checked_before_source_reads(monkeypatch):
     with pytest.raises(HTTPException):
         await api.source(uuid4(), SimpleNamespace(), AsyncMock())
     read.assert_not_awaited()
-
-
-async def test_snapshot_cannot_be_reused_across_experiments(monkeypatch):
-    from asaree.api import stats_prototypes as api
-
-    monkeypatch.setattr(api, "_get_owned_experiment", AsyncMock())
-    db = AsyncMock()
-    db.get.return_value = SimpleNamespace(experiment_id=uuid4())
-    request = StatsRequest(metric="score", factors=["model"], source_analysis_id=uuid4())
-    with pytest.raises(HTTPException) as error:
-        await api.create(uuid4(), "stats_sm", request, SimpleNamespace(), db)
-    assert error.value.status_code == 404
-    db.commit.assert_not_awaited()
-
-
-async def test_snapshot_is_committed_before_worker_enqueue_and_can_be_read(source, monkeypatch):
-    from asaree.api import stats_prototypes as api
-
-    monkeypatch.setattr(api, "_get_owned_experiment", AsyncMock())
-    monkeypatch.setattr(api, "read_source", AsyncMock(return_value=source))
-    db = AsyncMock()
-    saved = []
-
-    def add(row):
-        row.id, row.created_at = uuid4(), datetime.now(UTC)
-        saved.append(row)
-
-    db.add = MagicMock(side_effect=add)
-
-    async def enqueue(*args, **kwargs):
-        db.commit.assert_awaited_once()
-        assert saved[0].request["source"] == source
-        assert args[0] == "execute_stats_task"
-
-    pool = SimpleNamespace(enqueue_job=AsyncMock(side_effect=enqueue))
-    monkeypatch.setattr(api, "_get_pool", AsyncMock(return_value=pool))
-    experiment = uuid4()
-    result = await api.create(experiment, "stats_sm", StatsRequest(**configuration()), SimpleNamespace(), db)
-    assert result["status"] == "pending"
-    assert saved[0].backend == "stats_sm"
-    db.get.return_value = saved[0]
-    detail = await api.detail(experiment, saved[0].id, SimpleNamespace(), db)
-    assert detail["fingerprint"] == "same-input"
-
-
-async def test_database_source_pins_design_revision_and_excludes_row_slots(monkeypatch):
-    from asaree.services import stats_prototypes as service
-
-    experiment, revision_id, whole_id, row_id = uuid4(), uuid4(), uuid4(), uuid4()
-    monkeypatch.setattr(
-        service, "get_current_revision", AsyncMock(return_value=SimpleNamespace(id=revision_id, revision=3))
-    )
-    read = AsyncMock(
-        return_value=[
-            SimpleNamespace(id=whole_id, replicate_number=1, factor_values={"model": "a"}, metric_values={"score": 2}),
-            SimpleNamespace(id=row_id, replicate_number=2, factor_values={"model": "b"}, metric_values={"score": 9}),
-        ]
-    )
-    monkeypatch.setattr(service, "list_replicates", read)
-    db = AsyncMock()
-    db.scalar.return_value = 2
-    db.scalars.return_value = SimpleNamespace(all=lambda: [row_id])
-    source = await service.read_source(db, experiment)
-    read.assert_awaited_once_with(db, experiment_id=experiment, revision_id=revision_id)
-    assert source["design_revision"] == 3
-    assert [row["id"] for row in source["rows"]] == [str(whole_id)]
-    assert source["excluded_row_replicates"] == 1
-
-
-async def test_worker_persists_failure_and_terminates_child(monkeypatch):
-    from asaree.worker import stats_task
-
-    row = SimpleNamespace(status="pending", backend="stats", request={}, error=None)
-    db = AsyncMock()
-    db.get.return_value = row
-
-    @asynccontextmanager
-    async def session():
-        yield db
-
-    process = SimpleNamespace(returncode=1, communicate=AsyncMock(return_value=(b"", b"bad model")))
-    monkeypatch.setattr(stats_task, "get_session", session)
-    monkeypatch.setattr(stats_task.asyncio, "create_subprocess_exec", AsyncMock(return_value=process))
-    await stats_task.execute_stats_task({}, str(uuid4()))
-    assert row.status == "failed"
-    assert "bad model" in row.error

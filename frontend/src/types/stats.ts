@@ -1,4 +1,3 @@
-export type StatsBackend = 'stats' | 'stats_sm'
 export type StatsRow = Record<string, unknown>
 export interface StatsConfig {
   metric: string
@@ -26,7 +25,6 @@ export interface StatsSource {
 }
 export interface StatsAnalysis {
   id: string
-  backend: StatsBackend
   status: 'pending' | 'running' | 'completed' | 'failed'
   error: string | null
   created_at: string
@@ -42,7 +40,6 @@ export interface StatsAnalysis {
     runtime_s: number
     tables: Record<string, StatsRow[]>
     notes: string[]
-    unavailable: { title: string; reason: string; reference: string }[]
     report?: string
     validity?: 'valid' | 'unreliable' | 'unavailable'
     summary?: StatsSummary

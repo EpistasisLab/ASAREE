@@ -82,7 +82,7 @@ def main():
     links = []
     for index, metric in enumerate(source["metric_metadata"]):
         config = StatsRequest(metric=metric).model_dump(mode="json")
-        output = compute("stats_sm", source, config)
+        output = compute(source, config)
         analysis = dict(id=f"synthetic-demo-{index}", created_at=datetime.now(UTC).isoformat(), output=output)
         filename = f"statistics-{metric.lower()}-example.html"
         (destination / filename).write_text(render_html(analysis))

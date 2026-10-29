@@ -17,7 +17,7 @@ export function ExperimentStatistics({ experiment, version }: { experiment: stri
   })
   const history = useQuery({
     queryKey: historyKey,
-    queryFn: () => statsApi.history(experiment, 'stats_sm', version!),
+    queryFn: () => statsApi.history(experiment, version!),
     enabled: !!version,
     refetchInterval: query => query.state.data?.some(a => a.status === 'pending' || a.status === 'running') ? 2500 : false,
   })

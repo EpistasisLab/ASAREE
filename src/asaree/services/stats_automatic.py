@@ -425,7 +425,6 @@ def unavailable(source: dict, config: dict, reason: str) -> dict:
         validity="unavailable",
         tables={},
         notes=[reason],
-        unavailable=[],
         n_observations=observed,
         n_excluded=len(source["rows"]) - observed,
         source_fingerprint=source["fingerprint"],
@@ -499,7 +498,7 @@ def automatic_inputs(source: dict, config: dict, plan: dict) -> tuple[dict, dict
 
 def analyze_automatic(source: dict, config: dict) -> dict:
     """Build a plan, fit supported candidates, and expose only validated inference."""
-    from asaree.services.stats_prototypes import compute, json_safe, prepare_frame
+    from asaree.services.stats_prototypes import json_safe, prepare_frame, run_custom_engine
 
     try:
         plan = plan_metric(source, config["metric"])
@@ -526,7 +525,7 @@ def analyze_automatic(source: dict, config: dict) -> dict:
                 if cell_counts.min() < 3:
                     raise ValueError("At least three measured independent runs per observed condition are required.")
                 if family in {"zoib", "gamma_hurdle", "betabinomial"}:
-                    output = compute("stats", converted_source, candidate_config)
+                    output = run_custom_engine(converted_source, candidate_config)
                     diagnostics = output["tables"]["diagnostics"][0]
                     valid = (
                         diagnostics["converged"]

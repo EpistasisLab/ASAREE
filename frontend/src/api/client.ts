@@ -33,7 +33,7 @@ import type { OkfBundle, OkfDocument } from '@/types/okf'
 import type { CellRunBatch, DatasetRowSchema, PromptPreview, Protocol, ProtocolGraph, ProtocolRevision, ProtocolRun, TestRun } from '@/types/protocols'
 import type { Run, RunStep } from '@/types/runs'
 import type { Skill, SkillListResponse, SkillUrlPreview } from '@/types/skills'
-import type { StatsAnalysis, StatsBackend, StatsConfig, StatsSource } from '@/types/stats'
+import type { StatsAnalysis, StatsSource } from '@/types/stats'
 import type { Persona } from '@/types/personas'
 import type { AttemptDetail, AttemptPage, CursorPage, ExecutionCell, ExecutionSlot, ExecutionSummary, ResultJob, UsageDistribution } from '@/types/executionResults'
 
@@ -184,15 +184,10 @@ export const statsApi = {
     method: 'POST',
   }),
   report: (experiment: string, id: string) => requestBlob(`/stats-prototypes/${experiment}/analyses/${id}/report`),
-  capabilities: (backend: StatsBackend) => request<{ families: string[]; unavailable: { title: string; reason: string; reference: string }[] }>(`/stats-prototypes/capabilities?backend=${backend}`),
   source: (experiment: string, version?: string) => request<StatsSource>(`/stats-prototypes/${experiment}/source${version ? `?protocol_revision_id=${encodeURIComponent(version)}` : ''}`),
-  history: (experiment: string, backend: StatsBackend, version?: string) =>
-    request<StatsAnalysis[]>(`/stats-prototypes/${experiment}/analyses?backend=${backend}${version ? `&protocol_revision_id=${encodeURIComponent(version)}` : ''}`),
+  history: (experiment: string, version?: string) =>
+    request<StatsAnalysis[]>(`/stats-prototypes/${experiment}/analyses${version ? `?protocol_revision_id=${encodeURIComponent(version)}` : ''}`),
   get: (experiment: string, id: string) => request<StatsAnalysis>(`/stats-prototypes/${experiment}/analyses/${id}`),
-  run: (experiment: string, backend: StatsBackend, config: StatsConfig, source?: string) =>
-    request<StatsAnalysis>(`/stats-prototypes/${experiment}/analyses?backend=${backend}`, {
-      method: 'POST', body: { ...config, source_analysis_id: source ?? null },
-    }),
 }
 
 export const tokenApi = {

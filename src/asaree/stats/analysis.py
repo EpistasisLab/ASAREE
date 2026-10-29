@@ -43,23 +43,6 @@ FAMILIES = (
     "tweedie",
 )
 
-UNAVAILABLE = [
-    ("Automatic family selection", "The original construction-based selection and diagnostic filtering are custom."),
-    ("Beta-binomial regression", "No direct mapping in the selected libraries."),
-    ("Zero/one-inflated beta regression", "No direct mapping in the selected libraries."),
-    ("Hurdle models", "The statsmodels count hurdle parameterization differs from the original logistic hurdle."),
-    ("Estimated Tweedie power and density", "TweedieRegressor takes a fixed power and does not fit dispersion."),
-    ("Parametric bootstrap intervals and bootstrap LRT", "The original simulation/refitting procedure is custom."),
-    (
-        "HC3 covariance for zero-inflated, beta and ordinal models",
-        "These multipart likelihoods have no established HC3 leverage; HC0 is computed and labelled instead.",
-    ),
-    ("PIT diagnostics and simulation envelopes", "The original simulation-based diagnostic pipeline is custom."),
-    ("ART / ART-C", "No mapping in statsmodels or scikit-learn."),
-    ("Design-preserving permutation tests", "The original stratified / Freedman–Lane orchestration is custom."),
-    ("Cross-method agreement and effect stability", "These depend on the original custom sensitivity pipeline."),
-]
-
 
 def fit_model(y, x, family, config, trials=None):
     """Shared native fit for the original sample, bootstrap refits and null simulations.
@@ -637,7 +620,6 @@ def analyze(frame: pd.DataFrame, config: dict) -> dict:
     return {
         "tables": tables,
         "notes": list(dict.fromkeys(notes)),
-        "unavailable": [dict(title=title, reason=reason, reference="/stats") for title, reason in UNAVAILABLE],
         "family": family,
         "validity": validity,
         "covariance": covariance_record,

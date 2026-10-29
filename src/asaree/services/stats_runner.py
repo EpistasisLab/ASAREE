@@ -11,7 +11,7 @@ def main():
     request = json.load(sys.stdin)
     # Some numerical libraries print optimizer messages; preserve stdout for JSON.
     with redirect_stdout(sys.stderr):
-        output = compute(request["backend"], request["source"], request["config"])
+        output = compute(request["source"], request["config"])
     json.dump(output, sys.stdout, allow_nan=False)
 
 

@@ -263,7 +263,7 @@ def exact_count_source():
 
 
 def automatic(source, metric):
-    return compute("stats_sm", source, StatsRequest(metric=metric, n_boot=50, n_perm=99).model_dump(mode="json"))
+    return compute(source, StatsRequest(metric=metric, n_boot=50, n_perm=99).model_dump(mode="json"))
 
 
 def test_exact_fit_keeps_descriptive_estimates_and_withholds_all_inference():

@@ -1,4 +1,4 @@
-"""Isolated database snapshots for the statistics comparison prototypes."""
+"""Automatic statistics reports and the immutable inputs they were computed from."""
 
 from __future__ import annotations
 
@@ -19,7 +19,6 @@ class StatsAnalysis(Base, TimestampMixin):
     experiment_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("research_experiments.id", ondelete="CASCADE"), index=True
     )
-    backend: Mapped[str] = mapped_column(String(16))
     status: Mapped[str] = mapped_column(String(16), default="pending")
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     # Immutable input/configuration snapshot, including design and replicate provenance.

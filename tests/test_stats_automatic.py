@@ -35,7 +35,7 @@ def source_for(values, name="measurement", metadata=None):
 def analyze(values, name="measurement", metadata=None):
     source = source_for(values, name, metadata)
     config = StatsRequest(metric=name, n_boot=20, n_perm=99).model_dump(mode="json")
-    return compute("stats_sm", source, config)
+    return compute(source, config)
 
 
 @pytest.mark.parametrize(
@@ -77,7 +77,7 @@ def test_numeric_text_is_converted_without_modifying_snapshot():
     values = [str(v) for v in rng.normal(0, 1, 100)]
     source = source_for(values)
     original = deepcopy(source)
-    output = compute("stats_sm", source, StatsRequest(metric="measurement").model_dump())
+    output = compute(source, StatsRequest(metric="measurement").model_dump())
     assert output["validity"] == "valid"
     assert any("String conversion" in s for s in output["summary"]["methods"])
     assert source == original
@@ -261,7 +261,7 @@ def test_denominator_selects_binomial_even_with_default_measurement_type():
     source = source_for(rng.binomial(12, 0.4, 120).tolist(), "successes")
     for row in source["rows"]:
         row["metrics"]["trials"] = 12
-    output = compute("stats_sm", source, StatsRequest(metric="successes", n_boot=20, n_perm=99).model_dump())
+    output = compute(source, StatsRequest(metric="successes", n_boot=20, n_perm=99).model_dump())
     assert output["family"] == "binomial"
     assert output["validity"] == "valid"
 
@@ -276,7 +276,7 @@ def test_denominator_selects_binomial_even_with_default_measurement_type():
 def test_unsupported_dependence_and_mixed_protocols_withhold_tests(change, reason):
     source = source_for(np.random.default_rng(1).normal(size=100).tolist())
     source.update(change)
-    result = compute("stats_sm", source, StatsRequest(metric="measurement").model_dump())
+    result = compute(source, StatsRequest(metric="measurement").model_dump())
     assert result["validity"] == "unavailable"
     assert reason in result["summary"]["warnings"][0]
 
@@ -350,7 +350,7 @@ def test_structured_treatments_use_declared_short_labels_without_merging_conditi
             level_labels=["Small model", "Large model"],
         )
     }
-    output = compute("stats_sm", source, StatsRequest(metric="measurement").model_dump())
+    output = compute(source, StatsRequest(metric="measurement").model_dump())
     assert output["validity"] == "valid"
     comparison = output["summary"]["effects"][0]["comparison"]
     assert "Small model" in comparison and "Large model" in comparison
@@ -366,7 +366,7 @@ def test_constant_metric_reports_unavailable_instead_of_zero_effect():
 def test_missing_measurement_report_retains_the_producers_explanation():
     source = source_for([None] * 10, "Custom")
     source["metric_errors"] = {"Custom": ["The Agent did not call the configured metric tool."]}
-    output = compute("stats_sm", source, StatsRequest(metric="Custom").model_dump())
+    output = compute(source, StatsRequest(metric="Custom").model_dump())
     assert "did not call the configured metric tool" in output["summary"]["warnings"][0]
 
 
@@ -521,7 +521,7 @@ async def test_automatic_batch_pins_one_snapshot_before_enqueuing(monkeypatch):
     results = await api.automatic(experiment_id, SimpleNamespace(), db, version_id)
     api.read_source.assert_awaited_once_with(db, experiment_id, version_id)
     assert {row["config"]["metric"] for row in results} == {"Custom", "Unmeasured"}
-    assert all(row["backend"] == "stats_sm" and row["config"]["family"] == "auto" for row in results)
+    assert all(row["config"]["family"] == "auto" and "backend" not in row for row in results)
 
 
 @pytest.mark.parametrize("kind", ["boundary", "hurdle", "overdispersed_trials"])
@@ -540,7 +540,7 @@ def test_specialized_custom_models_are_checked_before_being_reported(kind):
         source = source_for(rng.binomial(20, rng.beta(2 + group, 3)).tolist(), "successes")
         for row in source["rows"]:
             row["metrics"]["trials"] = 20
-        result = compute("stats_sm", source, StatsRequest(metric="successes", n_boot=20, n_perm=99).model_dump())
+        result = compute(source, StatsRequest(metric="successes", n_boot=20, n_perm=99).model_dump())
         expected = "betabinomial"
     assert result["family"] == expected, result["summary"]["warnings"]
     assert result["validity"] == "valid"

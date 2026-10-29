@@ -9,11 +9,11 @@ import { ExperimentStatistics } from './ExperimentStatistics'
 vi.mock('@/components/AppHeader', () => ({ AppHeader: () => null }))
 
 const saved: StatsAnalysis = {
-  id: 'analysis', backend: 'stats_sm', status: 'completed', report_status: 'valid', error: null,
+  id: 'analysis', status: 'completed', report_status: 'valid', error: null,
   created_at: '2026-10-22T18:00:00Z', fingerprint: 'input-snapshot', design_revision: 1,
   config: { metric: 'Duration', factors: [], family: 'auto', measurement_type: 'auto', denominator: null,
     ordinal_levels: [], max_order: 2, n_boot: 100, n_boot_lrt: 0, n_perm: 999, seed: 22, tweedie_power: 1.5 },
-  output: { family: 'gamma', n_observations: 100, n_excluded: 0, runtime_s: 1, tables: {}, notes: [], unavailable: [],
+  output: { family: 'gamma', n_observations: 100, n_excluded: 0, runtime_s: 1, tables: {}, notes: [],
     summary: { version: 1, metric: 'Duration', status: 'valid', description: 'Analyzed 100 runs for Duration.',
       distribution: { n: 100, minimum: 1, maximum: 9, mean: 4, sd: 2, distinct: 20, zeros: 0,
         plot: { kind: 'histogram', bins: [{ label: '1–5', count: 60 }, { label: '5–9', count: 40 }] } },
@@ -54,7 +54,7 @@ it('analyzes all metrics without asking users to select statistical settings', a
   expect(screen.queryByLabelText('Measurement type')).not.toBeInTheDocument()
   expect(screen.queryByLabelText('Experiment')).not.toBeInTheDocument()
   expect(statsApi.source).toHaveBeenCalledWith('experiment', 'version-1')
-  expect(statsApi.history).toHaveBeenCalledWith('experiment', 'stats_sm', 'version-1')
+  expect(statsApi.history).toHaveBeenCalledWith('experiment', 'version-1')
 })
 
 it('disables analysis when this version has no completed measured replicates', async () => {
@@ -67,7 +67,7 @@ it('disables analysis when this version has no completed measured replicates', a
   expect(await screen.findByText(/Run replicates for this experiment version/)).toBeInTheDocument()
   expect(screen.getByRole('button', { name: 'Analyze all metrics' })).toBeDisabled()
   expect(statsApi.source).toHaveBeenCalledWith('experiment', 'older-version')
-  expect(statsApi.history).toHaveBeenCalledWith('experiment', 'stats_sm', 'older-version')
+  expect(statsApi.history).toHaveBeenCalledWith('experiment', 'older-version')
   fireEvent.click(screen.getByRole('button', { name: 'Analyze all metrics' }))
   expect(automatic).not.toHaveBeenCalled()
 })

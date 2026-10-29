@@ -103,7 +103,7 @@ def test_automatic_report_preserves_analytic_inference_when_bootstrap_cannot_fin
         design_revision_id="revision",
         excluded_row_replicates=0,
     )
-    result = compute("stats_sm", source, config)
+    result = compute(source, config)
     assert result["validity"] == "valid"
     summary = result["summary"]
     assert summary["resampling"]["bootstrap"]["attempted"] == 0

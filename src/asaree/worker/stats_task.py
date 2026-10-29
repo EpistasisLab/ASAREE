@@ -36,7 +36,7 @@ async def execute_stats_task(ctx: dict, analysis_id: str) -> None:
         if analysis is None or analysis.status != "pending":
             return
         analysis.status = "running"
-        request = dict(backend=analysis.backend, **analysis.request)
+        request = dict(analysis.request)
     process = None
     try:
         process = await asyncio.create_subprocess_exec(

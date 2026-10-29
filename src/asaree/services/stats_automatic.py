@@ -498,7 +498,7 @@ def automatic_inputs(source: dict, config: dict, plan: dict) -> tuple[dict, dict
 
 def analyze_automatic(source: dict, config: dict) -> dict:
     """Build a plan, fit supported candidates, and expose only validated inference."""
-    from asaree.services.stats_prototypes import json_safe, prepare_frame
+    from asaree.services.stats_source import json_safe, prepare_frame
     from asaree.stats.custom import analyze_custom
 
     try:

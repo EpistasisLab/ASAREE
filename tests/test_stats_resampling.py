@@ -5,8 +5,8 @@ import pandas as pd
 import pytest
 import statsmodels.api as sm
 
-from asaree.services.stats_prototypes import StatsRequest, compute
 from asaree.services.stats_resampling import native_permutations
+from asaree.services.stats_source import StatsRequest, compute
 from asaree.stats.resampling import bootstrap_intervals
 
 

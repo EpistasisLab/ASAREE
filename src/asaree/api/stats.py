@@ -15,10 +15,10 @@ from asaree.models.experiment import ResearchExperiment
 from asaree.models.stats_analysis import StatsAnalysis
 from asaree.services.stats_distribution import report_distribution
 from asaree.services.stats_findings import describe_findings
-from asaree.services.stats_prototypes import StatsRequest, catalog, read_source
+from asaree.services.stats_source import StatsRequest, catalog, read_source
 from asaree.worker.enqueue import _get_pool
 
-router = APIRouter(prefix="/stats-prototypes", tags=["stats-prototypes"])
+router = APIRouter(prefix="/stats", tags=["stats"])
 AUTOMATIC = StatsAnalysis.request["config"]["family"].as_string() == "auto"
 
 

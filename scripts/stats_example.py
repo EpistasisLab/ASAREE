@@ -16,7 +16,7 @@ from pathlib import Path
 import numpy as np
 
 from asaree.services.stats_html import render_html
-from asaree.services.stats_prototypes import StatsRequest, compute
+from asaree.services.stats_source import StatsRequest, compute
 
 
 def main():

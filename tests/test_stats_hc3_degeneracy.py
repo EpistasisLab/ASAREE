@@ -9,8 +9,8 @@ import statsmodels.api as sm
 from scipy import optimize, stats
 
 from asaree.services.stats_html import render_html
-from asaree.services.stats_prototypes import StatsRequest, compute
 from asaree.services.stats_resampling import native_permutations
+from asaree.services.stats_source import StatsRequest, compute
 from asaree.stats.analysis import analyze
 from asaree.stats.covariance import (
     glm_parts,

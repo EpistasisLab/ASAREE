@@ -12,7 +12,7 @@ import numpy as np
 import pytest
 from fastapi import HTTPException
 
-from asaree.services.stats_prototypes import StatsRequest, catalog, json_safe, prepare_frame
+from asaree.services.stats_source import StatsRequest, catalog, json_safe, prepare_frame
 from asaree.stats.analysis import analyze
 
 
@@ -20,7 +20,7 @@ from asaree.stats.analysis import analyze
 async def test_replacement_deletes_old_reports_only_in_the_selected_scope(metric):
     import sqlalchemy as sa
 
-    from asaree.api.stats_prototypes import replace_automatic_reports
+    from asaree.api.stats import replace_automatic_reports
 
     metadata = sa.MetaData()
     experiments = sa.Table("research_experiments", metadata, sa.Column("id", sa.Uuid, primary_key=True))
@@ -54,7 +54,7 @@ async def test_replacement_deletes_old_reports_only_in_the_selected_scope(metric
 
 @pytest.mark.parametrize("status", ["pending", "running"])
 async def test_replacement_rejects_an_active_batch_without_deleting_reports(status):
-    from asaree.api.stats_prototypes import replace_automatic_reports
+    from asaree.api.stats import replace_automatic_reports
 
     db = AsyncMock()
     db.scalar.return_value = uuid4()
@@ -67,7 +67,7 @@ async def test_replacement_rejects_an_active_batch_without_deleting_reports(stat
 
 @pytest.mark.asyncio
 async def test_history_exposes_report_status_without_loading_reports(monkeypatch):
-    from asaree.api import stats_prototypes as api
+    from asaree.api import stats as api
 
     experiment_id = uuid4()
     analysis = SimpleNamespace(
@@ -89,7 +89,7 @@ async def test_history_exposes_report_status_without_loading_reports(monkeypatch
 
 
 async def test_history_filters_by_publication_before_limit(monkeypatch):
-    from asaree.api import stats_prototypes as api
+    from asaree.api import stats as api
 
     monkeypatch.setattr(api, "_get_owned_experiment", AsyncMock())
     result = MagicMock()
@@ -103,7 +103,7 @@ async def test_history_filters_by_publication_before_limit(monkeypatch):
 
 
 async def test_version_source_uses_frozen_attempts_and_publication_scope(monkeypatch):
-    from asaree.services import stats_prototypes as service
+    from asaree.services import stats_source as service
     from asaree.services.result_reads import ResultScope
 
     experiment, protocol, version, design, replicate, run_id = [uuid4() for _ in range(6)]
@@ -144,7 +144,7 @@ async def test_version_source_uses_frozen_attempts_and_publication_scope(monkeyp
 
 @pytest.mark.parametrize("reason", ["legacy", "row"])
 async def test_version_source_refuses_unsupported_scopes(monkeypatch, reason):
-    from asaree.services import stats_prototypes as service
+    from asaree.services import stats_source as service
 
     monkeypatch.setattr(service, "resolve_result_scope", AsyncMock(return_value=SimpleNamespace(
         versioned=reason != "legacy", unit="row" if reason == "row" else "replicate",
@@ -157,7 +157,7 @@ async def test_version_source_refuses_unsupported_scopes(monkeypatch, reason):
 
 @pytest.mark.parametrize("version", [None, "empty"])
 async def test_automatic_requires_a_version_with_measured_completed_replicates(monkeypatch, version):
-    from asaree.api import stats_prototypes as api
+    from asaree.api import stats as api
 
     monkeypatch.setattr(api, "_get_owned_experiment", AsyncMock())
     monkeypatch.setattr(api, "read_source", AsyncMock(return_value={
@@ -206,7 +206,7 @@ def source():
 
 
 def test_saved_report_findings_refresh_without_mutating_stored_results(source):
-    from asaree.api.stats_prototypes import summary
+    from asaree.api.stats import summary
 
     output = dict(summary=dict(findings=["Old dense wording"], tests=[
         dict(effect="Effort:Budget", p_adjusted=.4, permutation_p_adjusted=None),
@@ -222,7 +222,7 @@ def test_saved_report_findings_refresh_without_mutating_stored_results(source):
 
 @pytest.mark.parametrize("has_summary", [True, False])
 def test_saved_ordinal_report_recovers_chart_from_its_input_snapshot(source, has_summary):
-    from asaree.api.stats_prototypes import summary
+    from asaree.api.stats import summary
 
     source["metric_metadata"] = {"ordinal": {"ordinal_levels": ["low", "medium", "high"]}}
     values = [row["metrics"]["ordinal"] for row in source["rows"]]
@@ -361,7 +361,7 @@ def test_catalog_and_missing_outcome_exclusions(source):
 
 
 async def test_ownership_is_checked_before_source_reads(monkeypatch):
-    from asaree.api import stats_prototypes as api
+    from asaree.api import stats as api
 
     owned = AsyncMock(side_effect=HTTPException(404, "Experiment not found"))
     read = AsyncMock()

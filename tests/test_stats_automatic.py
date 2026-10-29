@@ -14,7 +14,7 @@ from asaree.services.stats_automatic import coerce_values, metric_information, p
 from asaree.services.stats_distribution import distribution_plot, saved_distribution_plot
 from asaree.services.stats_findings import describe_findings
 from asaree.services.stats_html import render_html
-from asaree.services.stats_prototypes import StatsRequest, catalog, compute, metric_definitions, prepare_frame
+from asaree.services.stats_source import StatsRequest, catalog, compute, metric_definitions, prepare_frame
 from asaree.stats.analysis import analyze as native_analyze
 
 
@@ -442,7 +442,7 @@ def test_log_normal_aic_is_converted_to_the_original_measurement_scale():
 
 
 async def test_database_snapshot_reads_only_scoped_declared_runtime_observations(monkeypatch):
-    from asaree.services import stats_prototypes as service
+    from asaree.services import stats_source as service
 
     experiment, revision_id, replicate_id, run_id = [uuid4() for _ in range(4)]
     plan = dict(
@@ -484,7 +484,7 @@ async def test_database_snapshot_reads_only_scoped_declared_runtime_observations
 async def test_html_export_enforces_experiment_ownership(monkeypatch):
     from fastapi import HTTPException
 
-    from asaree.api import stats_prototypes as api
+    from asaree.api import stats as api
 
     monkeypatch.setattr(api, "_get_owned_experiment", AsyncMock(side_effect=HTTPException(404)))
     db = AsyncMock()
@@ -497,7 +497,7 @@ async def test_automatic_batch_pins_one_snapshot_before_enqueuing(monkeypatch):
     from datetime import UTC, datetime
     from unittest.mock import MagicMock
 
-    from asaree.api import stats_prototypes as api
+    from asaree.api import stats as api
 
     source = source_for(["yes", "no"] * 30, "Custom")
     source["metric_metadata"]["Unmeasured"] = dict(kind="custom")

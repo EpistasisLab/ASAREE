@@ -1,4 +1,4 @@
-"""Database input/output boundary for both statistics prototypes."""
+"""Statistics inputs: the experiment-version snapshot, its catalog and the analyzed frame."""
 
 from __future__ import annotations
 
@@ -84,7 +84,7 @@ async def read_source(
         )
     )
     if count and count > 5000:
-        raise ValueError("This prototype supports designs with at most 5,000 replicate slots.")
+        raise ValueError("Statistics support designs with at most 5,000 replicate slots.")
     replicates = await list_replicates(db, experiment_id=experiment_id, revision_id=revision.id) if revision else []
     experiment = await db.get(ResearchExperiment, experiment_id)
     design = getattr(revision, "design_spec", None) or getattr(experiment, "design_spec", None) or {}
@@ -324,7 +324,7 @@ def prepare_frame(source: dict, config: dict) -> pd.DataFrame:
     if family == "binomial" and not config.get("denominator") and not set(y) <= {0, 1}:
         raise ValueError("Binomial outcomes require binary values or a trials denominator.")
     if len(frame) > 5000:
-        raise ValueError("The prototype supports up to 5,000 scored replicates per analysis.")
+        raise ValueError("Statistics support up to 5,000 scored replicates per analysis.")
     # Prevent factorial explosion, rank-deficient full designs and unstable fits.
     counts = [frame[f"factor_{i}"].nunique() for i in range(len(factors))]
     if any(count < 2 for count in counts):

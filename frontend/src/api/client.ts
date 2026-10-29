@@ -180,14 +180,14 @@ export const authApi = {
 }
 
 export const statsApi = {
-  automatic: (experiment: string, version: string) => request<StatsAnalysis[]>(`/stats-prototypes/${experiment}/automatic-analyses?protocol_revision_id=${encodeURIComponent(version)}`, {
+  automatic: (experiment: string, version: string) => request<StatsAnalysis[]>(`/stats/${experiment}/automatic-analyses?protocol_revision_id=${encodeURIComponent(version)}`, {
     method: 'POST',
   }),
-  report: (experiment: string, id: string) => requestBlob(`/stats-prototypes/${experiment}/analyses/${id}/report`),
-  source: (experiment: string, version?: string) => request<StatsSource>(`/stats-prototypes/${experiment}/source${version ? `?protocol_revision_id=${encodeURIComponent(version)}` : ''}`),
+  report: (experiment: string, id: string) => requestBlob(`/stats/${experiment}/analyses/${id}/report`),
+  source: (experiment: string, version?: string) => request<StatsSource>(`/stats/${experiment}/source${version ? `?protocol_revision_id=${encodeURIComponent(version)}` : ''}`),
   history: (experiment: string, version?: string) =>
-    request<StatsAnalysis[]>(`/stats-prototypes/${experiment}/analyses${version ? `?protocol_revision_id=${encodeURIComponent(version)}` : ''}`),
-  get: (experiment: string, id: string) => request<StatsAnalysis>(`/stats-prototypes/${experiment}/analyses/${id}`),
+    request<StatsAnalysis[]>(`/stats/${experiment}/analyses${version ? `?protocol_revision_id=${encodeURIComponent(version)}` : ''}`),
+  get: (experiment: string, id: string) => request<StatsAnalysis>(`/stats/${experiment}/analyses/${id}`),
 }
 
 export const tokenApi = {

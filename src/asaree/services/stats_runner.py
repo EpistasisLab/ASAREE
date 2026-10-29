@@ -4,7 +4,7 @@ import json
 import sys
 from contextlib import redirect_stdout
 
-from asaree.services.stats_prototypes import compute
+from asaree.services.stats_source import compute
 
 
 def main():

@@ -39,7 +39,7 @@ afterEach(() => { cleanup(); vi.restoreAllMocks() })
 
 function mount(version: string | null = 'version-1') {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
-  render(<QueryClientProvider client={client}><MemoryRouter initialEntries={['/statistics?experiment=experiment']}>
+  render(<QueryClientProvider client={client}><MemoryRouter initialEntries={['/experiments/experiment/protocol?tab=results&results=statistics']}>
     <ExperimentStatistics experiment="experiment" version={version} />
   </MemoryRouter></QueryClientProvider>)
 }

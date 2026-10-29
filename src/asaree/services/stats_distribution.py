@@ -48,7 +48,7 @@ def observed_distribution(values, category_labels=None) -> dict:
 def snapshot_distribution(output: dict, source: dict, config: dict) -> dict | None:
     """Rebuild presentation data from the original inputs, without model fitting."""
     from asaree.services.stats_automatic import automatic_inputs, plan_metric
-    from asaree.services.stats_prototypes import prepare_frame
+    from asaree.services.stats_source import prepare_frame
 
     try:
         plan = plan_metric(source, config["metric"])

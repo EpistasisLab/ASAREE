@@ -34,6 +34,14 @@ OWNER = uuid.UUID("11111111-1111-1111-1111-111111111111")
 SECRET = "provider-secret-for-tests"
 
 
+@pytest.fixture(autouse=True)
+def isolated_refresh_state(monkeypatch):
+    llm_model_cache._recent.clear()
+    monkeypatch.setattr(llm_model_cache, "consume_rate_limit", AsyncMock(return_value=(True, 0)))
+    yield
+    llm_model_cache._recent.clear()
+
+
 def setting(provider):
     return UserLLMSetting(
         user_id=OWNER,
@@ -82,8 +90,9 @@ async def test_application_and_independent_provider_outcomes_match(monkeypatch, 
         provider=provider, api_key=SECRET, api_base=saved.api_base, azure_project_endpoint=saved.azure_project_endpoint
     )
     expected = await providers.discover_models(config, transport=transport)
-    models, source, note = await discover_models(provider=provider, setting=saved)
-    assert (models, source, note) == (expected.models, expected.source, expected.note)
+    listing = await discover_models(provider=provider, setting=saved)
+    models, note = listing.models, listing.note
+    assert listing == expected
     check = await check_connection(provider=provider, setting=saved)
     assert check == await providers.check_connection(config, transport=transport)
     assert SECRET not in json.dumps([check.model_dump(), [entry.model_dump() for entry in models], note])
@@ -111,12 +120,12 @@ async def test_defaults_and_provenance_survive_cache_and_execution(monkeypatch):
         ProviderConfig(provider="openrouter"),
         transport=httpx.MockTransport(lambda request: httpx.Response(200, json={"data": [entry]})),
     )
-    encoded = llm_model_cache._dump(listing.models, listing.source, listing.note, now=100)
-    models, source, note, fresh_until = llm_model_cache._load(encoded)
-    assert fresh_until == 100 + 6 * 60 * 60
-    assert models == listing.models
+    encoded = llm_model_cache._dump(listing, now=100)
+    cached = llm_model_cache._load(encoded)
+    assert cached.fresh_until == 100 + 6 * 60 * 60
+    assert cached.listing == listing
     monkeypatch.setattr(model_config, "get_setting", AsyncMock(return_value=None))
-    monkeypatch.setattr(model_config, "discover_models_cached", AsyncMock(return_value=(models, source, note)))
+    monkeypatch.setattr(model_config, "discover_models_cached", AsyncMock(return_value=cached.listing))
     metadata = await model_config.resolve_model_metadata(
         provider="openrouter", model=entry["id"], db=None, owner_id=OWNER
     )
@@ -160,12 +169,11 @@ async def test_defaults_without_support_survive_application_cache_without_changi
     client = httpx.AsyncClient
     monkeypatch.setattr(providers.httpx, "AsyncClient", lambda **kw: client(**{**kw, "transport": transport}))
     saved = setting(provider)
-    models, source, note = await discover_models(provider=provider, setting=saved)
-    assert source == "api"
-    live = ModelListing(models=models, source=source, note=note)
-    encoded = llm_model_cache._dump(models, source, note, now=100)
-    cached_models, cached_source, cached_note, _ = llm_model_cache._load(encoded)
-    cached = ModelListing(models=cached_models, source=cached_source, note=cached_note)
+    listing = await discover_models(provider=provider, setting=saved)
+    assert listing.source == "api"
+    live = listing
+    encoded = llm_model_cache._dump(live, now=100)
+    cached = llm_model_cache._load(encoded).listing
     assert cached == live
 
     for listing in (live, cached):
@@ -184,9 +192,7 @@ async def test_defaults_without_support_survive_application_cache_without_changi
         assert defaults.temperature.source == "provider"
 
     monkeypatch.setattr(model_config, "get_setting", AsyncMock(return_value=saved))
-    monkeypatch.setattr(
-        model_config, "discover_models_cached", AsyncMock(return_value=(cached_models, cached_source, cached_note))
-    )
+    monkeypatch.setattr(model_config, "discover_models_cached", AsyncMock(return_value=cached))
     metadata = await model_config.resolve_model_metadata(provider=provider, model=model, db=None, owner_id=OWNER)
     assert metadata == live.models[0]
 
@@ -242,7 +248,7 @@ async def test_cache_client_creation_failure_is_a_cache_miss(monkeypatch):
         raise ConnectionError("cache unavailable")
 
     monkeypatch.setattr(llm_model_cache, "get_redis", unavailable)
-    result = ([], "api", None)
+    result = ModelListing(source="api")
     discover = AsyncMock(return_value=result)
     monkeypatch.setattr(llm_model_cache, "discover_models", discover)
     assert await llm_model_cache.discover_models_cached(user_id=OWNER, provider="local", setting=None) == result
@@ -338,7 +344,6 @@ async def test_saving_empty_optional_endpoints_normalizes_before_storage(endpoin
     app.dependency_overrides[get_db] = lambda: db
     existing = setting("azure_foundry") if updating else None
     monkeypatch.setattr(user_llm_settings, "get_setting", AsyncMock(return_value=existing))
-    monkeypatch.setattr(api, "invalidate_models_cache", AsyncMock())
     response = await client.put(
         "/llm-settings",
         json={
@@ -364,7 +369,6 @@ async def test_valid_azure_project_still_replaces_stale_resource_field_on_save(e
     db = SimpleNamespace(add=saved.append, flush=AsyncMock(), refresh=AsyncMock())
     app.dependency_overrides[get_db] = lambda: db
     monkeypatch.setattr(user_llm_settings, "get_setting", AsyncMock(return_value=None))
-    monkeypatch.setattr(api, "invalidate_models_cache", AsyncMock())
     project = "https://example-resource.services.ai.azure.com/api/projects/example"
     response = await client.put(
         "/llm-settings",
@@ -388,7 +392,6 @@ async def test_saving_blank_optional_endpoints_stores_none(endpoint, monkeypatch
     db = SimpleNamespace(add=saved.append, flush=AsyncMock(), refresh=AsyncMock())
     app.dependency_overrides[get_db] = lambda: db
     monkeypatch.setattr(user_llm_settings, "get_setting", AsyncMock(return_value=None))
-    monkeypatch.setattr(api, "invalidate_models_cache", AsyncMock())
     response = await client.put(
         "/llm-settings",
         json={"provider": provider, "api_key": SECRET, "api_base": blank, "azure_project_endpoint": blank},
@@ -506,37 +509,88 @@ async def test_real_azure_check_seeds_identical_endpoint_model_listing(endpoint,
     assert len(requests) == 1
 
 
-async def test_credential_changes_invalidate_only_callers_provider(endpoint, monkeypatch):
+async def test_credential_changes_leave_other_credential_namespaces_intact(endpoint, monkeypatch):
     _, client = endpoint
     stored = {}
 
     async def put(key, value, *, ex):
-        assert ex == 24 * 60 * 60
+        assert ex in (24 * 60 * 60, 30)
         stored[key] = value
 
-    async def delete(key):
-        stored.pop(key, None)
-
-    redis = SimpleNamespace(set=put, delete=delete)
+    redis = SimpleNamespace(set=put)
     monkeypatch.setattr(llm_model_cache, "get_redis", lambda: redis)
     other = uuid.uuid4()
-    for owner, provider in ((OWNER, "openai"), (OWNER, "local"), (other, "openai")):
-        await llm_model_cache.store_models_cache(user_id=owner, provider=provider, models=[])
     saved = setting("openai")
+    for owner, provider in ((OWNER, "openai"), (OWNER, "local"), (other, "openai")):
+        await llm_model_cache.store_models_cache(user_id=owner, provider=provider, setting=saved, models=[])
+    previous = dict(stored)
     monkeypatch.setattr(api, "upsert_setting", AsyncMock(return_value=saved))
     monkeypatch.setattr(api, "delete_setting", AsyncMock(return_value=True))
     response = await client.put("/llm-settings", json={"provider": "openai", "api_key": SECRET})
     assert response.status_code == 201
     assert SECRET not in response.text
-    assert llm_model_cache._key(OWNER, "openai") not in stored
-    assert len(stored) == 2
+    assert stored == previous
     api.upsert_setting.assert_awaited_once_with(
         None, user_id=OWNER, provider="openai", api_key=SECRET, api_base=None, azure_project_endpoint=None
     )
     response = await client.delete("/llm-settings/local")
     assert response.status_code == 204
-    assert list(stored) == [llm_model_cache._key(other, "openai")]
+    assert stored == previous
     api.delete_setting.assert_awaited_once_with(None, user_id=OWNER, provider="local")
+
+
+@pytest.mark.parametrize("action", ["models", "model-capabilities?model=custom-model"])
+async def test_all_discovery_routes_honor_shared_refresh_budget(endpoint, monkeypatch, action):
+    _, client = endpoint
+    monkeypatch.setattr(llm_model_cache, "get_redis", lambda: SimpleNamespace(get=AsyncMock(return_value=None)))
+    monkeypatch.setattr(llm_model_cache, "consume_rate_limit", AsyncMock(return_value=(False, 23)))
+    monkeypatch.setattr(model_config, "get_setting", AsyncMock(return_value=None))
+    discover = AsyncMock(side_effect=AssertionError("No provider request when budget is exhausted"))
+    monkeypatch.setattr(llm_model_cache, "discover_models", discover)
+    response = await client.get(f"/llm-settings/anthropic/{action}")
+    assert response.status_code == 429
+    assert response.headers["Retry-After"] == "23"
+    assert response.json()["detail"]["retry_after_seconds"] == 23
+    discover.assert_not_awaited()
+
+
+async def test_anthropic_outage_preserves_cached_live_metadata_and_error(endpoint, monkeypatch):
+    _, client = endpoint
+    saved = setting("anthropic")
+    monkeypatch.setattr(api, "get_setting", AsyncMock(return_value=saved))
+    monkeypatch.setattr(model_config, "get_setting", AsyncMock(return_value=saved))
+    from motoro.services.provider_types import ModelInfo
+
+    live = ModelListing(models=[ModelInfo(id="live-only-model")], source="api")
+    key = llm_model_cache._key(OWNER, "anthropic", saved)
+    stored = {key: llm_model_cache._dump(live, now=llm_model_cache.time.time() - llm_model_cache._FRESH_SECONDS - 1)}
+    original = stored[key]
+
+    async def put(key, value, **kwargs):
+        stored[key] = value
+        return True
+
+    redis = SimpleNamespace(
+        get=AsyncMock(side_effect=lambda key: stored.get(key)), set=put, execute_command=AsyncMock()
+    )
+    monkeypatch.setattr(llm_model_cache, "get_redis", lambda: redis)
+    requests = []
+
+    def unavailable(request):
+        requests.append(request)
+        raise httpx.ReadTimeout("unavailable", request=request)
+
+    real_client = httpx.AsyncClient
+    transport = httpx.MockTransport(unavailable)
+    monkeypatch.setattr(providers.httpx, "AsyncClient", lambda **kw: real_client(**{**kw, "transport": transport}))
+    menu = await client.get("/llm-settings/anthropic/models")
+    assert menu.status_code == 200
+    assert menu.json()["models"][0]["id"] == "live-only-model"
+    assert menu.json()["note"] == llm_model_cache.STALE_NOTE
+    cached = await llm_model_cache.discover_models_cached(user_id=OWNER, provider="anthropic", setting=saved)
+    assert cached.error.kind == "timeout"
+    assert stored[key] == original
+    assert len(requests) == 1
 
 
 def test_exact_installed_revision_and_standalone_consumer(tmp_path):

@@ -11,7 +11,7 @@ import pytest
 from fastapi import FastAPI
 from motoro.services.llm_service import UnsupportedEffortError, _sampling_kwargs
 from motoro.services.model_capabilities import TEMPERATURE_ONLY_CAPABILITIES, ModelCapabilities
-from motoro.services.provider_types import ProviderConfig
+from motoro.services.provider_types import ModelListing, ProviderConfig
 from motoro.services.providers import discover_models
 from motoro.services.sampling import resolve_sampling
 
@@ -32,7 +32,7 @@ def discovery(monkeypatch):
 
     monkeypatch.setattr(service, "get_session", session)
     monkeypatch.setattr(service, "get_setting", AsyncMock(return_value=None))
-    lookup = AsyncMock(return_value=([], "static", None))
+    lookup = AsyncMock(return_value=ModelListing(models=[], source="static", note=None))
     monkeypatch.setattr(service, "discover_models_cached", lookup)
     return lookup
 
@@ -44,7 +44,9 @@ async def test_live_effort_metadata_overrides_temperature_registry(discovery):
         effort_levels=["low", "high"],
         default_effort="high",
     )
-    discovery.return_value = ([ModelInfo(id="gpt-4o", label=None, capabilities=capabilities)], "api", None)
+    discovery.return_value = ModelListing(
+        models=[ModelInfo(id="gpt-4o", label=None, capabilities=capabilities)], source="api", note=None
+    )
     data = {"provider": "openai", "model": "gpt-4o", "temperature": 0.7}
 
     config = await service.build_model_config(data, owner_id=OWNER)
@@ -55,10 +57,8 @@ async def test_live_effort_metadata_overrides_temperature_registry(discovery):
 
 
 async def test_live_temperature_metadata_overrides_effort_registry(discovery):
-    discovery.return_value = (
-        [ModelInfo(id="gpt-5", label=None, capabilities=TEMPERATURE_ONLY_CAPABILITIES)],
-        "api",
-        None,
+    discovery.return_value = ModelListing(
+        models=[ModelInfo(id="gpt-5", label=None, capabilities=TEMPERATURE_ONLY_CAPABILITIES)], source="api", note=None
     )
     config = await service.build_model_config(
         {"provider": "openai", "model": "gpt-5", "temperature": 0.3},
@@ -124,7 +124,9 @@ async def test_openrouter_live_effort_survives_stale_litellm_model_map(discovery
         ),
     )
     capabilities = listing.models[0].capabilities
-    discovery.return_value = ([ModelInfo(id=model, label=None, capabilities=capabilities)], "api", None)
+    discovery.return_value = ModelListing(
+        models=[ModelInfo(id=model, label=None, capabilities=capabilities)], source="api", note=None
+    )
     monkeypatch.setattr(litellm, "supports_reasoning", lambda **kwargs: False)
 
     with pytest.raises(litellm.UnsupportedParamsError, match="reasoning_effort"):
@@ -175,7 +177,9 @@ async def test_unsupported_effort_rejected_against_discovered_levels(discovery):
         effort_levels=["low", "high"],
         default_effort="high",
     )
-    discovery.return_value = ([ModelInfo(id="new-model", label=None, capabilities=capabilities)], "api", None)
+    discovery.return_value = ModelListing(
+        models=[ModelInfo(id="new-model", label=None, capabilities=capabilities)], source="api", note=None
+    )
     config = await service.build_model_config(
         {"provider": "openai", "model": "new-model", "effort": "max"},
         owner_id=OWNER,
@@ -213,7 +217,9 @@ async def test_custom_endpoint_prefers_discovered_capabilities(api, discovery):
         effort_levels=["high"],
         default_effort="high",
     )
-    discovery.return_value = ([ModelInfo(id="gpt-4o", label=None, capabilities=capabilities)], "api", None)
+    discovery.return_value = ModelListing(
+        models=[ModelInfo(id="gpt-4o", label=None, capabilities=capabilities)], source="api", note=None
+    )
     response = await api.get("/llm-settings/openai/model-capabilities", params={"model": "gpt-4o"})
     assert response.status_code == 200
     assert response.json() == capabilities.model_dump()

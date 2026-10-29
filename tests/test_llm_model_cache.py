@@ -1,260 +1,280 @@
-"""Unit tests for llm_model_cache -- the Redis layer in front of model
-discovery. Fake Redis throughout; never a real connection or network call."""
+"""Credential identity, refresh coordination, and metadata fallback without infrastructure."""
 
-from __future__ import annotations
-
-import json
+import asyncio
 import uuid
+from unittest.mock import AsyncMock
 
 import pytest
-from motoro.services.model_capabilities import ModelCapabilities
+from motoro.services.provider_types import ModelInfo, ModelListing, ProviderError
 
+from asaree.models.user_llm_setting import UserLLMSetting
 from asaree.services import llm_model_cache as cache
-from asaree.services.llm_model_discovery import ModelInfo
 
-_USER_ID = uuid.UUID("11111111-1111-1111-1111-111111111111")
+OWNER = uuid.UUID("11111111-1111-1111-1111-111111111111")
 
 
-class _FakeRedis:
-    def __init__(self, *, fail: bool = False) -> None:
-        self.store: dict[str, str] = {}
-        self.fail = fail
-        self.set_calls: list[str] = []
+class FakeRedis:
+    def __init__(self):
+        self.values = {}
+        self.expires = {}
+        self.fail = False
 
-    async def get(self, key: str) -> str | None:
+    async def get(self, key):
         if self.fail:
-            raise ConnectionError("redis is down")
-        return self.store.get(key)
+            raise ConnectionError("unavailable")
+        if self.expires.get(key, float("inf")) <= cache.time.time():
+            self.values.pop(key, None)
+        return self.values.get(key)
 
-    async def set(self, key: str, value: str, *, ex: int) -> None:
+    async def set(self, key, value, *, ex, nx=False):
+        if nx and await self.get(key) is not None:
+            return None
         if self.fail:
-            raise ConnectionError("redis is down")
-        self.set_calls.append(key)
-        self.store[key] = value
+            raise ConnectionError("unavailable")
+        self.values[key] = value
+        self.expires[key] = cache.time.time() + ex
+        return True
 
-    async def delete(self, key: str) -> None:
-        if self.fail:
-            raise ConnectionError("redis is down")
-        self.store.pop(key, None)
-
-
-def _install(monkeypatch: pytest.MonkeyPatch, redis: _FakeRedis) -> None:
-    monkeypatch.setattr(cache, "get_redis", lambda: redis)
-
-
-def _stub_discovery(
-    monkeypatch: pytest.MonkeyPatch, result: tuple[list[ModelInfo], str, str | None], calls: list[str]
-) -> None:
-    async def _fake(*, provider: str, setting: object) -> tuple[list[ModelInfo], str, str | None]:
-        calls.append(provider)
-        return result
-
-    monkeypatch.setattr(cache, "discover_models", _fake)
+    async def execute_command(self, command, script, count, key, token):
+        assert command == "EVAL"
+        if await self.get(key) == token:
+            self.values.pop(key, None)
+            return 1
+        return 0
 
 
-def _model(model_id: str = "claude-opus-4-7") -> ModelInfo:
-    return ModelInfo(
-        id=model_id,
-        label="Claude Opus 4.7",
-        capabilities=ModelCapabilities(
-            supports_temperature=False, supports_effort=True, effort_levels=["low", "high"], default_effort="high"
-        ),
+@pytest.fixture
+def redis(monkeypatch):
+    instance = FakeRedis()
+    cache._recent.clear()
+    monkeypatch.setattr(cache, "get_redis", lambda: instance)
+    monkeypatch.setattr(cache, "consume_rate_limit", AsyncMock(return_value=(True, 0)))
+    yield instance
+    cache._recent.clear()
+
+
+def listing(model="new-model", *, source="api", error=None):
+    return ModelListing(models=[ModelInfo(id=model)], source=source, error=error)
+
+
+def credential(revision="old"):
+    return UserLLMSetting(
+        id=uuid.UUID(int=1),
+        provider="azure_foundry",
+        api_key_encrypted=f"encrypted-{revision}",
+        api_base="https://example.test",
+        azure_project_endpoint="https://example.test/api/projects/example",
     )
 
 
-async def test_fresh_cache_hit_does_not_call_the_provider(monkeypatch: pytest.MonkeyPatch) -> None:
-    redis = _FakeRedis()
-    key = cache._key(_USER_ID, "azure_foundry")
-    redis.store[key] = cache._dump([_model()], "api", None, now=cache.time.time())
-    _install(monkeypatch, redis)
-    calls: list[str] = []
-    _stub_discovery(monkeypatch, ([], "error", "should not be reached"), calls)
-
-    models, source, note = await cache.discover_models_cached(user_id=_USER_ID, provider="azure_foundry", setting=None)
-
-    assert calls == []  # the whole point
-    assert source == "api"
-    assert note is None
-    assert [m.id for m in models] == ["claude-opus-4-7"]
+async def lookup(setting=None, owner=OWNER, provider="azure_foundry"):
+    return await cache.discover_models_cached(user_id=owner, provider=provider, setting=setting)
 
 
-async def test_cache_roundtrips_capabilities(monkeypatch: pytest.MonkeyPatch) -> None:
-    # The dial the inspector renders (temperature vs effort) travels through
-    # JSON, so a lossy round-trip would silently show the wrong control.
-    redis = _FakeRedis()
-    _install(monkeypatch, redis)
-    _stub_discovery(monkeypatch, ([_model()], "api", None), [])
-
-    await cache.discover_models_cached(user_id=_USER_ID, provider="azure_foundry", setting=None)
-    models, _, _ = await cache.discover_models_cached(user_id=_USER_ID, provider="azure_foundry", setting=None)
-
-    caps = models[0].capabilities
-    assert caps.supports_temperature is False
-    assert caps.supports_effort is True
-    assert caps.effort_levels == ["low", "high"]
-    assert caps.default_effort == "high"
+async def seed(redis, data, *, setting=None, age=0):
+    key = cache._key(OWNER, "azure_foundry", setting)
+    await redis.set(key, cache._dump(data, now=cache.time.time() - age), ex=cache._RETAIN_SECONDS - age)
+    return key
 
 
-async def test_live_results_are_cached(monkeypatch: pytest.MonkeyPatch) -> None:
-    redis = _FakeRedis()
-    _install(monkeypatch, redis)
-    calls: list[str] = []
-    _stub_discovery(monkeypatch, ([_model()], "api", None), calls)
-
-    await cache.discover_models_cached(user_id=_USER_ID, provider="azure_foundry", setting=None)
-    await cache.discover_models_cached(user_id=_USER_ID, provider="azure_foundry", setting=None)
-
-    assert calls == ["azure_foundry"]  # second call served from cache
+async def test_fresh_cache_avoids_discovery_and_budget(redis, monkeypatch):
+    expected = listing()
+    await seed(redis, expected)
+    discover = AsyncMock(side_effect=AssertionError("must use cache"))
+    monkeypatch.setattr(cache, "discover_models", discover)
+    assert await lookup() == expected
+    discover.assert_not_awaited()
+    cache.consume_rate_limit.assert_not_awaited()
 
 
-async def test_static_catalog_is_not_cached(monkeypatch: pytest.MonkeyPatch) -> None:
-    # Caching it would buy nothing (no network call to save) and add a second
-    # place for it to go stale.
-    redis = _FakeRedis()
-    _install(monkeypatch, redis)
-    _stub_discovery(monkeypatch, ([_model()], "static", None), [])
+async def test_live_results_roundtrip_complete_metadata(redis, monkeypatch):
+    from motoro.services.provider_types import DefaultValue
 
-    await cache.discover_models_cached(user_id=_USER_ID, provider="anthropic", setting=None)
-
-    assert redis.set_calls == []
-
-
-async def test_errors_are_not_cached(monkeypatch: pytest.MonkeyPatch) -> None:
-    redis = _FakeRedis()
-    _install(monkeypatch, redis)
-    _stub_discovery(monkeypatch, ([], "error", "no project endpoint"), [])
-
-    models, source, note = await cache.discover_models_cached(user_id=_USER_ID, provider="azure_foundry", setting=None)
-
-    assert redis.set_calls == []
-    assert source == "error"
-    assert note == "no project endpoint"
-    assert models == []
+    expected = listing()
+    expected.models[0].defaults.temperature = DefaultValue(value=0, source="provider")
+    expected.models[0].capability_sources = {"supports_temperature": "unknown"}
+    monkeypatch.setattr(cache, "discover_models", AsyncMock(return_value=expected))
+    assert await lookup() == expected
+    cache._recent.clear()
+    assert await lookup() == expected
+    cache.discover_models.assert_awaited_once()
 
 
-async def test_stale_entry_is_served_when_the_provider_is_unreachable(monkeypatch: pytest.MonkeyPatch) -> None:
-    # An empty dropdown is exactly what ModelField's free-text escape hatch
-    # exists to survive, so a transient provider failure must not produce one.
-    redis = _FakeRedis()
-    key = cache._key(_USER_ID, "azure_foundry")
-    redis.store[key] = cache._dump([_model()], "api", None, now=cache.time.time() - cache._FRESH_SECONDS - 1)
-    _install(monkeypatch, redis)
-    calls: list[str] = []
-    _stub_discovery(monkeypatch, ([], "error", "connection refused"), calls)
-
-    models, source, note = await cache.discover_models_cached(user_id=_USER_ID, provider="azure_foundry", setting=None)
-
-    assert calls == ["azure_foundry"]  # staleness means we DO retry
-    assert [m.id for m in models] == ["claude-opus-4-7"]
-    assert source == "api"
-    assert note == cache.STALE_NOTE
+@pytest.mark.parametrize("change", ["api_key_encrypted", "api_base", "azure_project_endpoint", "id"])
+async def test_credential_changes_get_a_new_namespace(redis, monkeypatch, change):
+    old = credential()
+    new = credential()
+    setattr(new, change, uuid.uuid4() if change == "id" else "changed")
+    await seed(redis, listing("old-project"), setting=old)
+    monkeypatch.setattr(cache, "discover_models", AsyncMock(return_value=listing("new-project")))
+    assert (await lookup(new)).models[0].id == "new-project"
+    assert (await lookup(old)).models[0].id == "old-project"
 
 
-async def test_stale_entry_is_replaced_when_rediscovery_succeeds(monkeypatch: pytest.MonkeyPatch) -> None:
-    redis = _FakeRedis()
-    key = cache._key(_USER_ID, "azure_foundry")
-    redis.store[key] = cache._dump([_model("old-deployment")], "api", None, now=cache.time.time() - 10**6)
-    _install(monkeypatch, redis)
-    _stub_discovery(monkeypatch, ([_model("new-deployment")], "api", None), [])
+async def test_inflight_old_credential_cannot_repopulate_current_cache(redis, monkeypatch):
+    started, finish = asyncio.Event(), asyncio.Event()
+    old, new = credential(), credential("new")
 
-    models, source, note = await cache.discover_models_cached(user_id=_USER_ID, provider="azure_foundry", setting=None)
+    async def discover(*, provider, setting):
+        if setting is old:
+            started.set()
+            await finish.wait()
+            return listing("old-project")
+        return listing("new-project")
 
-    assert [m.id for m in models] == ["new-deployment"]
-    assert note is None
-    assert "new-deployment" in redis.store[key]
-
-
-async def test_unreadable_payload_falls_back_to_rediscovery(monkeypatch: pytest.MonkeyPatch) -> None:
-    # Leftovers from an older shape of this module must not 500 the endpoint.
-    redis = _FakeRedis()
-    key = cache._key(_USER_ID, "azure_foundry")
-    redis.store[key] = json.dumps({"unexpected": "shape"})
-    _install(monkeypatch, redis)
-    _stub_discovery(monkeypatch, ([_model()], "api", None), [])
-
-    models, source, _ = await cache.discover_models_cached(user_id=_USER_ID, provider="azure_foundry", setting=None)
-
-    assert source == "api"
-    assert [m.id for m in models] == ["claude-opus-4-7"]
+    monkeypatch.setattr(cache, "discover_models", discover)
+    pending = asyncio.create_task(lookup(old))
+    await started.wait()
+    assert (await lookup(new)).models[0].id == "new-project"
+    finish.set()
+    await pending
+    assert (await lookup(new)).models[0].id == "new-project"
 
 
-async def test_a_broken_cache_degrades_to_calling_the_provider(monkeypatch: pytest.MonkeyPatch) -> None:
-    # A cache that's down must mean "slower," never "broken."
-    _install(monkeypatch, _FakeRedis(fail=True))
-    calls: list[str] = []
-    _stub_discovery(monkeypatch, ([_model()], "api", None), calls)
-
-    models, source, note = await cache.discover_models_cached(user_id=_USER_ID, provider="azure_foundry", setting=None)
-
-    assert calls == ["azure_foundry"]
-    assert source == "api"
-    assert [m.id for m in models] == ["claude-opus-4-7"]
-    assert note is None
+async def test_deleted_credential_cannot_read_saved_credential_cache(redis, monkeypatch):
+    await seed(redis, listing("private-deployment"), setting=credential())
+    expected = listing("public-model", source="static")
+    monkeypatch.setattr(cache, "discover_models", AsyncMock(return_value=expected))
+    assert await lookup(None) == expected
 
 
-async def test_cache_is_scoped_per_user(monkeypatch: pytest.MonkeyPatch) -> None:
-    # A discovered list is a property of the credential, not the provider --
-    # one user's list must never be served to another.
-    other_user = uuid.UUID("22222222-2222-2222-2222-222222222222")
-    redis = _FakeRedis()
-    mine = cache._dump([_model("mine")], "api", None, now=cache.time.time())
-    redis.store[cache._key(_USER_ID, "azure_foundry")] = mine
-    _install(monkeypatch, redis)
-    _stub_discovery(monkeypatch, ([_model("theirs")], "api", None), [])
-
-    models, _, _ = await cache.discover_models_cached(user_id=other_user, provider="azure_foundry", setting=None)
-
-    assert [m.id for m in models] == ["theirs"]
-
-
-async def test_invalidate_drops_only_that_users_provider_entry(monkeypatch: pytest.MonkeyPatch) -> None:
-    redis = _FakeRedis()
-    mine = cache._key(_USER_ID, "azure_foundry")
-    other_provider = cache._key(_USER_ID, "openai")
-    redis.store[mine] = "x"
-    redis.store[other_provider] = "y"
-    _install(monkeypatch, redis)
-
-    await cache.invalidate_models_cache(user_id=_USER_ID, provider="azure_foundry")
-
-    assert mine not in redis.store
-    assert other_provider in redis.store
+@pytest.mark.parametrize("source", ["static", "error"])
+@pytest.mark.parametrize("error", [ProviderError(kind="timeout"), ProviderError(kind="http", http_status=503)])
+async def test_transient_failures_reuse_stale_live_metadata(redis, monkeypatch, source, error):
+    key = await seed(redis, listing("live-only-model"), age=cache._FRESH_SECONDS + 1)
+    original = redis.values[key]
+    failed = listing("catalog-model", source=source, error=error)
+    monkeypatch.setattr(cache, "discover_models", AsyncMock(return_value=failed))
+    result = await lookup()
+    assert result.models[0].id == "live-only-model"
+    assert result.note == cache.STALE_NOTE
+    assert result.error == error
+    assert redis.values[key] == original
+    assert await lookup() == result
+    cache.discover_models.assert_awaited_once()
 
 
-async def test_invalidate_survives_a_broken_cache(monkeypatch: pytest.MonkeyPatch) -> None:
-    _install(monkeypatch, _FakeRedis(fail=True))
-    await cache.invalidate_models_cache(user_id=_USER_ID, provider="azure_foundry")  # must not raise
+async def test_rejected_credentials_do_not_serve_stale_as_authoritative(redis, monkeypatch):
+    await seed(redis, listing("old-model"), age=cache._FRESH_SECONDS + 1)
+    failed = ModelListing(source="error", error=ProviderError(kind="credential_rejected", http_status=401))
+    monkeypatch.setattr(cache, "discover_models", AsyncMock(return_value=failed))
+    assert await lookup() == failed
 
 
-@pytest.mark.parametrize("provider", ["openrouter", "local"])
-async def test_legacy_sampling_cache_is_replaced_and_invalidated(monkeypatch, provider):
-    redis = _FakeRedis()
-    legacy_key = f"llm:models:{_USER_ID}:{provider}"
-    redis.store[legacy_key] = cache._dump([_model("legacy")], "api", None, now=cache.time.time())
-    _install(monkeypatch, redis)
-    calls = []
-    _stub_discovery(monkeypatch, ([_model("fresh")], "api", None), calls)
-
-    models, _, _ = await cache.discover_models_cached(user_id=_USER_ID, provider=provider, setting=None)
-    assert calls == [provider]
-    assert models[0].id == "fresh"
-    assert redis.set_calls == [cache._key(_USER_ID, provider)]
-
-    await cache.discover_models_cached(user_id=_USER_ID, provider=provider, setting=None)
-    assert calls == [provider]
-    await cache.invalidate_models_cache(user_id=_USER_ID, provider=provider)
-    assert cache._key(_USER_ID, provider) not in redis.store
+async def test_retained_listing_expires_without_failure_extending_it(redis, monkeypatch):
+    now = cache.time.time()
+    await seed(redis, listing("old-model"), age=cache._RETAIN_SECONDS - 1)
+    failed = ModelListing(source="error", error=ProviderError(kind="network"))
+    monkeypatch.setattr(cache, "discover_models", AsyncMock(return_value=failed))
+    assert (await lookup()).models
+    monkeypatch.setattr(cache.time, "time", lambda: now + cache._RETRY_SECONDS + 1)
+    cache._recent.clear()
+    assert await lookup() == failed
 
 
-async def test_openrouter_outage_never_serves_legacy_effort_metadata(monkeypatch):
-    redis = _FakeRedis()
-    redis.store[f"llm:models:{_USER_ID}:openrouter"] = cache._dump(
-        [_model()], "api", None, now=cache.time.time() - cache._FRESH_SECONDS - 1
+@pytest.mark.parametrize("redis_down", [False, True])
+async def test_parallel_misses_share_one_refresh_even_without_redis(redis, monkeypatch, redis_down):
+    redis.fail = redis_down
+    started, finish = asyncio.Event(), asyncio.Event()
+
+    async def discover(**kwargs):
+        started.set()
+        await finish.wait()
+        return listing()
+
+    discover = AsyncMock(side_effect=discover)
+    monkeypatch.setattr(cache, "discover_models", discover)
+    pending = [asyncio.create_task(lookup()) for _ in range(8)]
+    await started.wait()
+    finish.set()
+    results = await asyncio.gather(*pending)
+    assert all(result == listing() for result in results)
+    discover.assert_awaited_once()
+
+
+async def test_cancelled_waiter_does_not_cancel_other_waiters(redis, monkeypatch):
+    started, finish = asyncio.Event(), asyncio.Event()
+
+    async def discover(**kwargs):
+        started.set()
+        await finish.wait()
+        return listing()
+
+    monkeypatch.setattr(cache, "discover_models", AsyncMock(side_effect=discover))
+    cancelled = asyncio.create_task(lookup())
+    other = asyncio.create_task(lookup())
+    await started.wait()
+    cancelled.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await cancelled
+    finish.set()
+    assert await other == listing()
+    cache.discover_models.assert_awaited_once()
+
+
+async def test_workers_share_refresh_lease_and_failure_cooldown(redis, monkeypatch):
+    async def discover(**kwargs):
+        await asyncio.sleep(0.01)
+        return ModelListing(source="error", error=ProviderError(kind="network"))
+
+    discover = AsyncMock(side_effect=discover)
+    monkeypatch.setattr(cache, "discover_models", discover)
+    key = cache._key(OWNER, "azure_foundry")
+    # Bypass process-local task sharing to exercise independent worker paths.
+    results = await asyncio.gather(
+        *(cache._refresh(key=key, user_id=OWNER, provider="azure_foundry", setting=None, cached=None) for _ in range(4))
     )
-    _install(monkeypatch, redis)
-    _stub_discovery(monkeypatch, ([], "error", "offline"), [])
-    assert await cache.discover_models_cached(user_id=_USER_ID, provider="openrouter", setting=None) == (
-        [],
-        "error",
-        "offline",
+    assert all(result.error.kind == "network" for result in results)
+    cache._recent.clear()
+    assert (await lookup()).error.kind == "network"
+    discover.assert_awaited_once()
+
+
+async def test_failure_cooldown_expires_and_retries(redis, monkeypatch):
+    now = cache.time.time()
+    failed = ModelListing(source="error", error=ProviderError(kind="network"))
+    discover = AsyncMock(side_effect=[failed, listing()])
+    monkeypatch.setattr(cache, "discover_models", discover)
+    assert await lookup() == failed
+    assert await lookup() == failed
+    monkeypatch.setattr(cache.time, "time", lambda: now + cache._RETRY_SECONDS + 1)
+    cache._recent.clear()
+    assert await lookup() == listing()
+    assert discover.await_count == 2
+
+
+async def test_shared_budget_blocks_refresh_and_is_independent_of_credential(redis, monkeypatch):
+    monkeypatch.setattr(cache, "consume_rate_limit", AsyncMock(return_value=(False, 23)))
+    discover = AsyncMock(side_effect=AssertionError("budget exhausted"))
+    monkeypatch.setattr(cache, "discover_models", discover)
+    for saved in (None, credential(), credential("new")):
+        with pytest.raises(cache.ModelDiscoveryRateLimitError) as caught:
+            await lookup(saved)
+        assert caught.value.retry_after == 23
+    assert all(
+        call.args == (f"model-refresh:{OWNER}:azure_foundry",) for call in cache.consume_rate_limit.call_args_list
     )
+    discover.assert_not_awaited()
+
+
+async def test_corrupt_or_legacy_cache_is_rediscovered(redis, monkeypatch):
+    redis.values[cache._key(OWNER, "azure_foundry")] = "invalid JSON"
+    redis.values[f"llm:models:{OWNER}:azure_foundry:v4"] = "old payload"
+    monkeypatch.setattr(cache, "discover_models", AsyncMock(return_value=listing()))
+    assert await lookup() == listing()
+
+
+async def test_user_and_provider_scoping(redis, monkeypatch):
+    await seed(redis, listing("private"))
+    monkeypatch.setattr(cache, "discover_models", AsyncMock(return_value=listing("other")))
+    assert (await lookup(owner=uuid.uuid4())).models[0].id == "other"
+    assert (await lookup(provider="local")).models[0].id == "other"
+
+
+async def test_successful_check_seeds_only_its_credential(redis):
+    old, new = credential(), credential("new")
+    await cache.store_models_cache(user_id=OWNER, provider="azure_foundry", setting=new, models=listing("new").models)
+    await cache.store_models_cache(user_id=OWNER, provider="azure_foundry", setting=old, models=listing("old").models)
+    assert (await lookup(new)).models[0].id == "new"
+    assert (await lookup(old)).models[0].id == "old"
+    assert "encrypted-new" not in " ".join(redis.values)

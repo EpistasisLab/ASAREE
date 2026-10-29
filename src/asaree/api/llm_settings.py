@@ -17,7 +17,11 @@ from pydantic import BaseModel
 from asaree.deps import CurrentUser, DbSession
 from asaree.services.credential_resolver import SUPPORTED_PROVIDERS
 from asaree.services.llm_connection_check import check_connection
-from asaree.services.llm_model_cache import discover_models_cached, invalidate_models_cache, store_models_cache
+from asaree.services.llm_model_cache import (
+    ModelDiscoveryRateLimitError,
+    discover_models_cached,
+    store_models_cache,
+)
 from asaree.services.llm_model_discovery import ModelInfo
 from asaree.services.model_config import resolve_model_capabilities
 from asaree.services.provider_config import ProviderConfigurationError
@@ -127,11 +131,8 @@ async def upsert_llm_setting_endpoint(
         )
     except ProviderConfigurationError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from None
-    # A new key can reach a different set of models than the old one, and a
-    # changed Azure project endpoint points at an entirely different set of
-    # deployments -- either way the cached list is now about a credential
-    # that no longer exists.
-    await invalidate_models_cache(user_id=user.id, provider=body.provider)
+    # Cache identity follows the saved credential, so in-flight lookups of
+    # the old credential cannot repopulate the new credential's namespace.
     return LLMSettingResponse(
         provider=setting.provider, api_base=setting.api_base, azure_project_endpoint=setting.azure_project_endpoint
     )
@@ -153,7 +154,6 @@ async def delete_llm_setting_endpoint(provider: str, user: CurrentUser, db: DbSe
     deleted = await delete_setting(db, user_id=user.id, provider=provider)
     if not deleted:
         raise HTTPException(status_code=404, detail="No credential saved for this provider.")
-    await invalidate_models_cache(user_id=user.id, provider=provider)
 
 
 @router.get("/{provider}/connection", response_model=LLMConnectionCheckResponse)
@@ -191,7 +191,7 @@ async def check_connection_endpoint(provider: str, user: CurrentUser, db: DbSess
     except ProviderConfigurationError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from None
     if provider == "azure_foundry" and result.status == "ok" and result.models is not None:
-        await store_models_cache(user_id=user.id, provider=provider, models=result.models)
+        await store_models_cache(user_id=user.id, provider=provider, setting=setting, models=result.models)
     return LLMConnectionCheckResponse(
         provider=provider,
         status=result.status,
@@ -222,13 +222,15 @@ async def list_models_endpoint(provider: str, user: CurrentUser, db: DbSession) 
 
     setting = await get_setting(db, user_id=user.id, provider=provider)
     try:
-        models, source, note = await discover_models_cached(user_id=user.id, provider=provider, setting=setting)
+        listing = await discover_models_cached(user_id=user.id, provider=provider, setting=setting)
     except ProviderConfigurationError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from None
+    except ModelDiscoveryRateLimitError as exc:
+        raise _discovery_rate_limit_response(exc) from None
     return LLMSettingModelsResponse(
-        models=[_model_response(model, provider) for model in models],
-        source=source,
-        note=note,
+        models=[_model_response(model, provider) for model in listing.models],
+        source=listing.source,
+        note=listing.note,
     )
 
 
@@ -244,3 +246,13 @@ async def model_capabilities_endpoint(
         return await resolve_model_capabilities(provider=provider, model=model, db=db, owner_id=user.id)
     except ProviderConfigurationError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from None
+    except ModelDiscoveryRateLimitError as exc:
+        raise _discovery_rate_limit_response(exc) from None
+
+
+def _discovery_rate_limit_response(exc: ModelDiscoveryRateLimitError) -> HTTPException:
+    return HTTPException(
+        status_code=429,
+        headers={"Retry-After": str(exc.retry_after)},
+        detail={"message": str(exc), "retry_after_seconds": exc.retry_after},
+    )

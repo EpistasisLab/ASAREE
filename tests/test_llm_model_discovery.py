@@ -26,7 +26,8 @@ def _foundry_setting(api_base: str = "my-resource", azure_project_endpoint: str 
 
 
 async def test_discover_models_anthropic_without_a_credential_returns_static_catalog() -> None:
-    models, source, note = await discovery.discover_models(provider="anthropic", setting=None)
+    listing = await discovery.discover_models(provider="anthropic", setting=None)
+    models, source, note = listing.models, listing.source, listing.note
     assert source == "static"
     assert note is None
     assert any(m.id == "claude-sonnet-5" for m in models)
@@ -34,21 +35,24 @@ async def test_discover_models_anthropic_without_a_credential_returns_static_cat
 
 
 async def test_discover_models_openai_returns_static_catalog() -> None:
-    models, source, note = await discovery.discover_models(provider="openai", setting=None)
+    listing = await discovery.discover_models(provider="openai", setting=None)
+    models, source = listing.models, listing.source
     assert source == "static"
     assert models  # non-empty
     assert all(m.id for m in models)
 
 
 async def test_discover_models_azure_without_setting_returns_error() -> None:
-    models, source, note = await discovery.discover_models(provider="azure_foundry", setting=None)
+    listing = await discovery.discover_models(provider="azure_foundry", setting=None)
+    models, source, note = listing.models, listing.source, listing.note
     assert models == []
     assert source == "error"
     assert note
 
 
 async def test_discover_models_unsupported_provider_returns_error() -> None:
-    models, source, note = await discovery.discover_models(provider="bedrock", setting=None)
+    listing = await discovery.discover_models(provider="bedrock", setting=None)
+    models, source, note = listing.models, listing.source, listing.note
     assert models == []
     assert source == "error"
     assert "bedrock" in note
@@ -100,7 +104,8 @@ async def test_discover_models_azure_without_a_project_endpoint_asks_for_one_wit
 
     monkeypatch.setattr(providers.httpx, "AsyncClient", _explode)
 
-    models, source, note = await discovery.discover_models(provider="azure_foundry", setting=_foundry_setting())
+    listing = await discovery.discover_models(provider="azure_foundry", setting=_foundry_setting())
+    models, source, note = listing.models, listing.source, listing.note
 
     assert models == []
     assert source == "error"
@@ -140,7 +145,8 @@ async def test_discover_models_azure_project_endpoint_maps_real_response_shape(m
     )
 
     setting = _foundry_setting(azure_project_endpoint=_PROJECT_ENDPOINT)
-    models, source, note = await discovery.discover_models(provider="azure_foundry", setting=setting)
+    listing = await discovery.discover_models(provider="azure_foundry", setting=setting)
+    models, source, note = listing.models, listing.source, listing.note
 
     assert source == "api"
     assert note is None
@@ -181,7 +187,8 @@ async def test_discover_models_azure_project_endpoint_failure_scrubs_api_key(mon
     )
 
     setting = _foundry_setting(azure_project_endpoint=_PROJECT_ENDPOINT)
-    models, source, note = await discovery.discover_models(provider="azure_foundry", setting=setting)
+    listing = await discovery.discover_models(provider="azure_foundry", setting=setting)
+    models, source, note = listing.models, listing.source, listing.note
 
     assert models == []
     assert source == "error"
@@ -252,7 +259,8 @@ async def test_anthropic_reads_effort_levels_from_the_live_capability_tree(
     }
     monkeypatch.setattr(providers.httpx, "AsyncClient", lambda **kwargs: _PagingClient([page], captured))
 
-    models, source, note = await discovery.discover_models(provider="anthropic", setting=_anthropic_setting())
+    listing = await discovery.discover_models(provider="anthropic", setting=_anthropic_setting())
+    models, source, note = listing.models, listing.source, listing.note
 
     assert source == "api"
     assert note is None
@@ -285,7 +293,8 @@ async def test_anthropic_missing_defaults_are_not_fabricated(monkeypatch: pytest
     }
     monkeypatch.setattr(providers.httpx, "AsyncClient", lambda **kwargs: _PagingClient([page], {}))
 
-    models, _, _ = await discovery.discover_models(provider="anthropic", setting=_anthropic_setting())
+    listing = await discovery.discover_models(provider="anthropic", setting=_anthropic_setting())
+    models, _, _ = listing.models, listing.source, listing.note
     by_id = {m.id: m for m in models}
 
     assert by_id["has-medium"].capabilities.default_effort is None
@@ -300,7 +309,8 @@ async def test_anthropic_follows_pagination(monkeypatch: pytest.MonkeyPatch) -> 
     ]
     monkeypatch.setattr(providers.httpx, "AsyncClient", lambda **kwargs: _PagingClient(pages, captured))
 
-    models, source, _ = await discovery.discover_models(provider="anthropic", setting=_anthropic_setting())
+    listing = await discovery.discover_models(provider="anthropic", setting=_anthropic_setting())
+    models, source, _ = listing.models, listing.source, listing.note
 
     assert source == "api"
     assert [m.id for m in models] == ["first", "second"]
@@ -312,7 +322,8 @@ async def test_anthropic_missing_capability_tree_remains_unknown(monkeypatch: py
     page = {"data": [{"id": "mystery-model", "display_name": "Mystery"}], "has_more": False}
     monkeypatch.setattr(providers.httpx, "AsyncClient", lambda **kwargs: _PagingClient([page], {}))
 
-    models, _, _ = await discovery.discover_models(provider="anthropic", setting=_anthropic_setting())
+    listing = await discovery.discover_models(provider="anthropic", setting=_anthropic_setting())
+    models, _, _ = listing.models, listing.source, listing.note
 
     assert models[0].capabilities.supports_effort is None
     assert models[0].capabilities.supports_temperature is None
@@ -330,7 +341,8 @@ async def test_anthropic_failure_falls_back_to_the_catalog_and_scrubs_the_key(
         lambda **kwargs: _FakeAsyncClient(_FakeResponse({}, status_code=401), captured_headers=[]),
     )
 
-    models, source, note = await discovery.discover_models(provider="anthropic", setting=_anthropic_setting())
+    listing = await discovery.discover_models(provider="anthropic", setting=_anthropic_setting())
+    models, source, note = listing.models, listing.source, listing.note
 
     assert source == "static"
     assert models  # the curated catalog, not []
@@ -358,7 +370,8 @@ async def test_anthropic_empty_listing_falls_back_to_the_catalog(monkeypatch: py
         providers.httpx, "AsyncClient", lambda **kwargs: _PagingClient([{"data": [], "has_more": False}], {})
     )
 
-    models, source, _ = await discovery.discover_models(provider="anthropic", setting=_anthropic_setting())
+    listing = await discovery.discover_models(provider="anthropic", setting=_anthropic_setting())
+    models, source, _ = listing.models, listing.source, listing.note
 
     assert source == "static"
     assert models
@@ -397,7 +410,8 @@ async def test_openrouter_discovery_needs_no_credential(monkeypatch: pytest.Monk
     response = _FakeResponse({"data": [{"id": "anthropic/claude-sonnet-5", "name": "Claude Sonnet 5"}]})
     monkeypatch.setattr(providers.httpx, "AsyncClient", lambda **kwargs: _SimpleClient(response, captured=captured))
 
-    models, source, note = await discovery.discover_models(provider="openrouter", setting=None)
+    listing = await discovery.discover_models(provider="openrouter", setting=None)
+    models, source, note = listing.models, listing.source, listing.note
 
     assert source == "api"
     assert note is None
@@ -423,7 +437,8 @@ async def test_openrouter_model_capabilities_resolve_via_motoros_registry(monkey
     response = _FakeResponse({"data": [{"id": "anthropic/claude-opus-5", "name": "Claude Opus 5"}]})
     monkeypatch.setattr(providers.httpx, "AsyncClient", lambda **kwargs: _SimpleClient(response, captured={}))
 
-    models, _, _ = await discovery.discover_models(provider="openrouter", setting=None)
+    listing = await discovery.discover_models(provider="openrouter", setting=None)
+    models, _, _ = listing.models, listing.source, listing.note
 
     assert models[0].capabilities.supports_effort is True
     assert models[0].capabilities.supports_temperature is False
@@ -494,7 +509,8 @@ async def test_openrouter_model_capabilities_resolve_via_motoros_registry(monkey
 async def test_openrouter_reads_sampling_metadata(monkeypatch, metadata, temperature, effort, levels, default):
     response = _FakeResponse({"data": [{"id": "qwen/qwen3.8-27b", **metadata}]})
     monkeypatch.setattr(providers.httpx, "AsyncClient", lambda **kwargs: _SimpleClient(response, captured={}))
-    models, _, _ = await discovery.discover_models(provider="openrouter", setting=None)
+    listing = await discovery.discover_models(provider="openrouter", setting=None)
+    models, _, _ = listing.models, listing.source, listing.note
     caps = models[0].capabilities
     assert caps.supports_temperature is temperature
     assert caps.supports_effort is effort
@@ -512,7 +528,8 @@ async def test_openrouter_temperature_defaults_and_known_mode_restrictions(monke
     }
     response = _FakeResponse({"data": [entry]})
     monkeypatch.setattr(providers.httpx, "AsyncClient", lambda **kwargs: _SimpleClient(response, captured={}))
-    models, _, _ = await discovery.discover_models(provider="openrouter", setting=None)
+    listing = await discovery.discover_models(provider="openrouter", setting=None)
+    models, _, _ = listing.models, listing.source, listing.note
     caps = models[0].capabilities
     assert caps.default_temperature == default
     assert caps.supports_temperature is caps.supports_effort is True
@@ -528,7 +545,8 @@ async def test_anthropic_explicit_defaults_and_independent_temperature_support(m
         },
     }
     monkeypatch.setattr(providers.httpx, "AsyncClient", lambda **kwargs: _PagingClient([{"data": [entry]}], {}))
-    models, _, _ = await discovery.discover_models(provider="anthropic", setting=_anthropic_setting())
+    listing = await discovery.discover_models(provider="anthropic", setting=_anthropic_setting())
+    models, _, _ = listing.models, listing.source, listing.note
     caps = models[0].capabilities
     assert caps.supports_temperature is caps.supports_effort is True
     assert caps.default_temperature == 0.0
@@ -547,7 +565,8 @@ async def test_openrouter_live_metadata_overrides_claude_registry(monkeypatch):
         }
     )
     monkeypatch.setattr(providers.httpx, "AsyncClient", lambda **kwargs: _SimpleClient(response, captured={}))
-    models, _, _ = await discovery.discover_models(provider="openrouter", setting=None)
+    listing = await discovery.discover_models(provider="openrouter", setting=None)
+    models, _, _ = listing.models, listing.source, listing.note
     assert models[0].capabilities.supports_temperature is True
     assert models[0].capabilities.supports_effort is False
 
@@ -568,7 +587,8 @@ async def test_openrouter_failure_scrubs_the_key(monkeypatch: pytest.MonkeyPatch
     response = _FakeResponse({}, status_code=401)
     monkeypatch.setattr(providers.httpx, "AsyncClient", lambda **kwargs: _SimpleClient(response, captured={}))
 
-    models, source, note = await discovery.discover_models(provider="openrouter", setting=_openrouter_setting())
+    listing = await discovery.discover_models(provider="openrouter", setting=_openrouter_setting())
+    models, source, note = listing.models, listing.source, listing.note
 
     assert models == []
     assert source == "error"
@@ -582,7 +602,8 @@ def _local_setting(api_key: str = "", api_base: str | None = "http://localhost:8
 async def test_local_unknown_models_remain_unknown_without_changing_known_claude(monkeypatch):
     response = _FakeResponse({"data": [{"id": "qwen3.8-27b"}, {"id": "claude-opus-5"}]})
     monkeypatch.setattr(providers.httpx, "AsyncClient", lambda **kwargs: _SimpleClient(response, captured={}))
-    models, _, _ = await discovery.discover_models(provider="local", setting=_local_setting())
+    listing = await discovery.discover_models(provider="local", setting=_local_setting())
+    models, _, _ = listing.models, listing.source, listing.note
     by_id = {model.id: model.capabilities for model in models}
     assert by_id["qwen3.8-27b"].supports_effort is None
     assert by_id["qwen3.8-27b"].supports_temperature is None
@@ -590,7 +611,8 @@ async def test_local_unknown_models_remain_unknown_without_changing_known_claude
 
 
 async def test_local_discovery_without_a_base_url_returns_error() -> None:
-    models, source, note = await discovery.discover_models(provider="local", setting=None)
+    listing = await discovery.discover_models(provider="local", setting=None)
+    models, source, note = listing.models, listing.source, listing.note
     assert models == []
     assert source == "error"
     assert note
@@ -601,7 +623,8 @@ async def test_local_discovery_uses_placeholder_key_when_unset(monkeypatch: pyte
     response = _FakeResponse({"data": [{"id": "llama-3-70b-instruct"}]})
     monkeypatch.setattr(providers.httpx, "AsyncClient", lambda **kwargs: _SimpleClient(response, captured=captured))
 
-    models, source, note = await discovery.discover_models(provider="local", setting=_local_setting())
+    listing = await discovery.discover_models(provider="local", setting=_local_setting())
+    models, source, note = listing.models, listing.source, listing.note
 
     assert source == "api"
     assert note is None
@@ -618,7 +641,8 @@ async def test_local_discovery_no_listing_route_surfaces_as_error_source_so_the_
     response = _FakeResponse({}, status_code=404)
     monkeypatch.setattr(providers.httpx, "AsyncClient", lambda **kwargs: _SimpleClient(response, captured={}))
 
-    models, source, note = await discovery.discover_models(provider="local", setting=_local_setting())
+    listing = await discovery.discover_models(provider="local", setting=_local_setting())
+    models, source, note = listing.models, listing.source, listing.note
 
     assert models == []
     assert source == "error"
@@ -635,7 +659,8 @@ async def test_openai_stays_on_the_curated_catalog_without_calling_out(monkeypat
     monkeypatch.setattr(providers.httpx, "AsyncClient", _explode)
 
     setting = UserLLMSetting(provider="openai", api_key_encrypted=encrypt("secret-key"), api_base=None)
-    models, source, note = await discovery.discover_models(provider="openai", setting=setting)
+    listing = await discovery.discover_models(provider="openai", setting=setting)
+    models, source, note = listing.models, listing.source, listing.note
 
     assert source == "static"
     assert note is None

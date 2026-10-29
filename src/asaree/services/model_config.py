@@ -7,7 +7,7 @@ from typing import Any
 
 from motoro.schemas.agent import ModelConfig
 from motoro.services.model_capabilities import ModelCapabilities
-from motoro.services.provider_types import ModelInfo, ModelListing
+from motoro.services.provider_types import ModelInfo
 from motoro.services.providers import get_model_metadata
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -29,8 +29,7 @@ async def resolve_model_metadata(*, provider: str, model: str, db: AsyncSession,
     listing = None
     if provider in SUPPORTED_PROVIDERS:
         setting = await get_setting(db, user_id=owner_id, provider=provider)
-        models, source, note = await discover_models_cached(user_id=owner_id, provider=provider, setting=setting)
-        listing = ModelListing(models=models, source=source, note=note)
+        listing = await discover_models_cached(user_id=owner_id, provider=provider, setting=setting)
     return get_model_metadata(model=model, listing=listing)
 
 

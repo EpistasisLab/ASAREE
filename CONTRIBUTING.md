@@ -45,9 +45,12 @@ and defaults, credential isolation, and inference integration. Run full CI on
 the PR and the resulting integration commit. Commit pins are integration inputs,
 not a production release dependency policy.
 
-For the provider-operations integration, Motoro PR #15 merged as
-`227311f683e6be629ac4e7b2cc93a1ed1323d084`. That commit is the temporary integration
-pin. **Motoro must be released first.** Before ASAREE's production release:
+The provider-operations integration was first tested against Motoro commit
+`227311f683e6be629ac4e7b2cc93a1ed1323d084`
+([EpistasisLab/motoro#15](https://github.com/EpistasisLab/motoro/pull/15)). Motoro
+subsequently released those changes in `v0.14.0`, now pinned by ASAREE. For future
+integrations, **release Motoro first** and complete this sequence before ASAREE's
+production release:
 
 1. Replace the integration pin with the tested Motoro release tag. Update the
    installed-revision regression check to verify the tag's source provenance.

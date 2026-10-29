@@ -1,7 +1,7 @@
 # ASAREE
 
 [![Latest release](https://img.shields.io/github/v/release/EpistasisLab/ASAREE?display_name=tag&sort=semver)](https://github.com/EpistasisLab/ASAREE/releases/latest)
-[![CI](https://github.com/EpistasisLab/ASAREE/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/EpistasisLab/ASAREE/actions/workflows/ci.yml)
+[![CI](https://github.com/EpistasisLab/ASAREE/actions/workflows/ci.yml/badge.svg?branch=develop)](https://github.com/EpistasisLab/ASAREE/actions/workflows/ci.yml)
 [![Python](https://img.shields.io/badge/Python-%E2%89%A53.12-3776AB?logo=python&logoColor=white)](https://github.com/EpistasisLab/ASAREE/blob/main/pyproject.toml)
 [![License](https://img.shields.io/github/license/EpistasisLab/ASAREE)](https://github.com/EpistasisLab/ASAREE/blob/main/LICENSE)
 
@@ -35,9 +35,10 @@ the same source later. Repository administrators enforce this policy with
 GitHub's release immutability setting; ordinary Git tags are not inherently
 immutable.
 
-The `main` branch contains the latest development version. It may include
-changes that have not yet been released or fully validated for production, so
-do not use `main` when an exact, stable version matters.
+The default branch, `develop`, integrates completed features. `main` holds
+released code and advances through deliberate release PRs from `develop`.
+Use a release tag when an exact, stable version matters. See
+[Contributing](CONTRIBUTING.md) for feature, release, and hotfix workflows.
 
 ## Get started
 
@@ -56,10 +57,10 @@ docker compose up -d --build
 ```
 
 Contributors who intentionally want the current development version can clone
-`main` instead:
+`develop` instead:
 
 ```bash
-git clone --branch main https://github.com/EpistasisLab/ASAREE.git
+git clone --branch develop https://github.com/EpistasisLab/ASAREE.git
 ```
 
 That brings up Postgres, Redis, both migration steps, the API, the run worker,

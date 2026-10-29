@@ -41,10 +41,8 @@ def native_permutations(frame, config):
         scale = "log response"
     else:
         scale = "response"
-    interactions = {":".join(term) for term in builder.spec.terms if len(term) > 1}
     # Interactions are resampled with the fitted model's own statistic in
     # asaree.stats.resampling.interaction_null_tests; only main effects run here.
-    skipped = dict.fromkeys(interactions, "")
     design = builder.build(frame)
     residual = values - design @ np.linalg.lstsq(design, values, rcond=None)[0]
     if np.max(np.abs(residual)) <= 1e-7 * max(float(np.max(np.abs(values))), np.finfo(float).tiny):
@@ -58,8 +56,7 @@ def native_permutations(frame, config):
             if len(term) == 1
         ], None
     rng = np.random.default_rng(np.random.SeedSequence([config["seed"], 2202]))
-    result = permutation_tests(values, frame, builder, config["n_perm"], rng, batch=250, skip_terms=skipped)
-    result = result[~result.term.isin(interactions)].copy()
+    result = permutation_tests(values, frame, builder, config["n_perm"], rng, batch=250)
     # F >= 0 by construction; a negative or non-finite value is cancellation error, not evidence.
     valid = np.isfinite(result.F_obs) & (result.F_obs >= 0) & (result.df1 > 0) & (result.df2 > 0)
     result.loc[~valid, "p_perm"] = np.nan

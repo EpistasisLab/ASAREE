@@ -54,33 +54,17 @@ class FitResult:
         return -2.0 * self.loglik + np.log(self.n_obs) * self.n_params
 
 
-def block_designs(
-    family: Family, x_base: np.ndarray, constraint: np.ndarray | None = None, null_spaces: list | None = None
-) -> tuple[list[np.ndarray], list[np.ndarray | None]]:
-    """Per-block design matrices from the base (sum-coded) design.
-
-    ``constraint`` (q x p_base) imposes L beta_b = 0 on every regression block
-    that uses the full design, via beta_b = N_b gamma_b with N_b = null(L_b).
-    Precomputed ``null_spaces`` may be passed to avoid recomputation.
-    """
+def block_designs(family: Family, x_base: np.ndarray) -> list[np.ndarray]:
+    """Per-block design matrices from the base (sum-coded) design."""
     n = x_base.shape[0]
-    designs, nulls = [], []
-    for i, spec in enumerate(family.blocks()):
+    designs = []
+    for spec in family.blocks():
         if spec.kind == "mean" or (spec.kind == "regression" and family.aux_design == "full"):
             cols = slice(1, None) if (spec.kind == "mean" and not family.mean_intercept) else slice(None)
-            xb = x_base[:, cols]
-            nb = None
-            if null_spaces is not None:
-                nb = null_spaces[i]
-            elif constraint is not None:
-                lb = np.atleast_2d(constraint)[:, cols]
-                nb = linalg.null_space(lb) if np.any(lb) else None
-            designs.append(xb @ nb if nb is not None else xb)
-            nulls.append(nb)
+            designs.append(x_base[:, cols])
         else:
             designs.append(np.ones((n, 1)))
-            nulls.append(None)
-    return designs, nulls
+    return designs
 
 
 class Model:
@@ -92,13 +76,11 @@ class Model:
         y: np.ndarray,
         designs: list[np.ndarray],
         aux: dict | None = None,
-        nulls: list | None = None,
     ):
         self.family = family
         self.y = np.asarray(y, dtype=float)
         self.designs = designs
         self.aux = aux or {}
-        self.nulls = nulls or [None] * len(designs)
         self.x_base = None
         self.specs = family.blocks()
         sizes = [d.shape[1] for d in designs]
@@ -113,9 +95,8 @@ class Model:
         ]
 
     @classmethod
-    def from_base(cls, family, y, x_base, aux=None, constraint=None):
-        d, nulls = block_designs(family, x_base, constraint)
-        m = cls(family, y, d, aux, nulls)
+    def from_base(cls, family, y, x_base, aux=None):
+        m = cls(family, y, block_designs(family, x_base), aux)
         m.x_base = x_base
         return m
 
@@ -126,8 +107,6 @@ class Model:
         return m
 
     # ----------------------------------------------------------- parameters
-    def split(self, theta):
-        return [theta[s] for s in self.slices]
 
     def etas(self, theta, designs=None):
         designs = self.designs if designs is None else designs
@@ -142,32 +121,7 @@ class Model:
 
     def init_theta(self) -> np.ndarray:
         parts = self.family.init_params(self.y, self.designs, self.aux)
-        out = []
-        for p, d, nb in zip(parts, self.designs, self.nulls, strict=True):
-            p = np.asarray(p, float)
-            if p.shape[0] != d.shape[1]:
-                # constrained block: project the unconstrained start onto the null space
-                p = (
-                    np.linalg.lstsq(nb, p, rcond=None)[0]
-                    if nb is not None and nb.shape[0] == p.shape[0]
-                    else np.zeros(d.shape[1])
-                )
-            out.append(p)
-        return np.concatenate(out)
-
-    def embed(self, theta_reduced: np.ndarray, full: Model) -> np.ndarray:
-        """Map parameters of this (constrained) model into ``full``'s parameter space."""
-        parts = []
-        for p, nb in zip(self.split(theta_reduced), self.nulls, strict=True):
-            parts.append(nb @ p if nb is not None else p)
-        return np.concatenate(parts)
-
-    def project(self, theta_full: np.ndarray, full: Model) -> np.ndarray:
-        """Least-squares projection of full-model parameters onto this model's space."""
-        parts = []
-        for p, nb in zip(full.split(theta_full), self.nulls, strict=True):
-            parts.append(np.linalg.lstsq(nb, p, rcond=None)[0] if nb is not None else p)
-        return np.concatenate(parts)
+        return np.concatenate([np.asarray(p, float) for p in parts])
 
     def simulation_theta(self, theta: np.ndarray, correct: bool = True) -> np.ndarray:
         """Parameters used to simulate bootstrap data.
@@ -239,10 +193,6 @@ class Model:
     def gradient(self, theta):
         _, d1, _ = self.obs_derivs(theta, second=False)
         return np.concatenate([d.T @ d1[:, b] for b, d in enumerate(self.designs)])
-
-    def information(self, theta) -> np.ndarray:
-        H = self.grad_hess(theta)[4]
-        return -0.5 * (H + H.T)
 
     def _fixed_metric_ascent(self, theta, ll, info0, tol, gtol, max_iter, max_step):
         """Quasi-Newton (BFGS) ascent started from the inverse information at a nearby

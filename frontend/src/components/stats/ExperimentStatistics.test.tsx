@@ -12,7 +12,7 @@ const saved: StatsAnalysis = {
   id: 'analysis', status: 'completed', report_status: 'valid', error: null,
   created_at: '2026-10-22T18:00:00Z', fingerprint: 'input-snapshot', design_revision: 1,
   config: { metric: 'Duration', factors: [], family: 'auto', measurement_type: 'auto', denominator: null,
-    ordinal_levels: [], max_order: 2, n_boot: 100, n_boot_lrt: 0, n_perm: 999, seed: 22, tweedie_power: 1.5 },
+    ordinal_levels: [], max_order: 2, n_boot: 100, n_perm: 999, seed: 22 },
   output: { family: 'gamma', n_observations: 100, n_excluded: 0, runtime_s: 1, tables: {}, notes: [],
     summary: { version: 1, metric: 'Duration', status: 'valid', description: 'Analyzed 100 runs for Duration.',
       distribution: { n: 100, minimum: 1, maximum: 9, mean: 4, sd: 2, distinct: 20, zeros: 0,

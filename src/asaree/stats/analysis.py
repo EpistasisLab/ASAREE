@@ -16,7 +16,6 @@ import pandas as pd
 import patsy
 import statsmodels.api as sm
 from scipy import stats
-from sklearn.linear_model import TweedieRegressor
 from statsmodels.discrete.count_model import ZeroInflatedNegativeBinomialP, ZeroInflatedPoisson
 from statsmodels.miscmodels.ordinal_model import OrderedModel
 from statsmodels.othermod.betareg import BetaModel
@@ -40,7 +39,6 @@ FAMILIES = (
     "beta",
     "binomial",
     "ordinal_logit",
-    "tweedie",
 )
 
 
@@ -186,221 +184,208 @@ def analyze(frame: pd.DataFrame, config: dict) -> dict:
     )
     tables = {}
     robust = config.get("robust", False)
-    usable, inference_reason, covariance_record = False, None, None
+    inference_reason, covariance_record = None, None
     covariance_label = "model-based covariance"
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
-        if family == "tweedie":
-            if np.any(y < 0):
-                raise ValueError("Tweedie requires nonnegative outcomes.")
-            fit = TweedieRegressor(
-                power=config["tweedie_power"], alpha=0, fit_intercept=False, link="log", max_iter=1000, tol=1e-9
-            ).fit(x, y)
-            predict = fit.predict
-            means = predict(grid)
-            fitted = predict(x)
-            tables["coefficients"] = pd.DataFrame({"parameter": design.design_info.column_names, "estimate": fit.coef_})
-            notes.append("Tweedie: fixed power; likelihood, AIC, coefficient intervals and tests unavailable.")
-            result = None
-        else:
-            if family == "lognormal" and np.any(y <= 0):
-                raise ValueError("Log-normal requires positive outcomes.")
-            if family == "ordinal_logit":
-                codes = pd.Series(frame["outcome_raw"]).map({v: i for i, v in enumerate(config["ordinal_levels"])})
-                if codes.isna().any():
-                    raise ValueError("Declare every ordinal level in order.")
-                y = codes.to_numpy(float)
-            trials = frame["trials"].to_numpy(float) if config.get("denominator") else None
-            result = fit_model(y, x, family, config, trials)
+        if family == "lognormal" and np.any(y <= 0):
+            raise ValueError("Log-normal requires positive outcomes.")
+        if family == "ordinal_logit":
+            codes = pd.Series(frame["outcome_raw"]).map({v: i for i, v in enumerate(config["ordinal_levels"])})
+            if codes.isna().any():
+                raise ValueError("Declare every ordinal level in order.")
+            y = codes.to_numpy(float)
+        trials = frame["trials"].to_numpy(float) if config.get("denominator") else None
+        result = fit_model(y, x, family, config, trials)
 
-            def predict(matrix):
-                return predict_model(result, matrix, family, config)
+        def predict(matrix):
+            return predict_model(result, matrix, family, config)
 
-            means, fitted = np.asarray(predict(grid)), np.asarray(predict(x))
-            converged = converged_fit(result)
-            # Exact fit: no residual variation, so no sampling uncertainty can be estimated.
-            # Checked on the scale the model is fitted on (log scale for log-normal OLS).
-            exact = family not in ("ordinal_logit",) and residual_check(
-                np.log(y) if family == "lognormal" else y if trials is None else y / trials,
-                np.asarray(result.fittedvalues) if family in ("gaussian", "lognormal") else fitted,
+        means, fitted = np.asarray(predict(grid)), np.asarray(predict(x))
+        converged = converged_fit(result)
+        # Exact fit: no residual variation, so no sampling uncertainty can be estimated.
+        # Checked on the scale the model is fitted on (log scale for log-normal OLS).
+        exact = family not in ("ordinal_logit",) and residual_check(
+            np.log(y) if family == "lognormal" else y if trials is None else y / trials,
+            np.asarray(result.fittedvalues) if family in ("gaussian", "lognormal") else fitted,
+        )
+        # Identification uses the unit-scale information, which an exact fit does not destroy.
+        try:
+            normalized = np.asarray(result.normalized_cov_params, float)
+        except (AttributeError, ValueError, TypeError):
+            normalized = np.full((len(result.params), len(result.params)), np.nan)
+        reasons = []
+        if not converged:
+            reasons.append("the optimizer did not converge")
+        if not np.isfinite(result.params).all():
+            reasons.append("non-finite parameter estimates")
+        if not (np.isfinite(normalized).all() and np.linalg.eigvalsh((normalized + normalized.T) / 2).min() > 0):
+            reasons.append("parameters are not identified (singular information matrix)")
+        if not np.isfinite(means).all():
+            reasons.append("non-finite predicted means")
+        llf, n_parameters, likelihood_basis, likelihood_extra = (np.nan, len(result.params), "unavailable", {})
+        with contextlib.suppress(ValueError, FloatingPointError, np.linalg.LinAlgError):
+            llf, n_parameters, likelihood_basis, likelihood_extra = comparable_likelihood(result, family, y)
+        aic = -2 * llf + 2 * n_parameters if np.isfinite(llf) else np.nan
+        if exact and family not in ("poisson", "binomial"):
+            # The dispersion MLE sits on its boundary (zero variance), so the likelihood is unbounded.
+            llf, aic = np.nan, np.nan
+            likelihood_basis = "undefined: exact fit puts the dispersion estimate on its boundary"
+        if not np.isfinite(aic) and not exact:
+            reasons.append("non-finite likelihood")
+        if family in ("binomial", "beta") and np.any((fitted < 1e-8) | (fitted > 1 - 1e-8)):
+            reasons.append("boundary probabilities or separation")
+        if family not in ("gaussian", "lognormal", "gamma") and np.max(np.abs(result.params)) > 30:
+            reasons.append("extreme parameters suggest separation or a boundary fit")
+        if family in ("negbin", "zinb") and np.isfinite(result.params[-1]) and result.params[-1] < 1e-6:
+            reasons.append(
+                "the negative-binomial dispersion is at its boundary (alpha ≈ 0); "
+                "the model reduces to Poisson and alpha is not identified"
             )
-            # Identification uses the unit-scale information, which an exact fit does not destroy.
+        diagnostic = dict(family=family, severe=False, flags="")
+        flags = []
+        if family in ("gaussian", "lognormal") and len(y) >= 20 and not exact:
+            residual = np.asarray(result.resid)
+            diagnostic["residual_skewness"] = float(stats.skew(residual))
+            diagnostic["residual_normality_p"] = float(stats.normaltest(residual).pvalue)
+            if diagnostic["residual_normality_p"] < 0.001 and abs(diagnostic["residual_skewness"]) > 1:
+                flags.append("Residuals are strongly skewed for this Gaussian assumption.")
+                diagnostic["severe"] = True
+        pearson = getattr(result, "resid_pearson", None)
+        if family in ("poisson", "binomial", "negbin", "gamma") and pearson is not None and result.df_resid > 0:
+            diagnostic["pearson_dispersion"] = float(np.sum(np.asarray(pearson) ** 2) / result.df_resid)
+            if family in ("poisson", "binomial") and diagnostic["pearson_dispersion"] > 3:
+                flags.append("Residual variation substantially exceeds this model's variance assumption.")
+                diagnostic["severe"] = True
+        if family == "negbin":
+            diagnostic["negbin_alpha"] = float(result.params[-1])
+        diagnostic.update(likelihood_extra)
+        diagnostic["flags"] = " ".join(flags)
+        # Advanced manual runs retain diagnostic flags. Automatic selection
+        # excludes these failed assumptions, in addition to numerical failures.
+        if robust and diagnostic["severe"]:
+            reasons.append(diagnostic["flags"])
+        usable = not reasons
+        tables["diagnostics"] = pd.DataFrame([diagnostic])
+        notes.extend(flags)
+        if exact:
+            inference_reason = (
+                "Exact fit: every replicate equals its fitted value, so there is no residual variation "
+                "from which to estimate sampling uncertainty. Estimates are descriptive only."
+            )
+        covariance = np.asarray(result.cov_params()) if usable else None
+        if robust and (exact or not usable):
+            covariance_record = dict(
+                requested="HC3",
+                computed=None,
+                reason=inference_reason if exact else "the model failed validation",
+            )
+        if usable and robust and not exact:
             try:
-                normalized = np.asarray(result.normalized_cov_params, float)
-            except (AttributeError, ValueError, TypeError):
-                normalized = np.full((len(result.params), len(result.params)), np.nan)
-            reasons = []
-            if not converged:
-                reasons.append("the optimizer did not converge")
-            if not np.isfinite(result.params).all():
-                reasons.append("non-finite parameter estimates")
-            if not (np.isfinite(normalized).all() and np.linalg.eigvalsh((normalized + normalized.T) / 2).min() > 0):
-                reasons.append("parameters are not identified (singular information matrix)")
-            if not np.isfinite(means).all():
-                reasons.append("non-finite predicted means")
-            llf, n_parameters, likelihood_basis, likelihood_extra = (np.nan, len(result.params), "unavailable", {})
-            with contextlib.suppress(ValueError, FloatingPointError, np.linalg.LinAlgError):
-                llf, n_parameters, likelihood_basis, likelihood_extra = comparable_likelihood(result, family, y)
-            aic = -2 * llf + 2 * n_parameters if np.isfinite(llf) else np.nan
-            if exact and family not in ("poisson", "binomial"):
-                # The dispersion MLE sits on its boundary (zero variance), so the likelihood is unbounded.
-                llf, aic = np.nan, np.nan
-                likelihood_basis = "undefined: exact fit puts the dispersion estimate on its boundary"
-            if not np.isfinite(aic) and not exact:
-                reasons.append("non-finite likelihood")
-            if family in ("binomial", "beta") and np.any((fitted < 1e-8) | (fitted > 1 - 1e-8)):
-                reasons.append("boundary probabilities or separation")
-            if family not in ("gaussian", "lognormal", "gamma") and np.max(np.abs(result.params)) > 30:
-                reasons.append("extreme parameters suggest separation or a boundary fit")
-            if family in ("negbin", "zinb") and np.isfinite(result.params[-1]) and result.params[-1] < 1e-6:
-                reasons.append(
-                    "the negative-binomial dispersion is at its boundary (alpha ≈ 0); "
-                    "the model reduces to Poisson and alpha is not identified"
-                )
-            diagnostic = dict(family=family, severe=False, flags="")
-            flags = []
-            if family in ("gaussian", "lognormal") and len(y) >= 20 and not exact:
-                residual = np.asarray(result.resid)
-                diagnostic["residual_skewness"] = float(stats.skew(residual))
-                diagnostic["residual_normality_p"] = float(stats.normaltest(residual).pvalue)
-                if diagnostic["residual_normality_p"] < 0.001 and abs(diagnostic["residual_skewness"]) > 1:
-                    flags.append("Residuals are strongly skewed for this Gaussian assumption.")
-                    diagnostic["severe"] = True
-            pearson = getattr(result, "resid_pearson", None)
-            if family in ("poisson", "binomial", "negbin", "gamma") and pearson is not None and result.df_resid > 0:
-                diagnostic["pearson_dispersion"] = float(np.sum(np.asarray(pearson) ** 2) / result.df_resid)
-                if family in ("poisson", "binomial") and diagnostic["pearson_dispersion"] > 3:
-                    flags.append("Residual variation substantially exceeds this model's variance assumption.")
-                    diagnostic["severe"] = True
-            if family == "negbin":
-                diagnostic["negbin_alpha"] = float(result.params[-1])
-            diagnostic.update(likelihood_extra)
-            diagnostic["flags"] = " ".join(flags)
-            # Advanced manual runs retain diagnostic flags. Automatic selection
-            # excludes these failed assumptions, in addition to numerical failures.
-            if robust and diagnostic["severe"]:
-                reasons.append(diagnostic["flags"])
-            usable = not reasons
-            tables["diagnostics"] = pd.DataFrame([diagnostic])
-            notes.extend(flags)
-            if exact:
-                inference_reason = (
-                    "Exact fit: every replicate equals its fitted value, so there is no residual variation "
-                    "from which to estimate sampling uncertainty. Estimates are descriptive only."
-                )
-            covariance = np.asarray(result.cov_params()) if usable else None
-            if robust and (exact or not usable):
-                covariance_record = dict(
-                    requested="HC3",
-                    computed=None,
-                    reason=inference_reason if exact else "the model failed validation",
-                )
-            if usable and robust and not exact:
-                try:
-                    covariance, covariance_record = robust_covariance(result, family)
-                    install_covariance(result, covariance, covariance_record)
-                    covariance_label = f"{covariance_record['computed']} robust covariance"
-                except (CovarianceUnavailableError, np.linalg.LinAlgError) as exc:
-                    inference_reason = f"Robust covariance unavailable: {exc}."
-                    covariance_record = dict(requested="HC3", computed=None, reason=str(exc))
-            if usable and inference_reason is None and singular_directions(covariance, np.eye(len(covariance))):
-                notes.append(
-                    "The parameter covariance is singular in at least one direction; tests and comparisons "
-                    "that depend on that direction are reported as unavailable."
-                )
-            intervals = np.asarray(result.conf_int()) if usable and inference_reason is None else None
-            base_names = list(design.design_info.column_names)
-            native_names = list(result.model.exog_names)
-            if family in ("zip", "zinb"):
-                names = [native_names[0], *base_names, *native_names[1 + len(base_names) :]]
-            elif family == "ordinal_logit":
-                names = [*base_names[1:], *native_names[len(base_names) - 1 :]]
-            else:
-                names = [*base_names, *native_names[len(base_names) :]]
-            if len(names) != len(result.params):
-                names = names[: len(result.params)]
-                names += [f"ancillary_{i}" for i in range(len(result.params) - len(names))]
-            missing = np.full(len(result.params), np.nan)
-            tables["coefficients"] = pd.DataFrame(
+                covariance, covariance_record = robust_covariance(result, family)
+                install_covariance(result, covariance, covariance_record)
+                covariance_label = f"{covariance_record['computed']} robust covariance"
+            except (CovarianceUnavailableError, np.linalg.LinAlgError) as exc:
+                inference_reason = f"Robust covariance unavailable: {exc}."
+                covariance_record = dict(requested="HC3", computed=None, reason=str(exc))
+        if usable and inference_reason is None and singular_directions(covariance, np.eye(len(covariance))):
+            notes.append(
+                "The parameter covariance is singular in at least one direction; tests and comparisons "
+                "that depend on that direction are reported as unavailable."
+            )
+        intervals = np.asarray(result.conf_int()) if usable and inference_reason is None else None
+        base_names = list(design.design_info.column_names)
+        native_names = list(result.model.exog_names)
+        if family in ("zip", "zinb"):
+            names = [native_names[0], *base_names, *native_names[1 + len(base_names) :]]
+        elif family == "ordinal_logit":
+            names = [*base_names[1:], *native_names[len(base_names) - 1 :]]
+        else:
+            names = [*base_names, *native_names[len(base_names) :]]
+        if len(names) != len(result.params):
+            names = names[: len(result.params)]
+            names += [f"ancillary_{i}" for i in range(len(result.params) - len(names))]
+        missing = np.full(len(result.params), np.nan)
+        tables["coefficients"] = pd.DataFrame(
+            dict(
+                parameter=names,
+                estimate=np.asarray(result.params),
+                se=np.asarray(result.bse) if intervals is not None else missing,
+                p=np.asarray(result.pvalues) if intervals is not None else missing,
+                ci_low=intervals[:, 0] if intervals is not None else missing,
+                ci_high=intervals[:, 1] if intervals is not None else missing,
+            )
+        )
+        tables["model_fit"] = pd.DataFrame(
+            [
                 dict(
-                    parameter=names,
-                    estimate=np.asarray(result.params),
-                    se=np.asarray(result.bse) if intervals is not None else missing,
-                    p=np.asarray(result.pvalues) if intervals is not None else missing,
-                    ci_low=intervals[:, 0] if intervals is not None else missing,
-                    ci_high=intervals[:, 1] if intervals is not None else missing,
+                    family=family,
+                    n=len(y),
+                    loglik=llf,
+                    aic=aic,
+                    n_parameters=n_parameters,
+                    likelihood_basis=likelihood_basis,
+                    native_aic=float(result.aic) if np.isfinite(result.aic) else np.nan,
+                    converged=converged,
+                    usable=usable,
+                    exclusion_reason="; ".join(reasons),
+                    exact_fit=exact,
+                    inference_reason=inference_reason or "",
+                    covariance=(covariance_record or {}).get("computed")
+                    or ("model-based" if not robust else "unavailable"),
                 )
+            ]
+        )
+        if family in ("gaussian", "lognormal"):
+            notes.append(
+                "OLS coefficients; robust inference uses z/chi-square reference distributions. AIC counts the "
+                "residual variance as an estimated parameter."
             )
-            tables["model_fit"] = pd.DataFrame(
-                [
-                    dict(
-                        family=family,
-                        n=len(y),
-                        loglik=llf,
-                        aic=aic,
-                        n_parameters=n_parameters,
-                        likelihood_basis=likelihood_basis,
-                        native_aic=float(result.aic) if np.isfinite(result.aic) else np.nan,
-                        converged=converged,
-                        usable=usable,
-                        exclusion_reason="; ".join(reasons),
-                        exact_fit=exact,
-                        inference_reason=inference_reason or "",
-                        covariance=(covariance_record or {}).get("computed")
-                        or ("model-based" if not robust else "unavailable"),
-                    )
-                ]
+        if family == "gamma":
+            notes.append(
+                "Gamma AIC uses the maximum-likelihood shape; HC3 inference does not depend on the dispersion."
             )
-            if family in ("gaussian", "lognormal"):
-                notes.append(
-                    "OLS coefficients; robust inference uses z/chi-square reference distributions. AIC counts the "
-                    "residual variance as an estimated parameter."
+        if not converged:
+            notes.append("WARNING: established optimizer did not converge; inspect coefficients and warnings.")
+        # Established Wald tests on design terms, padded for ancillary / inflation parameters.
+        rows = []
+        offset = 1 if family in ("zip", "zinb") else 0
+        for term, column_slice in design.design_info.term_name_slices.items():
+            if term == "Intercept":
+                continue
+            idx = np.arange(x.shape[1])[column_slice] + offset - (family == "ordinal_logit")
+            restriction = np.eye(len(result.params))[idx]
+            row = dict(term=term, statistic=np.nan, df=len(idx), p=np.nan, p_method="Wald test unavailable")
+            if not usable:
+                row["unavailable_reason"] = "The model failed validation."
+            elif inference_reason:
+                row["unavailable_reason"] = inference_reason
+            elif singular_directions(covariance, restriction):
+                row["unavailable_reason"] = (
+                    f"The {covariance_label} is singular for this term (no residual variation in the "
+                    "conditions that identify it), so its Wald statistic is undefined."
                 )
-            if family == "gamma":
-                notes.append(
-                    "Gamma AIC uses the maximum-likelihood shape; HC3 inference does not depend on the dispersion."
-                )
-            if not converged:
-                notes.append("WARNING: established optimizer did not converge; inspect coefficients and warnings.")
-            # Established Wald tests on design terms, padded for ancillary / inflation parameters.
-            rows = []
-            offset = 1 if family in ("zip", "zinb") else 0
-            for term, column_slice in design.design_info.term_name_slices.items():
-                if term == "Intercept":
-                    continue
-                idx = np.arange(x.shape[1])[column_slice] + offset - (family == "ordinal_logit")
-                restriction = np.eye(len(result.params))[idx]
-                row = dict(term=term, statistic=np.nan, df=len(idx), p=np.nan, p_method="Wald test unavailable")
-                if not usable:
-                    row["unavailable_reason"] = "The model failed validation."
-                elif inference_reason:
-                    row["unavailable_reason"] = inference_reason
-                elif singular_directions(covariance, restriction):
-                    row["unavailable_reason"] = (
-                        f"The {covariance_label} is singular for this term (no residual variation in the "
-                        "conditions that identify it), so its Wald statistic is undefined."
+            else:
+                try:
+                    test = result.wald_test(restriction, scalar=True)
+                    test_name = "Wald F-test" if test.distribution == "F" else "Wald chi-square test"
+                    row.update(
+                        statistic=float(test.statistic),
+                        p=float(test.pvalue),
+                        p_method=f"{test_name} ({covariance_label})",
                     )
-                else:
-                    try:
-                        test = result.wald_test(restriction, scalar=True)
-                        test_name = "Wald F-test" if test.distribution == "F" else "Wald chi-square test"
-                        row.update(
-                            statistic=float(test.statistic),
-                            p=float(test.pvalue),
-                            p_method=f"{test_name} ({covariance_label})",
-                        )
-                    except (ValueError, np.linalg.LinAlgError):
-                        row["unavailable_reason"] = "The library cannot provide a Wald test for this term."
-                rows.append(row)
-            tests = pd.DataFrame(rows)
-            tests["p_holm"] = np.nan
-            valid = tests.p.notna()
-            if valid.any():
-                tests.loc[valid, "p_holm"] = multipletests(tests.loc[valid, "p"], method="holm")[1]
-            tables["tests"] = tests
+                except (ValueError, np.linalg.LinAlgError):
+                    row["unavailable_reason"] = "The library cannot provide a Wald test for this term."
+            rows.append(row)
+        tests = pd.DataFrame(rows)
+        tests["p_holm"] = np.nan
+        valid = tests.p.notna()
+        if valid.any():
+            tests.loc[valid, "p_holm"] = multipletests(tests.loc[valid, "p"], method="holm")[1]
+        tables["tests"] = tests
         notes.extend(str(w.message) for w in caught)
 
-    inferable = result is not None and usable and inference_reason is None
+    inferable = usable and inference_reason is None
     labels = [
         ", ".join(f"{name}={row[a]}" for name, a in zip(factors, aliases, strict=True)) for _, row in cells.iterrows()
     ]
@@ -411,7 +396,7 @@ def analyze(frame: pd.DataFrame, config: dict) -> dict:
         cell_table["ci_low"], cell_table["ci_high"] = ci[:, 0], ci[:, 1]
     tables["cell_means"] = cell_table
     marginal, contrasts, comparison_weights = [], [], []
-    ratio = family in ("gamma", "poisson", "negbin", "zip", "zinb", "lognormal", "tweedie")
+    ratio = family in ("gamma", "poisson", "negbin", "zip", "zinb", "lognormal")
     response_spread = float(np.std(y)) if len(y) else 0.0
 
     def summarize(weights, label, **meta):
@@ -522,8 +507,7 @@ def analyze(frame: pd.DataFrame, config: dict) -> dict:
                 scale="ratio" if len(weights) == 2 else "ratio_of_ratios",
                 **meta,
             )
-            if result is not None:
-                row.update(response_interval(weights, estimate, True))
+            row.update(response_interval(weights, estimate, True))
             return row
         combined = weights[0] - weights[1]
         if len(weights) == 4:
@@ -535,7 +519,7 @@ def analyze(frame: pd.DataFrame, config: dict) -> dict:
             scale="difference" if len(weights) == 2 else "difference_in_differences",
             **meta,
         )
-        if result is not None and family != "gaussian":
+        if family != "gaussian":
             row.update(response_interval(weights, row["estimate"]))
         return row
 
@@ -578,7 +562,7 @@ def analyze(frame: pd.DataFrame, config: dict) -> dict:
             con[valid].groupby("family").p.transform(lambda p: multipletests(p, method="holm")[1])
         )
     tables["contrasts"] = con
-    if config.get("_resample") and result is not None and usable:
+    if config.get("_resample") and usable:
         from asaree.stats.resampling import bootstrap_intervals, interaction_null_tests
 
         if inferable:
@@ -610,7 +594,7 @@ def analyze(frame: pd.DataFrame, config: dict) -> dict:
     if family == "ordinal_logit":
         observed = y + 1
     tables["residuals"] = pd.DataFrame(dict(observed=observed, fitted=fitted, residual=observed - fitted))
-    validity = "valid" if result is not None and usable else "unreliable"
+    validity = "valid" if usable else "unreliable"
     if validity != "valid":
         # Estimates are descriptive only; failed fits must never supply inference.
         for table in tables.values():

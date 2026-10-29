@@ -8,10 +8,8 @@ export interface StatsConfig {
   ordinal_levels: string[]
   max_order: number
   n_boot: number
-  n_boot_lrt: number
   n_perm: number
   seed: number
-  tweedie_power: number
 }
 export interface StatsSource {
   factors: { name: string; levels: string[] }[]

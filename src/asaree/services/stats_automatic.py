@@ -498,7 +498,8 @@ def automatic_inputs(source: dict, config: dict, plan: dict) -> tuple[dict, dict
 
 def analyze_automatic(source: dict, config: dict) -> dict:
     """Build a plan, fit supported candidates, and expose only validated inference."""
-    from asaree.services.stats_prototypes import json_safe, prepare_frame, run_custom_engine
+    from asaree.services.stats_prototypes import json_safe, prepare_frame
+    from asaree.stats.custom import analyze_custom
 
     try:
         plan = plan_metric(source, config["metric"])
@@ -525,7 +526,7 @@ def analyze_automatic(source: dict, config: dict) -> dict:
                 if cell_counts.min() < 3:
                     raise ValueError("At least three measured independent runs per observed condition are required.")
                 if family in {"zoib", "gamma_hurdle", "betabinomial"}:
-                    output = run_custom_engine(converted_source, candidate_config)
+                    output = json_safe(analyze_custom(frame, candidate_config))
                     diagnostics = output["tables"]["diagnostics"][0]
                     valid = (
                         diagnostics["converged"]
@@ -961,7 +962,9 @@ def build_summary(output, source, config, plan, family, warnings, model_selectio
                 permutation_method=label(permutation["method"]) if permutation.get("method") else None,
                 resampling_kind=kind if permutation else None,
                 resampling_name=resampling_name,
-                resampling_label=resampling_label if permutation else None,
+                resampling_label=resampling_label
+                if permutation and permutation.get("method") != "Permutation withheld"
+                else None,
                 permutation_status="completed"
                 if number(permutation_p)
                 else permutation.get("reason") or output.get("permutation_reason", "Unavailable"),
@@ -1107,7 +1110,9 @@ def build_summary(output, source, config, plan, family, warnings, model_selectio
         completed = row.get("completed", row.get("n_perm", 0)) or 0
         failed = row.get("failed", 0) or 0
         statistic = row.get("statistic") or "Type III F (OLS, working scale)"
-        if row.get("kind") == "permutation" and ":" not in t["effect"]:
+        if row.get("method") in ("Permutation withheld", "Withheld"):
+            procedure = "Not run"
+        elif row.get("kind") == "permutation" and ":" not in t["effect"]:
             procedure = (
                 f"{label(row.get('method', ''))} (exact for the sharp null that {t['label']} has no effect at "
                 f"any setting of the other factors); statistic: working-scale OLS F, a sensitivity check, not the "
@@ -1220,17 +1225,8 @@ def build_summary(output, source, config, plan, family, warnings, model_selectio
         methods.append(
             "Custom likelihood engine. "
             "Analytic comparison tests and intervals use the response-scale HC3 delta method; "
-            "bootstrap intervals simulate from the fitted model and share its distributional assumptions. "
-            f"Null-model bootstrap likelihood-ratio tests requested: {config.get('n_boot_lrt', 0)} per hypothesis."
+            "bootstrap intervals simulate from the fitted model and share its distributional assumptions."
         )
-        if config.get("n_boot_lrt", 0):
-            for row in output["tables"].get("tests", []):
-                methods.append(
-                    f"Additional bootstrap likelihood-ratio test — {label(row.get('hypothesis', ''))}: "
-                    f"{config['n_boot_lrt']} requested, {row.get('n_boot_lrt_attempted', 0)} attempted, "
-                    f"{row.get('n_boot_lrt', 0)} successful, {row.get('n_boot_lrt_failed', 0)} failed. "
-                    f"Recorded method: {recorded_method(row)}. Main report p-values remain analytic."
-                )
     else:
         methods.append(
             f"Robust covariance: {estimator} ("

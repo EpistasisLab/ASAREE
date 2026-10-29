@@ -61,12 +61,6 @@ class Contrast:
     levels: tuple
     weights: np.ndarray  # (2 or 4, n_cells)
 
-    def link_vector(self, cell_rows: np.ndarray) -> np.ndarray:
-        """Linear combination of base-design coefficients for the link-scale contrast."""
-        w = self.weights
-        comb = w[0] - w[1] if self.kind == "pairwise" else (w[0] - w[1]) - (w[2] - w[3])
-        return comb @ cell_rows
-
 
 def default_families(factors: list[str]) -> list[ContrastFamily]:
     fams = [

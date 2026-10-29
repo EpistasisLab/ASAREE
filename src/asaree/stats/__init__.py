@@ -1,29 +1,12 @@
-"""ASAREE statistical analysis component.
+"""Statistics for automatic experiment reports.
 
-Factorial GLM analysis of repeated experimental runs with rule-based outcome
-families, parametric-bootstrap intervals, bootstrap-LRT / HC3 Wald p-values,
-ART / ART-C rank-based sensitivity analyses and design-preserving permutation
-tests.
+Published packages first: ``analysis`` fits models with statsmodels and
+scikit-learn, ``covariance`` builds verified HC3 sandwich covariances, and
+``resampling`` runs bootstrap intervals and interaction null resampling.
 
-    from asaree.stats import AnalysisConfig, FactorSpec, OutcomeSpec, ContrastFamily, run_analysis
-    results = run_analysis(df, config)
-    results.save("out/")
+``custom`` covers the models no published package implements (zero/one-inflated
+beta, hurdle Gamma, beta-binomial) with the likelihood engine from the original
+statistics package: ``engine``, ``families``, ``inference``, ``contrasts``,
+``design``, ``diagnostics`` and ``nonparametric`` (design-preserving
+permutation tests, also used for every report's main-effect checks).
 """
-
-from .config import AnalysisConfig, FactorSpec
-from .contrasts import ContrastFamily
-from .families import FAMILIES, make_family
-from .pipeline import AnalysisResults, run_analysis
-from .selection import OutcomeSpec
-
-__all__ = [
-    "AnalysisConfig",
-    "FactorSpec",
-    "OutcomeSpec",
-    "ContrastFamily",
-    "run_analysis",
-    "AnalysisResults",
-    "FAMILIES",
-    "make_family",
-]
-__version__ = "0.1.0"

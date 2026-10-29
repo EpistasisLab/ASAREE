@@ -95,7 +95,6 @@ WITHHELD = {
     "beta": "beta regression has no exchangeable residual, and simulating its null model is not implemented",
     "ordinal_logit": "ordered categories have no exchangeable residual, and simulating their null model is not "
     "implemented",
-    "tweedie": "the fixed-power Tweedie fit has no likelihood-based Wald statistic to resample",
 }
 ASSUMPTIONS = {
     "gaussian": "Independent runs whose additive errors are exchangeable across all conditions (equal variance); "

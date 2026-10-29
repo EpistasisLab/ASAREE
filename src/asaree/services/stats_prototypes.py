@@ -37,10 +37,8 @@ class StatsRequest(BaseModel):
     ordinal_levels: list[str] = Field(default_factory=list)
     max_order: int = Field(default=2, ge=1, le=3)
     n_boot: int = Field(default=1000, ge=20, le=5000)
-    n_boot_lrt: int = Field(default=0, ge=0, le=1999)
     n_perm: int = Field(default=1999, ge=99, le=10000)
     seed: int = Field(default=20261016, ge=0, le=2**32 - 1)
-    tweedie_power: float = Field(default=1.5, gt=1, lt=2)
 
 
 def finite_number(value: Any) -> float | None:
@@ -361,93 +359,3 @@ def compute(source: dict, config: dict) -> dict:
     output = analyze_automatic(source, config)
     output["runtime_s"] = time.perf_counter() - started
     return output
-
-
-def run_custom_engine(source: dict, config: dict) -> dict:
-    """Fit one family with the custom likelihood engine (no published-package equivalent)."""
-    started = time.perf_counter()
-    frame = prepare_frame(source, config)
-    from asaree.stats import AnalysisConfig, FactorSpec, OutcomeSpec, run_analysis
-    from asaree.stats.design import DesignBuilder, DesignSpec, full_factorial_terms
-    from asaree.stats.report import markdown_report
-
-    # Internal names prevent metric/factor collisions with package bookkeeping.
-    aliases = {name: f"factor_{i}" for i, name in enumerate(config["factors"])}
-    original_frame = frame.copy()
-    ordinal = config["family"] == "ordinal_logit" or config["measurement_type"] == "ordinal"
-    if ordinal:
-        original_frame["outcome"] = frame.outcome_raw
-    cfg = AnalysisConfig(
-        factors=[FactorSpec(alias) for alias in aliases.values()],
-        outcomes=[
-            OutcomeSpec(
-                "outcome",
-                measurement_type="ordinal"
-                if ordinal
-                else (
-                    "binary"
-                    if config["family"] == "binomial" and not config.get("denominator")
-                    else config["measurement_type"]
-                ),
-                family=None if config["family"] == "auto" else config["family"],
-                denominator="trials" if config.get("denominator") else None,
-                levels=config["ordinal_levels"] if ordinal else None,
-            )
-        ],
-        replicate_col=None,
-        max_interaction_order=config["max_order"],
-        n_boot=config["n_boot"],
-        n_boot_lrt=config["n_boot_lrt"],
-        n_perm=config["n_perm"],
-        seed=config["seed"],
-        n_jobs=1,
-        make_plots=False,
-        n_sim_diagnostics=250,
-        boot_lrt_time_budget_s=120,
-    )
-    levels = {alias: sorted(original_frame[alias].unique()) for alias in aliases.values()}
-    builder = DesignBuilder(
-        DesignSpec(
-            list(aliases.values()), levels, full_factorial_terms(list(aliases.values()), config["max_order"])
-        )
-    )
-    x = builder.build(original_frame)
-    if np.linalg.matrix_rank(x) < x.shape[1] or len(frame) <= x.shape[1] + 2:
-        raise ValueError("Design is rank deficient or has too few residual observations; lower interaction order.")
-    result = run_analysis(original_frame, cfg)
-    errors = [o.error.splitlines()[0] for o in result.outcomes.values() if o.error]
-    if not result.ok or errors:
-        raise ValueError("; ".join(errors) or result.validation.to_string(index=False))
-    tables = dict(result.tables, validation=result.validation, factor_registry=result.factor_registry)
-    diag = result.outcomes["outcome"].diagnostics
-    tables["residuals"] = pd.DataFrame(
-        dict(fitted=diag["_mu"], pit=diag["_pit"], observed=result.outcomes["outcome"].model.y)
-    )
-    n = len(frame)
-    tables["pit_qq"] = pd.DataFrame(dict(expected=(np.arange(n) + 0.5) / n, observed=np.sort(diag["_pit"])))
-    simulations = np.sort(diag["_sims"], axis=0)
-    tables["distribution_envelope"] = pd.DataFrame(
-        dict(
-            quantile=(np.arange(n) + 1) / n,
-            observed=np.sort(result.outcomes["outcome"].model.y),
-            simulated=np.median(simulations, axis=1),
-            sim_low=np.quantile(simulations, 0.025, axis=1),
-            sim_high=np.quantile(simulations, 0.975, axis=1),
-        )
-    )
-    output = dict(
-        tables=tables,
-        notes=[
-            "Prototype resolution: increase resampling counts before scientific interpretation.",
-            "Factor aliases: " + ", ".join(f"{alias} = {name}" for name, alias in aliases.items()),
-        ],
-        family=result.outcomes["outcome"].family,
-        report=markdown_report(result).replace("contrasts.csv", "the Contrasts table"),
-    )
-    output.update(
-        n_observations=len(frame),
-        n_excluded=len(source["rows"]) - len(frame),
-        source_fingerprint=source["fingerprint"],
-        runtime_s=time.perf_counter() - started,
-    )
-    return json_safe(output)

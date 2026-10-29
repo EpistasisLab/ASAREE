@@ -12,7 +12,7 @@ import numpy as np
 import pytest
 from fastapi import HTTPException
 
-from asaree.services.stats_prototypes import StatsRequest, catalog, json_safe, prepare_frame, run_custom_engine
+from asaree.services.stats_prototypes import StatsRequest, catalog, json_safe, prepare_frame
 from asaree.stats.analysis import analyze
 
 
@@ -285,7 +285,6 @@ def configuration(**kwargs):
         ("beta", "beta"),
         ("binomial", "binary"),
         ("ordinal_logit", "ordinal"),
-        ("tweedie", "positive"),
     ],
 )
 def test_mapped_models_produce_database_serializable_outputs(source, family, metric):
@@ -298,34 +297,6 @@ def test_mapped_models_produce_database_serializable_outputs(source, family, met
     assert len(result["tables"]["marginal_means"]) == 4
     assert len(result["tables"]["contrasts"]) == 3
     assert all(np.isfinite(row["estimate"]) for row in result["tables"]["cell_means"])
-
-
-@pytest.mark.parametrize(
-    ("family", "metric"),
-    [
-        ("gaussian", "continuous"),
-        ("binomial", "binary"),
-        ("poisson", "count"),
-        ("gamma", "positive"),
-        ("lognormal", "positive"),
-        ("beta", "beta"),
-    ],
-)
-def test_original_and_statsmodels_estimates_agree(source, family, metric):
-    config = configuration(family=family)
-    config["metric"] = metric
-    original = run_custom_engine(source, config)
-    established = native(source, config)
-    for table in ("cell_means", "marginal_means", "contrasts"):
-        np.testing.assert_allclose(
-            [row["estimate"] for row in original["tables"][table]],
-            [row["estimate"] for row in established["tables"][table]],
-            rtol=1e-5,
-            atol=1e-7,
-        )
-    assert "art_terms" in original["tables"]
-    assert "art_terms" not in established["tables"]
-    assert "comparison_terms" in original["tables"]
 
 
 def test_subprocess_runner_uses_only_json_streams(source):
@@ -345,8 +316,8 @@ def test_subprocess_runner_uses_only_json_streams(source):
 def test_binomial_denominator_is_used(source):
     config = configuration(family="binomial", denominator="trials")
     config["metric"] = "successes"
-    for output in (run_custom_engine(source, config), native(source, config)):
-        assert all(0 < row["estimate"] < 1 for row in output["tables"]["cell_means"])
+    output = native(source, config)
+    assert all(0 < row["estimate"] < 1 for row in output["tables"]["cell_means"])
 
 
 def test_unsupported_mapping_does_not_call_original(source):

@@ -99,19 +99,6 @@ class DesignBuilder:
             cols.extend(f"{b}[{l}]" for l in lv)
         self.columns = cols
 
-    @property
-    def n_columns(self) -> int:
-        return len(self.columns)
-
-    @property
-    def categorical_term_names(self) -> list[str]:
-        return [term_name(t) for t in self.spec.terms]
-
-    @property
-    def block_column_idx(self) -> np.ndarray:
-        idx = [self.term_columns[f"block:{b}"] for b in self.spec.blocks]
-        return np.concatenate(idx) if idx else np.array([], dtype=int)
-
     # ------------------------------------------------------------------- build
     def build(self, df: pd.DataFrame) -> np.ndarray:
         s = self.spec
@@ -160,12 +147,6 @@ class DesignBuilder:
         for c in s.covariates:
             grid[c] = s.covariate_means[c]
         return grid, self.build(grid), nb
-
-    def cell_rows(self) -> np.ndarray:
-        """Link-scale design rows per cell, averaged over block levels (blocks -> 0)."""
-        _, xg, nb = self.grid()
-        n_cells = xg.shape[0] // nb
-        return xg.reshape(n_cells, nb, -1).mean(axis=1)
 
 
 def cell_index(df: pd.DataFrame, factors: list[str], levels: dict[str, list]) -> np.ndarray:

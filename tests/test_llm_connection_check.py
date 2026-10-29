@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import httpx
 import pytest
+from motoro.services import providers
+from motoro.services.provider_types import ModelInfo, ModelListing
 
 from asaree.models.user_llm_setting import UserLLMSetting
 from asaree.services import llm_connection_check as check
@@ -38,7 +40,10 @@ class _FakeClient:
     async def __aexit__(self, *exc_info: object) -> None:
         return None
 
-    async def get(self, url: str, *, headers: dict) -> httpx.Response:
+    async def get(self, url: str, *, headers: dict, timeout: float, follow_redirects: bool, auth) -> httpx.Response:
+        assert timeout == 10.0
+        assert follow_redirects is False
+        assert auth is None
         self._calls.append((url, headers))
         if self._raises is not None:
             raise self._raises
@@ -48,7 +53,7 @@ class _FakeClient:
 def _patch_client(monkeypatch: pytest.MonkeyPatch, status_code: int = 200, raises: Exception | None = None) -> list:
     calls: list[tuple[str, dict]] = []
     monkeypatch.setattr(
-        check.httpx, "AsyncClient", lambda **kwargs: _FakeClient(status_code, calls=calls, raises=raises)
+        providers.httpx, "AsyncClient", lambda **kwargs: _FakeClient(status_code, calls=calls, raises=raises)
     )
     return calls
 
@@ -125,16 +130,16 @@ async def test_transport_failure_scrubs_the_api_key(monkeypatch: pytest.MonkeyPa
 
     assert result.status == "failed"
     assert "secret-key" not in result.detail
-    assert "***" in result.detail
+    assert "no route" not in result.detail
 
 
 async def test_azure_success_delegates_to_deployment_discovery(monkeypatch: pytest.MonkeyPatch) -> None:
-    deployments = [object(), object()]
+    deployments = [ModelInfo(id="first"), ModelInfo(id="second")]
 
-    async def fake_discover(*, provider: str, setting: UserLLMSetting):
-        return deployments, "api", None
+    async def fake_discover(config, *, transport=None, client=None):
+        return ModelListing(models=deployments, source="api")
 
-    monkeypatch.setattr(check, "discover_models", fake_discover)
+    monkeypatch.setattr(providers, "discover_models", fake_discover)
 
     setting = _setting("azure_foundry", api_base="my-resource", azure_project_endpoint=_PROJECT_ENDPOINT)
     result = await check.check_connection(provider="azure_foundry", setting=setting)
@@ -142,29 +147,30 @@ async def test_azure_success_delegates_to_deployment_discovery(monkeypatch: pyte
     assert result.status == "ok"
     assert "2 deployment" in result.detail
     assert result.endpoint == _PROJECT_ENDPOINT
-    assert result.models is deployments
+    assert result.models == deployments
 
 
 async def test_azure_without_a_project_endpoint_is_unknown_not_failed(monkeypatch: pytest.MonkeyPatch) -> None:
     # No project endpoint means no free listing call exists for this
     # credential -- which says nothing about whether it can infer (inference
     # only needs api_base). Must not even attempt discovery.
-    async def fake_discover(*, provider: str, setting: UserLLMSetting):
+    async def fake_discover(config, *, transport=None, client=None):
         raise AssertionError("discovery should not run without a project endpoint")
 
-    monkeypatch.setattr(check, "discover_models", fake_discover)
+    monkeypatch.setattr(providers, "discover_models", fake_discover)
 
     result = await check.check_connection(provider="azure_foundry", setting=_setting("azure_foundry", api_base="r"))
 
     assert result.status == "unknown"
-    assert "can't be checked" in result.detail
+    assert result.error is not None and result.error.kind == "unavailable"
+    assert "Project endpoint" in result.detail
 
 
 async def test_azure_real_discovery_error_is_a_failure(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def fake_discover(*, provider: str, setting: UserLLMSetting):
-        return [], "error", "Could not reach Azure Foundry to list models: 401"
+    async def fake_discover(config, *, transport=None, client=None):
+        return ModelListing(source="error", note="Could not reach Azure Foundry to list models: 401")
 
-    monkeypatch.setattr(check, "discover_models", fake_discover)
+    monkeypatch.setattr(providers, "discover_models", fake_discover)
 
     setting = _setting("azure_foundry", api_base="r", azure_project_endpoint=_PROJECT_ENDPOINT)
     result = await check.check_connection(provider="azure_foundry", setting=setting)
@@ -184,10 +190,10 @@ async def test_openrouter_success_uses_bearer_auth_on_the_models_endpoint(monkey
 
 
 async def test_local_success_delegates_to_model_discovery(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def fake_discover(*, provider: str, setting: UserLLMSetting):
-        return [object(), object(), object()], "api", None
+    async def fake_discover(config, *, transport=None, client=None):
+        return ModelListing(models=[ModelInfo(id=str(index)) for index in range(3)], source="api")
 
-    monkeypatch.setattr(check, "discover_models", fake_discover)
+    monkeypatch.setattr(providers, "discover_models", fake_discover)
 
     setting = _setting("local", api_base="http://localhost:8000/v1")
     result = await check.check_connection(provider="local", setting=setting)
@@ -201,7 +207,8 @@ async def test_local_without_a_base_url_is_unknown_not_failed() -> None:
     result = await check.check_connection(provider="local", setting=_setting("local", api_base=None))
 
     assert result.status == "unknown"
-    assert "can't be checked" in result.detail
+    assert result.error is not None and result.error.kind == "unavailable"
+    assert "base URL" in result.detail
 
 
 async def test_local_no_listing_route_is_unknown_not_failed(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -209,10 +216,10 @@ async def test_local_no_listing_route_is_unknown_not_failed(monkeypatch: pytest.
     proof the credential is bad -- same posture as Azure's no-project-endpoint
     case."""
 
-    async def fake_discover(*, provider: str, setting: UserLLMSetting):
-        return [], "error", "This server didn't return a model list."
+    async def fake_discover(config, *, transport=None, client=None):
+        return ModelListing(source="error", note="This server didn't return a model list.")
 
-    monkeypatch.setattr(check, "discover_models", fake_discover)
+    monkeypatch.setattr(providers, "discover_models", fake_discover)
 
     setting = _setting("local", api_base="http://localhost:8000/v1")
     result = await check.check_connection(provider="local", setting=setting)

@@ -252,7 +252,7 @@ requires-dist = [
     { name = "bcrypt", specifier = ">=4.2.0" },
     { name = "email-validator", specifier = ">=2.2.0" },
     { name = "fastapi", specifier = ">=0.121.0" },
-    { name = "motoro", git = "https://github.com/EpistasisLab/motoro.git?tag=v0.13.0" },
+    { name = "motoro", git = "https://github.com/EpistasisLab/motoro.git?rev=227311f683e6be629ac4e7b2cc93a1ed1323d084" },
     { name = "pandas", specifier = ">=2.2.0" },
     { name = "pyarrow", specifier = ">=18.0.0" },
     { name = "pydantic", specifier = ">=2.10.0" },
@@ -1876,8 +1876,8 @@ wheels = [
 
 [[package]]
 name = "motoro"
-version = "0.13.0"
-source = { git = "https://github.com/EpistasisLab/motoro.git?tag=v0.13.0#da2847c0321dd90a6f885f82399c2d579a7e08ee" }
+version = "0.13.1.dev1+g227311f68"
+source = { git = "https://github.com/EpistasisLab/motoro.git?rev=227311f683e6be629ac4e7b2cc93a1ed1323d084#227311f683e6be629ac4e7b2cc93a1ed1323d084" }
 dependencies = [
     { name = "alembic" },
     { name = "asyncpg" },

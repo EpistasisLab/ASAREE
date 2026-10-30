@@ -5,7 +5,7 @@ Use tagged releases for reproducible installations and production deployments.
 
 | Work | Branch from | PR target | Merge method |
 | --- | --- | --- | --- |
-| Feature (`feat/*`) or fix (`fix/*`) | `develop` | `develop` | Squash normally |
+| Feature (`feat/*`) or fix (`fix/*`) | `develop` | `develop` | Merge commit |
 | Release promotion | `develop` | `main` | Merge commit |
 | Urgent released-code fix (`hotfix/*`) | `main` | `main` | Merge commit |
 | Synchronize a release or hotfix | `main` | `develop` | Merge commit |
@@ -18,7 +18,9 @@ release operations.
 Create a feature branch from current `origin/develop`, keep changes on that
 branch, and open a draft PR targeting `develop`. Complete focused local checks,
 then wait for GitHub CI, resolve review conversations, mark the PR ready, and
-squash-merge. Verify CI on the resulting `develop` commit as well as the PR.
+merge using a merge commit. Verify CI on the resulting `develop` commit as well
+as the PR. Preserve the feature branch's original commits; do not squash or
+rebase-merge PRs.
 
 GitHub defaults new PRs to `main`; explicitly select `develop` for feature/fix
 PRs. With gh, use `gh pr create --base develop --draft`. The required backend CI
@@ -32,9 +34,10 @@ GitHub Actions checks on an up-to-date branch:
 - `Type Check & Lint (frontend)`
 
 Reviewer approvals are set to zero for solo maintenance. Force pushes and branch
-deletion are blocked, and there are no bypass actors. `develop` permits squash
-and merge commits; `main` permits merge commits only. Linear history is not
-required because releases and synchronization must preserve merge ancestry.
+deletion are blocked, and there are no bypass actors. GitHub currently permits
+both squash and merge commits into `develop`, but this workflow uses merge
+commits to preserve commit ancestry. `main` permits merge commits only. Linear
+history is not required because releases and synchronization must preserve merge ancestry.
 Refresh a behind feature branch by merging `origin/develop` into it, then rerun
 CI. Never weaken protections to complete a merge.
 

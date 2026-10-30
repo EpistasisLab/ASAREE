@@ -200,6 +200,39 @@ The tests themselves still run under pytest; only pytest and its real Postgres
 dependency are placed on the same network. The `test` profile keeps this
 service out of a normal `docker compose up`.
 
+CI selects checks from the complete PR diff or every commit in a push:
+
+| Changes | Checks |
+| --- | --- |
+| Documentation only | Dependency-free CI selector tests |
+| Frontend | Type check, frontend tests and lint |
+| Backend | Lint, type check, migrations and regression tests |
+| Statistics source/tests or Python dependencies | Backend checks plus statistical validation |
+| CI configuration, shared build files, or unknown paths | All checks |
+
+Statistical validation includes the repeated null simulations, non-Gaussian and
+custom-model uncertainty checks, and repeated interaction/bootstrap integration
+checks. Fast formula/reference checks, failure handling, API and migration tests
+remain in the regression suite. No tests are removed. Tests unrelated to
+resampling use small explicit simulation counts rather than production defaults.
+
+With the test environment installed and any required PostgreSQL URLs configured:
+
+```bash
+uv run pytest tests/ -m 'not stats_validation' -q  # regression suite
+uv run pytest tests/ -m stats_validation -q      # expensive validation
+uv run pytest tests/ -q                         # both suites
+python3 -m unittest discover -s .github/ci -p 'test_*.py'
+```
+
+Before a release, run the CI workflow manually using GitHub Actions' **Run
+workflow** control; manual runs always select every suite. Unknown or unavailable
+diffs also select every suite. Skipped backend/frontend jobs retain their existing
+required check names; a failed selector blocks the backend check. CI prints the
+slowest test durations for both backend tiers. New expensive tests should use
+`@pytest.mark.stats_validation`; keep their input paths covered by
+`.github/ci/scope.py` and its tests.
+
 The frontend hot-reloads from your checkout; backend changes need a rebuild.
 
 `docker compose up -d --build` also runs pending database migrations. The

@@ -211,6 +211,7 @@ def interaction(output):
     return output["tables"]["interaction_resampling"].iloc[0].to_dict()
 
 
+@pytest.mark.stats_validation
 def test_gamma_interaction_is_a_quantile_residual_permutation_of_the_models_wald_statistic():
     frame = gamma_frame()
     first = analyze(frame, dict(config("gamma"), _resample=True))
@@ -226,6 +227,7 @@ def test_gamma_interaction_is_a_quantile_residual_permutation_of_the_models_wald
 
 
 @pytest.mark.parametrize("family", ["poisson", "negbin"])
+@pytest.mark.stats_validation
 def test_count_interaction_uses_permutation_not_a_bootstrap_substitute(family):
     row = interaction(analyze(count_frame(family), dict(config(family), _resample=True)))
     assert row["kind"] == "permutation"

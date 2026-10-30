@@ -119,6 +119,7 @@ def test_explicit_factor_exclusions_and_dependence_are_explained():
     assert result["summary"]["design_specification"]["structure"] == {"blocks": ["subject"]}
 
 
+@pytest.mark.stats_validation
 def test_beta_uses_joint_hc3_and_records_quantile_residual_permutation():
     source = source_for_design({"A": ["a", "b"], "B": ["x", "y"]}, beta=True)
     result = run(source)

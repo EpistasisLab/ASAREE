@@ -77,7 +77,7 @@ def test_numeric_text_is_converted_without_modifying_snapshot():
     values = [str(v) for v in rng.normal(0, 1, 100)]
     source = source_for(values)
     original = deepcopy(source)
-    output = compute(source, StatsRequest(metric="measurement").model_dump())
+    output = compute(source, StatsRequest(metric="measurement", n_boot=20, n_perm=99).model_dump())
     assert output["validity"] == "valid"
     assert any("String conversion" in s for s in output["summary"]["methods"])
     assert source == original
@@ -237,6 +237,7 @@ def test_reported_gaussian_test_names_follow_native_reference_distributions(robu
 
 
 @pytest.mark.parametrize("kind", ["binary", "count", "proportion", "positive", "ordinal"])
+@pytest.mark.stats_validation
 def test_nongaussian_comparisons_have_response_scale_uncertainty(kind):
     rng = np.random.default_rng(10)
     group = np.arange(240) % 2
@@ -369,7 +370,7 @@ def test_structured_treatments_use_declared_short_labels_without_merging_conditi
             level_labels=["Small model", "Large model"],
         )
     }
-    output = compute(source, StatsRequest(metric="measurement").model_dump())
+    output = compute(source, StatsRequest(metric="measurement", n_boot=20, n_perm=99).model_dump())
     assert output["validity"] == "valid"
     comparison = output["summary"]["effects"][0]["comparison"]
     assert "Small model" in comparison and "Large model" in comparison
@@ -453,6 +454,7 @@ def test_ordered_labels_are_normalized_without_losing_their_order():
 
 
 @pytest.mark.parametrize("kind", ["gaussian", "binary"])
+@pytest.mark.stats_validation
 def test_seeded_null_simulations_do_not_systematically_find_effects(kind):
     """A coarse calibration check, not a claim of universal statistical validity."""
     rng = np.random.default_rng(96)
@@ -564,6 +566,7 @@ async def test_automatic_batch_pins_one_snapshot_before_enqueuing(monkeypatch):
 
 
 @pytest.mark.parametrize("kind", ["boundary", "hurdle", "overdispersed_trials"])
+@pytest.mark.stats_validation
 def test_specialized_custom_models_are_checked_before_being_reported(kind):
     rng = np.random.default_rng(25)
     group = np.arange(240) % 2

@@ -2,17 +2,42 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [develop, main]
   pull_request:
-    branches: [main]
+    branches: [develop, main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
 
 concurrency:
   group: ci-${{ github.event.pull_request.number || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  changes:
+    name: Select relevant checks
+    runs-on: ubuntu-latest
+    outputs:
+      backend: ${{ steps.scope.outputs.backend }}
+      frontend: ${{ steps.scope.outputs.frontend }}
+      stats_validation: ${{ steps.scope.outputs.stats_validation }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          sparse-checkout: .github/ci
+      - name: Test change selection
+        run: python3 -m unittest discover -s .github/ci -p 'test_*.py'
+      - name: Classify changed files
+        id: scope
+        run: python3 .github/ci/scope.py
+
   backend:
     name: Lint & Test (backend)
+    needs: changes
+    # Fail this required check if selection fails; skipped jobs still satisfy it.
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.backend == 'true') }}
     runs-on: ubuntu-latest
 
     # The suite runs against a real Postgres, not sqlite or mocks: this
@@ -51,6 +76,12 @@ jobs:
       ASAREE_MIGRATIONS_TEST_DATABASE_URL: postgresql+asyncpg://agentic:agentic@localhost:5432/motoro
 
     steps:
+      - name: Verify change selection succeeded
+        if: needs.changes.result != 'success'
+        run: |
+          echo "::error::CI change selection failed. Fix the dispatcher before merging."
+          exit 1
+
       - uses: actions/checkout@v6
 
       # No setup-python step on purpose: `requires-python = ">=3.12"` plus uv's
@@ -67,7 +98,7 @@ jobs:
       - name: Check lockfile is up to date
         run: uv lock --check
 
-      # The slow step by a wide margin -- motoro depends unconditionally on
+      # Cold installs are large -- motoro depends unconditionally on
       # sentence-transformers, which pulls ~4.5 GB of torch + CUDA that
       # nothing in ASAREE imports (EpistasisLab/motoro#6). The uv cache above
       # absorbs it on warm runs; when that issue lands, this drops to well
@@ -76,7 +107,7 @@ jobs:
         run: uv sync --frozen --group dev
 
       - name: Ruff check
-        run: uv run ruff check src/asaree tests
+        run: uv run ruff check src/asaree tests .github/ci
 
       # Deliberately absent: `ruff format --check`. This repo is knowingly not
       # ruff-format-clean and reformatting it is not wanted, so the step could
@@ -121,13 +152,17 @@ jobs:
       - name: Seed row-test users
         run: uv run python scripts/seed_row_test_users.py
 
-      # The whole suite, on purpose: 769 tests in ~13s locally, so there is no
-      # slow tier worth splitting out.
-      - name: Pytest
-        run: uv run pytest tests/ -q --tb=short
+      - name: Regression tests
+        run: uv run pytest tests/ -m 'not stats_validation' -q --tb=short --durations=15
+
+      - name: Statistical validation
+        if: needs.changes.outputs.stats_validation == 'true'
+        run: uv run pytest tests/ -m stats_validation -q --tb=short --durations=15
 
   frontend:
     name: Type Check & Lint (frontend)
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.result == 'success' && needs.changes.outputs.frontend == 'true' }}
     runs-on: ubuntu-latest
     defaults:
       run:

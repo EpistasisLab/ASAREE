@@ -19,7 +19,7 @@ import { ApiError, experimentsApi, protocolsApi } from '@/api/client'
 import { cellsStatusAccent } from '@/lib/experiment'
 import { executionKeys, useExecutionSummary } from '@/lib/executionQueries'
 import type { ExecutionSummary } from '@/types/executionResults'
-import { unboundFactorNames } from '@/lib/factorBindings'
+import { factorBindingDiscrepancies, unboundFactorNames } from '@/lib/factorBindings'
 import {
   applyExperimentRenameToProtocolCache,
   generatedProtocolName,
@@ -267,6 +267,9 @@ export function ProtocolCanvasPage() {
   const unboundFactors = experimentQuery.data && protocolQuery.data
     ? unboundFactorNames(experimentQuery.data.design_spec, protocolQuery.data.graph)
     : []
+  const bindingDiscrepancies = experimentQuery.data && protocolQuery.data
+    ? factorBindingDiscrepancies(experimentQuery.data.design_spec, protocolQuery.data.graph)
+    : []
   const versionsQuery = useQuery({ queryKey: ['protocols', protocolQuery.data?.id, 'revisions'], queryFn: () => protocolsApi.listRevisions(protocolQuery.data!.id), enabled: !!protocolQuery.data?.id, refetchInterval: versionBrowserOpen ? 5000 : false })
   const experimentVersions = versionsQuery.data?.filter(item => item.experiment_snapshot != null).sort((a, b) => b.revision - a.revision)
   const hasChanges = !!protocolQuery.data?.has_unpublished_changes || draftBusy
@@ -351,6 +354,10 @@ export function ProtocolCanvasPage() {
                   hasUnpublishedChanges={protocolQuery.data.has_unpublished_changes}
                   publishedRevision={protocolQuery.data.published_revision}
                   experimentLocked={!!experimentQuery.data?.locked_at}
+                  protocol={protocolQuery.data}
+                  regenerationRequired={impactQuery.data?.regeneration_required ?? false}
+                  unboundFactors={unboundFactors}
+                  bindingDiscrepancies={bindingDiscrepancies}
                 />
               </ReactFlowProvider>
               </div>

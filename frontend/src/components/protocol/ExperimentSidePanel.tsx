@@ -3,6 +3,8 @@ import { BarChart3, ListChecks, PanelLeftClose, PencilRuler } from 'lucide-react
 import { useSearchParams } from 'react-router-dom'
 import { Card } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { ExperimentStatistics } from '@/components/stats/ExperimentStatistics'
 import { cn } from '@/lib/utils'
 import { DesignTab } from './DesignTab'
 import { ExperimentVersionDesign, ExperimentVersionRuns } from './ExperimentVersionView'
@@ -99,6 +101,17 @@ export function ExperimentSidePanel({
   const [searchParams, setSearchParams] = useSearchParams()
   const requestedTab = searchParams.get('tab')
   const activeTab: PanelTab = requestedTab === 'runs' || requestedTab === 'results' ? requestedTab : 'design'
+  const resultsView = searchParams.get('results') === 'statistics' ? 'statistics' : 'experiment'
+
+  function setResultsView(value: string) {
+    setSearchParams(previous => {
+      const next = new URLSearchParams(previous)
+      if (value === 'statistics') next.set('results', value)
+      else next.delete('results')
+      return next
+    })
+    onResultSelection(null)
+  }
   const [hasPendingDesignUpdate, setHasPendingDesignUpdate] = useState(false)
   const [dragging, setDragging] = useState(false)
   const dragStart = useRef<{ x: number; width: number } | null>(null)
@@ -166,9 +179,10 @@ export function ExperimentSidePanel({
   }
 
   function openPanel(tab: PanelTab) {
-    if (searchParams.get('tab') !== tab) setSearchParams(previous => {
+    setSearchParams(previous => {
       const next = new URLSearchParams(previous)
       next.set('tab', tab)
+      if (tab === 'results') next.delete('results')
       return next
     })
     setPanelCollapsed(false)
@@ -239,15 +253,19 @@ export function ExperimentSidePanel({
 
       {!collapsed && (
         <Card className={cn(
-          'flex min-h-0 flex-1 flex-col overflow-hidden rounded-l-none p-0',
+          '@container flex min-h-0 flex-1 flex-col overflow-hidden rounded-l-none p-0',
           showDesignAttentionBorder && 'border border-[color:var(--chart-4)]/60',
         )}>
+          <Tabs value={resultsView} onValueChange={value => setResultsView(String(value))} className="min-h-0 flex-1 gap-0">
           <div className="flex h-11 shrink-0 items-center justify-between border-b px-3">
-            <span className="text-sm font-medium">{activeTab === 'design' ? 'Design' : activeTab === 'runs' ? 'Runs' : 'Experiment Results'}</span>
+            {activeTab === 'results' ? <TabsList variant="line" aria-label="Results views" className="min-w-0">
+              <TabsTrigger value="experiment" className="text-xs">Experiment Results</TabsTrigger>
+              <TabsTrigger value="statistics" className="text-xs">Statistics</TabsTrigger>
+            </TabsList> : <span className="text-sm font-medium">{activeTab === 'design' ? 'Design' : 'Runs'}</span>}
             <div className="flex items-center gap-2">
-              {activeTab === 'results' && experiment && !isLoading && !(viewingHistory && !version) && <ResultsStatusBadge
+              {activeTab === 'results' && resultsView === 'experiment' && experiment && !isLoading && !(viewingHistory && !version) && <div className="hidden @lg:block"><ResultsStatusBadge
                 experimentId={experiment.id} scope={{ protocol_id: protocol?.id,
-                  protocol_revision_id: version?.id ?? protocol?.published_revision_id ?? undefined }} />}
+                  protocol_revision_id: version?.id ?? protocol?.published_revision_id ?? undefined }} /></div>}
               <button
                 type="button"
                 aria-label="Collapse experiment panel"
@@ -288,6 +306,12 @@ export function ExperimentSidePanel({
                   onViewResult={viewReplicateResult}
                 />
               ) : activeTab === 'results' ? (
+                <>
+                <TabsContent value="statistics">
+                  <ExperimentStatistics key={`${experiment.id}:${version?.id ?? protocol?.published_revision_id ?? 'unpublished'}`}
+                    experiment={experiment.id} version={version?.id ?? protocol?.published_revision_id ?? null} />
+                </TabsContent>
+                <TabsContent value="experiment">
                 <ResultsTab
                   selectedCellId={selectedResultCellId ?? null}
                   versionId={version?.id ?? protocol?.published_revision_id ?? undefined}
@@ -297,9 +321,12 @@ export function ExperimentSidePanel({
                   experiment={resultsExperiment ?? experiment}
                   onSelectResult={selection => onResultSelection({ ...selection, scope: { protocol_id: protocol?.id, protocol_revision_id: version?.id } })}
                 />
+                </TabsContent>
+                </>
               ) : null}
             </div>
           )}
+          </Tabs>
         </Card>
       )}
 

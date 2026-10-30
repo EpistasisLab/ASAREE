@@ -23,7 +23,7 @@ from asaree.services.llm_model_cache import (
     store_models_cache,
 )
 from asaree.services.llm_model_discovery import ModelInfo
-from asaree.services.model_config import resolve_model_capabilities
+from asaree.services.model_config import resolve_model_metadata
 from asaree.services.provider_config import ProviderConfigurationError
 from asaree.services.rate_limit import check_rate_limit, record_attempt
 from asaree.services.tool_calling import model_tool_calling_support
@@ -62,6 +62,7 @@ class LLMSettingResponse(BaseModel):
 class LLMModelInfoResponse(ModelCapabilities):
     id: str
     label: str | None
+    model_metadata: ModelInfo
     # Unlike the three above, this one doesn't come from Motoro's
     # ModelCapabilities registry -- it's litellm's own function-calling flag,
     # the same oracle ``model_supports_tool_calling`` uses to pick an agent's
@@ -83,6 +84,7 @@ def _model_response(model: ModelInfo, provider: str) -> LLMModelInfoResponse:
     return LLMModelInfoResponse(
         id=model.id,
         label=model.label,
+        model_metadata=model,
         **model.capabilities.model_dump(),
         supports_tool_calling=model_tool_calling_support(provider, model.id),
     )
@@ -99,7 +101,8 @@ class LLMConnectionCheckResponse(BaseModel):
 
 
 class SamplingPreviewRequest(BaseModel):
-    capabilities: ModelCapabilities
+    capabilities: ModelCapabilities | None = None
+    model_metadata: ModelInfo | None = None
     model: str = "<unspecified>"
     temperature: float | None = None
     effort: str | None = None
@@ -109,7 +112,14 @@ class SamplingPreviewRequest(BaseModel):
 async def sampling_preview_endpoint(body: SamplingPreviewRequest, user: CurrentUser) -> ResolvedSampling:
     """Use execution's resolver for defaults and validation without calling a model."""
     try:
-        return resolve_sampling(body.capabilities, temperature=body.temperature, effort=body.effort, model=body.model)
+        if body.model_metadata is not None and body.model_metadata.id != body.model:
+            raise SamplingConfigurationError("Metadata must describe the selected model")
+        return resolve_sampling(
+            body.capabilities or body.model_metadata or ModelCapabilities(),
+            temperature=body.temperature,
+            effort=body.effort,
+            model=body.model,
+        )
     except SamplingConfigurationError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -234,16 +244,17 @@ async def list_models_endpoint(provider: str, user: CurrentUser, db: DbSession) 
     )
 
 
-@router.get("/{provider}/model-capabilities", response_model=ModelCapabilities)
+@router.get("/{provider}/model-capabilities", response_model=LLMModelInfoResponse)
 async def model_capabilities_endpoint(
     provider: str, model: Annotated[str, Query(min_length=1, max_length=256)], user: CurrentUser, db: DbSession
-) -> ModelCapabilities:
+) -> LLMModelInfoResponse:
     if provider not in SUPPORTED_PROVIDERS:
         raise HTTPException(status_code=422, detail=f"provider must be one of {sorted(SUPPORTED_PROVIDERS)}")
     if not model.strip():
         raise HTTPException(status_code=422, detail="model must not be blank")
     try:
-        return await resolve_model_capabilities(provider=provider, model=model, db=db, owner_id=user.id)
+        metadata = await resolve_model_metadata(provider=provider, model=model, db=db, owner_id=user.id)
+        return _model_response(metadata, provider)
     except ProviderConfigurationError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from None
     except ModelDiscoveryRateLimitError as exc:

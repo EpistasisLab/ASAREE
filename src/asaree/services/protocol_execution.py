@@ -5662,7 +5662,7 @@ async def run_protocol(protocol_run_id: uuid.UUID) -> None:
                     db, protocol_run_id, status="failed", error="published protocol revision no longer exists"
                 )
                 return
-            graph = revision.graph
+            graph = {**revision.graph, "sampling_publication": True}
         experiment_id, replicate_label, factor_values = (
             protocol.experiment_id,
             run.replicate_label,

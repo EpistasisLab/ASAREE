@@ -31,9 +31,10 @@ export function ModelFactorDialog({ node, nodeLabel, factors, initialFieldPath, 
   const { models, modelsQuery, capabilities: resolvedCapabilities, capabilitiesPending, capabilitiesError } = useProviderModels(config.provider as string | undefined, config.model as string | undefined, config.resolved_capabilities as ModelCapabilities | undefined)
   const modelInfo = models.find((model) => model.id === config.model)
   const capabilities = modelCapabilities(resolvedCapabilities ?? modelInfo, config.resolved_capabilities as ModelCapabilities | undefined)
-  const showTemperature = !capabilitiesPending && capabilities.supports_temperature
-  const showEffort = !capabilitiesPending && capabilities.supports_effort
-  const effortLevels = capabilities.effort_levels
+  const showTemperature = !capabilitiesPending && capabilities.supports_temperature !== false
+  const showEffort = !capabilitiesPending && capabilities.supports_effort !== false
+  const effortLevels = capabilities.effort_levels.filter((level) => !capabilities.unsupported_effort_levels?.includes(level))
+  const freeEffort = capabilities.supports_effort == null || !capabilities.effort_levels.length || capabilities.effort_levels_complete === false
   const fields = bindableFieldsForNode(node)
   const available = (fieldPath: string) => fieldPath === 'config.temperature' ? showTemperature : fieldPath === 'config.effort' ? showEffort : true
   const visibleFields = fields.filter((field) => available(field.fieldPath) || node.data.factor_bindings?.[field.fieldPath] || initialFieldPath === field.fieldPath)
@@ -107,10 +108,11 @@ export function ModelFactorDialog({ node, nodeLabel, factors, initialFieldPath, 
                 <ModelField id={`model-factor-level-${index}`} value={String(level)} models={models} isLoading={modelsQuery.isLoading} disabledModelIds={draft.levels.filter((_, i) => i !== index).map(String)} onChange={(next) => setDraft({ ...draft, levels: draft.levels.map((value, i) => i === index ? next : value) })} />
               </> : path === 'config.effort' ? <>
                 <Label htmlFor={`model-factor-level-${index}`}>Level {index + 1} effort</Label>
-                <Select value={String(level) || '__none__'} onValueChange={(next) => next && next !== '__none__' && !draft.levels.some((value, i) => i !== index && value === next) && setDraft({ ...draft, levels: draft.levels.map((value, i) => i === index ? next : value) })}>
+                {freeEffort ? <Input id={`model-factor-level-${index}`} value={String(level)}
+                  onChange={(event) => setDraft({ ...draft, levels: draft.levels.map((value, i) => i === index ? event.target.value : value) })} /> : <Select value={String(level) || '__none__'} onValueChange={(next) => next && next !== '__none__' && !draft.levels.some((value, i) => i !== index && value === next) && setDraft({ ...draft, levels: draft.levels.map((value, i) => i === index ? next : value) })}>
                   <SelectTrigger id={`model-factor-level-${index}`} className="w-full"><SelectValue>{() => String(level) || 'Select effort…'}</SelectValue></SelectTrigger>
                   <SelectContent><SelectItem value="__none__" disabled>Select effort…</SelectItem>{effortLevels.map((effort) => <SelectItem key={effort} value={effort} disabled={effort !== level && draft.levels.some((value, i) => i !== index && value === effort)}>{effort}</SelectItem>)}</SelectContent>
-                </Select>
+                </Select>}
               </> : <Input aria-label={`Level ${index + 1} value`} type={numeric ? 'number' : 'text'} step="any" value={String(level)} onChange={(event) => setDraft({ ...draft, levels: draft.levels.map((value, i) => i === index ? event.target.value : value) })} />}
             </div>
             <Button variant="ghost" size="icon-sm" aria-label="Move level up" disabled={saving || index === 0} onClick={() => move(index, -1)}><ArrowUp className="size-3.5" /></Button>

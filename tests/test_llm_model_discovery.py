@@ -25,21 +25,19 @@ def _foundry_setting(api_base: str = "my-resource", azure_project_endpoint: str 
     )
 
 
-async def test_discover_models_anthropic_without_a_credential_returns_static_catalog() -> None:
+async def test_discover_models_anthropic_without_a_credential_returns_error() -> None:
     listing = await discovery.discover_models(provider="anthropic", setting=None)
     models, source, note = listing.models, listing.source, listing.note
-    assert source == "static"
-    assert note is None
-    assert any(m.id == "claude-sonnet-5" for m in models)
-    assert all(m.id for m in models)
+    assert source == "error"
+    assert note
+    assert models == []
 
 
-async def test_discover_models_openai_returns_static_catalog() -> None:
+async def test_discover_models_openai_without_credentials_returns_error() -> None:
     listing = await discovery.discover_models(provider="openai", setting=None)
     models, source = listing.models, listing.source
-    assert source == "static"
-    assert models  # non-empty
-    assert all(m.id for m in models)
+    assert source == "error"
+    assert models == []
 
 
 async def test_discover_models_azure_without_setting_returns_error() -> None:
@@ -271,11 +269,11 @@ async def test_anthropic_reads_effort_levels_from_the_live_capability_tree(
     assert by_id["claude-opus-5"].capabilities.effort_levels == ["low", "medium", "high", "xhigh", "max"]
     assert by_id["claude-opus-4-5-20251101"].capabilities.effort_levels == ["low", "medium", "high"]
 
-    # An effort model is a no-temperature model, and vice versa.
+    # Effort support does not imply anything about temperature support.
     assert by_id["claude-opus-5"].capabilities.supports_effort is True
-    assert by_id["claude-opus-5"].capabilities.supports_temperature is False
+    assert by_id["claude-opus-5"].capabilities.supports_temperature is None
     assert by_id["claude-haiku-4-5-20251001"].capabilities.supports_effort is False
-    assert by_id["claude-haiku-4-5-20251001"].capabilities.supports_temperature is True
+    assert by_id["claude-haiku-4-5-20251001"].capabilities.supports_temperature is None
     assert by_id["claude-haiku-4-5-20251001"].capabilities.effort_levels == []
 
     assert by_id["claude-opus-5"].label == "Claude Opus 5"
@@ -330,11 +328,9 @@ async def test_anthropic_missing_capability_tree_remains_unknown(monkeypatch: py
     assert models[0].capabilities.default_effort is None
 
 
-async def test_anthropic_failure_falls_back_to_the_catalog_and_scrubs_the_key(
+async def test_anthropic_failure_returns_no_fabricated_models_and_scrubs_the_key(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # A stale catalog beats an empty dropdown, and "static" keeps callers from
-    # flagging ids this list can't vouch for.
     monkeypatch.setattr(
         providers.httpx,
         "AsyncClient",
@@ -344,9 +340,8 @@ async def test_anthropic_failure_falls_back_to_the_catalog_and_scrubs_the_key(
     listing = await discovery.discover_models(provider="anthropic", setting=_anthropic_setting())
     models, source, note = listing.models, listing.source, listing.note
 
-    assert source == "static"
-    assert models  # the curated catalog, not []
-    assert any(m.id == "claude-sonnet-5" for m in models)
+    assert source == "error"
+    assert models == []
     assert note and "secret-key" not in note
 
 
@@ -365,7 +360,7 @@ async def test_anthropic_honours_a_custom_api_base(monkeypatch: pytest.MonkeyPat
     assert captured["urls"] == ["https://proxy.internal/v1/models"]
 
 
-async def test_anthropic_empty_listing_falls_back_to_the_catalog(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_anthropic_empty_listing_returns_error(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         providers.httpx, "AsyncClient", lambda **kwargs: _PagingClient([{"data": [], "has_more": False}], {})
     )
@@ -373,8 +368,8 @@ async def test_anthropic_empty_listing_falls_back_to_the_catalog(monkeypatch: py
     listing = await discovery.discover_models(provider="anthropic", setting=_anthropic_setting())
     models, source, _ = listing.models, listing.source, listing.note
 
-    assert source == "static"
-    assert models
+    assert source == "error"
+    assert models == []
 
 
 # --- OpenRouter / Local live discovery ----------------------------------
@@ -432,16 +427,16 @@ async def test_openrouter_discovery_sends_bearer_token_when_credential_saved(
     assert captured["headers"] == {"Authorization": "Bearer sk-or-real-key"}
 
 
-async def test_openrouter_model_capabilities_resolve_via_motoros_registry(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Missing metadata preserves known registry entries, including Claude."""
+async def test_openrouter_missing_metadata_stays_unknown(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Model names never supply capability facts."""
     response = _FakeResponse({"data": [{"id": "anthropic/claude-opus-5", "name": "Claude Opus 5"}]})
     monkeypatch.setattr(providers.httpx, "AsyncClient", lambda **kwargs: _SimpleClient(response, captured={}))
 
     listing = await discovery.discover_models(provider="openrouter", setting=None)
     models, _, _ = listing.models, listing.source, listing.note
 
-    assert models[0].capabilities.supports_effort is True
-    assert models[0].capabilities.supports_temperature is False
+    assert models[0].capabilities.supports_effort is None
+    assert models[0].capabilities.supports_temperature is None
 
 
 @pytest.mark.parametrize(
@@ -480,7 +475,7 @@ async def test_openrouter_model_capabilities_resolve_via_motoros_registry(monkey
             {"supported_parameters": ["reasoning"], "reasoning": {"supported_efforts": None}},
             False,
             True,
-            ["none", "minimal", "low", "medium", "high", "xhigh", "max"],
+            None,
             None,
         ),
         ({"supported_parameters": ["reasoning_effort"]}, False, True, None, None),
@@ -533,7 +528,7 @@ async def test_openrouter_temperature_defaults_and_known_mode_restrictions(monke
     caps = models[0].capabilities
     assert caps.default_temperature == default
     assert caps.supports_temperature is caps.supports_effort is True
-    assert caps.temperature_effort_levels == ["none"]
+    assert caps.temperature_effort_levels is None
 
 
 async def test_anthropic_explicit_defaults_and_independent_temperature_support(monkeypatch):
@@ -607,7 +602,7 @@ async def test_local_unknown_models_remain_unknown_without_changing_known_claude
     by_id = {model.id: model.capabilities for model in models}
     assert by_id["qwen3.8-27b"].supports_effort is None
     assert by_id["qwen3.8-27b"].supports_temperature is None
-    assert by_id["claude-opus-5"].supports_effort is True
+    assert by_id["claude-opus-5"].supports_effort is None
 
 
 async def test_local_discovery_without_a_base_url_returns_error() -> None:
@@ -650,19 +645,18 @@ async def test_local_discovery_no_listing_route_surfaces_as_error_source_so_the_
     assert note
 
 
-async def test_openai_stays_on_the_curated_catalog_without_calling_out(monkeypatch: pytest.MonkeyPatch) -> None:
-    # GET /v1/models carries no capability data (probed live), and listing it
-    # would surface ~124 mostly non-chat models each defaulting to
-    # temperature-only. Don't spend a request to get a worse answer.
-    def _explode(**kwargs: object) -> None:
-        raise AssertionError("openai discovery should make no HTTP call")
-
-    monkeypatch.setattr(providers.httpx, "AsyncClient", _explode)
+async def test_openai_lists_actual_models_without_inventing_capabilities(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured = {}
+    response = _FakeResponse({"data": [{"id": "future-model"}]})
+    monkeypatch.setattr(providers.httpx, "AsyncClient", lambda **kwargs: _SimpleClient(response, captured=captured))
 
     setting = UserLLMSetting(provider="openai", api_key_encrypted=encrypt("secret-key"), api_base=None)
     listing = await discovery.discover_models(provider="openai", setting=setting)
     models, source, note = listing.models, listing.source, listing.note
 
-    assert source == "static"
+    assert source == "api"
     assert note is None
     assert models
+    assert captured["headers"] == {"Authorization": "Bearer secret-key"}
+    assert models[0].id == "future-model"
+    assert models[0].capabilities.supports_temperature is None

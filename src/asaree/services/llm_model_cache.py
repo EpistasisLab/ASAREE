@@ -16,6 +16,7 @@ import logging
 import time
 import uuid
 from collections import OrderedDict
+from typing import Any
 
 from motoro.services.provider_types import ModelInfo, ModelListing, ProviderError
 from pydantic import BaseModel
@@ -58,6 +59,7 @@ class ModelDiscoveryRateLimitError(RuntimeError):
 class _CachedListing(BaseModel):
     listing: ModelListing
     fresh_until: float
+    discovered_at: float | None = None
 
 
 def _key(user_id: uuid.UUID, provider: str, setting: UserLLMSetting | None = None) -> str:
@@ -68,11 +70,29 @@ def _key(user_id: uuid.UUID, provider: str, setting: UserLLMSetting | None = Non
     if setting is not None:
         fields = [str(setting.id), setting.api_key_encrypted, setting.api_base, setting.azure_project_endpoint]
         revision = hashlib.sha256(json.dumps(fields).encode()).hexdigest()
-    return f"llm:models:{user_id}:{provider}:v5:{revision}"
+    return f"llm:models:{user_id}:{provider}:v6:{revision}"
 
 
 def _dump(listing: ModelListing, *, now: float) -> str:
-    return _CachedListing(listing=listing, fresh_until=now + _FRESH_SECONDS).model_dump_json()
+    return _CachedListing(listing=listing, fresh_until=now + _FRESH_SECONDS, discovered_at=now).model_dump_json()
+
+
+async def discovery_context(
+    *,
+    user_id: uuid.UUID,
+    provider: str,
+    setting: UserLLMSetting | None,
+) -> dict[str, Any]:
+    """Audit identity and observation time without credentials or additional provider I/O."""
+    key = _key(user_id, provider, setting)
+    cached = await _read(key)
+    return {
+        "provider": provider,
+        "api_base": setting.api_base if setting is not None else None,
+        "azure_project_endpoint": setting.azure_project_endpoint if setting is not None else None,
+        "credential_revision": key.rsplit(":", 1)[-1],
+        "discovered_at": cached.discovered_at if cached is not None else None,
+    }
 
 
 def _load(raw: str) -> _CachedListing:

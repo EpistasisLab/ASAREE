@@ -5,14 +5,45 @@ on:
     branches: [develop, main]
   pull_request:
     branches: [develop, main]
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
 
 concurrency:
   group: ci-${{ github.event.pull_request.number || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  changes:
+    name: Select relevant checks
+    runs-on: ubuntu-latest
+    outputs:
+      backend: ${{ steps.scope.outputs.backend }}
+      frontend: ${{ steps.scope.outputs.frontend }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          sparse-checkout: .github/ci
+      - name: Test change selection
+        run: python3 -m unittest discover -s .github/ci -p 'test_*.py'
+      - name: Classify changed files
+        id: scope
+        run: python3 .github/ci/scope.py
+
   backend:
     name: Lint & Test (backend)
+    needs: changes
+    # A skipped job satisfies the existing required check without starting services.
+    # A failed dispatcher must fail this required check instead of approving a change.
+    # The branch-target guard must also run for a docs-only feat/fix PR targeting main.
+    if: >-
+      ${{ !cancelled() && (
+        needs.changes.result != 'success' || needs.changes.outputs.backend == 'true' ||
+        (github.event_name == 'pull_request' && github.base_ref == 'main' &&
+          (startsWith(github.head_ref, 'feat/') || startsWith(github.head_ref, 'fix/')))
+      ) }}
     runs-on: ubuntu-latest
 
     # The suite runs against a real Postgres, not sqlite or mocks: this
@@ -51,6 +82,12 @@ jobs:
       ASAREE_MIGRATIONS_TEST_DATABASE_URL: postgresql+asyncpg://agentic:agentic@localhost:5432/motoro
 
     steps:
+      - name: Verify change selection succeeded
+        if: needs.changes.result != 'success'
+        run: |
+          echo "::error::CI change selection failed. Fix the dispatcher before merging."
+          exit 1
+
       - name: Check pull request target
         if: github.event_name == 'pull_request'
         env:
@@ -89,7 +126,7 @@ jobs:
         run: uv sync --frozen --group dev
 
       - name: Ruff check
-        run: uv run ruff check src/asaree tests
+        run: uv run ruff check src/asaree tests .github/ci
 
       # Deliberately absent: `ruff format --check`. This repo is knowingly not
       # ruff-format-clean and reformatting it is not wanted, so the step could
@@ -141,6 +178,8 @@ jobs:
 
   frontend:
     name: Type Check & Lint (frontend)
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.result == 'success' && needs.changes.outputs.frontend == 'true' }}
     runs-on: ubuntu-latest
     defaults:
       run:

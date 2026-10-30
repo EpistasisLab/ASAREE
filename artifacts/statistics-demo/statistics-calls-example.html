@@ -1,0 +1,617 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src 'none'">
+<title>ASAREE statistics — Calls</title>
+<style>body{font:16px/1.6 system-ui,sans-serif;color:#202c38;max-width:1100px;margin:40px auto;padding:0 24px}
+h1,h2{line-height:1.25}table{border-collapse:collapse;width:100%;font-size:14px;margin:16px 0}
+th,td{border-bottom:1px solid #cbd5e1;text-align:left;padding:10px;vertical-align:top;overflow-wrap:anywhere}
+th{background:#eff3f6}pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px}
+.test-method{display:block;margin-top:4px;color:#526170;font-size:12px}
+.column-method{display:block;margin-top:4px;color:#526170;font-size:11px;font-weight:normal}
+.model-fit{margin:20px 0;padding:20px;border:1px solid #dce6eb;border-radius:8px}.model-fit h3{margin:0 0 12px}
+.fit-summary{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin:0}
+.fit-summary dt{font-size:12px;color:#526170}.fit-summary dd{margin:2px 0 0;font:15px monospace}
+.detail h3{font-size:14px;margin:20px 0 4px}
+.notice{padding:12px 16px;border:1px solid #d97706;border-radius:8px;background:#fff7ed}
+.detail table{font-size:12px}
+figure{margin:20px 0;padding:20px;border:1px solid #dce6eb;border-radius:8px;break-inside:avoid}
+figcaption{font-size:12px;color:#526170;margin-bottom:16px}
+.chart{display:flex;gap:8px}.chart-body{flex:1;min-width:0}
+.y-title{writing-mode:vertical-rl;transform:rotate(180deg);height:180px;text-align:center;font-size:12px}
+.y-ticks{display:flex;height:180px;flex-direction:column;justify-content:space-between;
+text-align:right;font:11px monospace;color:#526170}
+.distribution{display:flex;gap:1px;list-style:none;padding:0;margin:0;height:180px;border-bottom:1px solid #94a3b8;
+background:repeating-linear-gradient(to top,transparent 0,transparent calc(25% - 1px),#dce6eb 25%)}
+.distribution.frequencies{gap:8px}.distribution li{display:flex;align-items:flex-end;flex:1;min-width:0}
+.bar{display:block;width:100%;background:#318eaa;border:1px solid #167fa2;box-sizing:border-box}
+.x-ticks{display:grid;margin-top:8px;font:10px monospace;color:#526170;overflow-wrap:anywhere}
+.x-ticks span{text-align:center}.x-title{text-align:center;font-size:12px;color:#526170}
+.numeric-ticks{display:flex;justify-content:space-between;gap:4px;margin-top:8px;font:10px monospace;color:#526170}
+.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
+.methodology{margin:24px 0;border:1px solid #b6d9e4;border-radius:12px;overflow:hidden}
+.methodology header{padding:20px;background:#eef8fb;border-bottom:1px solid #b6d9e4}
+.methodology h2,.methodology h3{margin:4px 0 12px}.methodology p{font-size:13px}
+.eyebrow{font:11px monospace;color:#167fa2;text-transform:uppercase;letter-spacing:2px}
+.method-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,280px),1fr));gap:12px;padding:16px}
+.method-step{padding:16px;border:1px solid #dce6eb;border-radius:8px;min-width:0;overflow-wrap:anywhere}
+.method-step h3{font-size:15px}.method-step h4{font-size:13px;margin:12px 0 4px}
+.method-step li{font-size:13px;margin:8px 0}.methodology details{padding:16px;border-top:1px solid #dce6eb}
+@media print{body{margin:0;max-width:none}tr{break-inside:avoid}}</style></head>
+<body><h1>Statistical results: Calls</h1>
+<p>Number of tool-call attempts in one run.</p><p>Unit: calls</p>
+<p>Status: valid · Execution: completed</p>
+<p>SYNTHETIC DEMONSTRATION. Analyzed 240 runs for Calls as a count measurement.</p>
+<ul><li>The primary parametric-bootstrap interval found evidence of a difference for Approach: Revised vs Standard (pointwise; not multiplicity-adjusted).</li><li>The primary parametric-bootstrap interval found no clear evidence of a difference for Setting: Basic vs Extended (pointwise; not multiplicity-adjusted).</li><li>The primary parametric-bootstrap interval found no clear evidence of a difference for Approach (Revised vs Standard) × Setting (Basic vs Extended) (pointwise; not multiplicity-adjusted).</li><li>Secondary factor test: The main test found evidence that Approach has an effect on this metric. The permutation check found no clear evidence that Approach has an effect on this metric. The two methods differ; interpret this finding cautiously.</li><li>Secondary factor test: Neither the main test nor the permutation check found clear evidence that Setting has an effect on this metric.</li><li>Secondary factor test: Neither the main test nor the permutation check found clear evidence that the effect of Approach changes across Setting settings.</li></ul>
+<h2>Observed distribution</h2><figure aria-label="Observed distribution"><figcaption>Observed frequencies</figcaption><div class="chart"><span class="y-title">Replicates</span><div aria-hidden="true" class="y-ticks"><span>52</span><span>39</span><span>26</span><span>13</span><span>0</span></div><div class="chart-body"><ol class="distribution frequencies"><li title="0: 8 replicates"><span class="sr-only">0: 8 replicates</span><span aria-hidden="true" class="bar" style="height:15.3846%"></span></li><li title="1: 24 replicates"><span class="sr-only">1: 24 replicates</span><span aria-hidden="true" class="bar" style="height:46.1538%"></span></li><li title="2: 40 replicates"><span class="sr-only">2: 40 replicates</span><span aria-hidden="true" class="bar" style="height:76.9231%"></span></li><li title="3: 52 replicates"><span class="sr-only">3: 52 replicates</span><span aria-hidden="true" class="bar" style="height:100.0000%"></span></li><li title="4: 36 replicates"><span class="sr-only">4: 36 replicates</span><span aria-hidden="true" class="bar" style="height:69.2308%"></span></li><li title="5: 36 replicates"><span class="sr-only">5: 36 replicates</span><span aria-hidden="true" class="bar" style="height:69.2308%"></span></li><li title="6: 25 replicates"><span class="sr-only">6: 25 replicates</span><span aria-hidden="true" class="bar" style="height:48.0769%"></span></li><li title="7: 14 replicates"><span class="sr-only">7: 14 replicates</span><span aria-hidden="true" class="bar" style="height:26.9231%"></span></li><li title="8: 1 replicates"><span class="sr-only">8: 1 replicates</span><span aria-hidden="true" class="bar" style="height:1.9231%"></span></li><li title="9: 4 replicates"><span class="sr-only">9: 4 replicates</span><span aria-hidden="true" class="bar" style="height:7.6923%"></span></li></ol><div aria-hidden="true" class="x-ticks" style="grid-template-columns:repeat(10,minmax(0,1fr))"><span>0</span><span>1</span><span>2</span><span>3</span><span>4</span><span>5</span><span>6</span><span>7</span><span>8</span><span>9</span></div><p class="x-title">Metric value (calls)</p></div></div></figure><p>Observed values pool the analyzed replicates across conditions. The selected model describes outcomes after accounting for the experimental factors.</p><table><thead><tr><th scope='col'>Statistic</th><th scope='col'>Value</th></tr></thead><tbody><tr><td>Replicates</td><td>240</td></tr><tr><td>Minimum</td><td>0</td></tr><tr><td>Maximum</td><td>9</td></tr><tr><td>Mean</td><td>3.65</td></tr><tr><td>Standard deviation</td><td>1.945</td></tr><tr><td>Distinct values</td><td>10</td></tr><tr><td>Zero values</td><td>8</td></tr></tbody></table><section class="model-fit" aria-label="Model fit"><h3>Model fit</h3><dl class="fit-summary"><div><dt>Selected model</dt><dd>Poisson (log link)</dd></div><div><dt>AIC</dt><dd>988.9</dd></div><div><dt>Runs in every candidate fit</dt><dd>240</dd></div><div><dt>Estimated parameters</dt><dd>4</dd></div></dl><p>Selected the usable candidate with the lowest AIC.</p><table><caption>Candidate models</caption><thead><tr><th scope='col'>Distribution</th><th scope='col'>AIC</th><th scope='col'>ΔAIC vs best usable</th><th scope='col'>Status</th><th scope='col'>Exclusion reason</th></tr></thead><tbody><tr><td>Poisson (log link)</td><td>988.9</td><td>0</td><td>Selected</td><td>—</td></tr><tr><td>Negative binomial (NB2, log link)</td><td>990.9</td><td>2.003</td><td>Usable, not selected</td><td>—</td></tr></tbody></table><p>Likelihood basis for the selected model: native maximum likelihood.</p><p>Lower AIC means better relative fit among candidates fitted to the same runs with comparable response-scale likelihoods; it does not show that the selected model fits adequately in absolute terms.</p><table><caption>Diagnostics for the selected model</caption><thead><tr><th scope='col'>Diagnostic</th><th scope='col'>Value</th><th scope='col'>Reading</th></tr></thead><tbody><tr><td>Pearson dispersion</td><td>1.004</td><td>About 1 when the variance function fits; Poisson/binomial fits above 3 are excluded.</td></tr><tr><td>Maximum leverage</td><td>0.01667</td><td>HC3 divides each score by (1 − leverage).</td></tr></tbody></table></section>
+
+<h2>Secondary statistical tests</h2><table><thead><tr><th scope='col'>Effect</th><th scope='col'>Analytic adjusted p<small class="column-method">Wald chi-square test (HC3 robust covariance) · Holm across 3 factor tests</small></th><th scope='col'>Resampling adjusted p<small class="column-method">Holm across 3 resampling p-values; procedure per row</small></th><th scope='col'>Analytic result (adjusted p &lt; 0.05)</th></tr></thead><tbody><tr><td>Approach</td><td>0.014</td><td>0.090<small class="test-method">No clear evidence in permutation check</small><small class="test-method">labels permuted within strata of Setting</small></td><td>Evidence of an effect</td></tr><tr><td>Setting</td><td>0.638</td><td>0.700<small class="test-method">No clear evidence in permutation check</small><small class="test-method">labels permuted within strata of Approach</small></td><td>No clear evidence of an effect</td></tr><tr><td>Approach × Setting</td><td>0.638</td><td>0.700<small class="test-method">No clear evidence in permutation check</small><small class="test-method">Approximate GLM Freedman–Lane analogue: fitted-null quantile-residual permutation (poisson)</small></td><td>No clear evidence of an effect</td></tr></tbody></table>
+<h2>Comparisons</h2><table><thead><tr><th scope='col'>Comparison</th><th scope='col'>Estimate</th><th scope='col'>Scale</th><th scope='col'>Primary parametric-bootstrap 95% interval<small class="column-method">Fitted-model parametric bootstrap; fixed design and selected family; percentile intervals · 20/20 successful refits</small></th><th scope='col'>Sensitivity: analytic 95% interval<small class="column-method">Log-scale delta-method confidence interval (HC3 robust covariance)</small></th><th scope='col'>Analytic adjusted p<small class="column-method">Delta-method Wald z-test of the log ratio (HC3 robust covariance) · Holm within each comparison family</small></th><th scope='col'>Primary interval result</th></tr></thead><tbody><tr><td>Approach: Revised vs Standard</td><td>0.825</td><td>ratio</td><td>0.7365 to 0.9104<small class="test-method">Intervals agree</small></td><td>0.7209 to 0.9441</td><td>0.005</td><td>Evidence of a difference</td></tr><tr><td>Setting: Basic vs Extended</td><td>0.9641</td><td>ratio</td><td>0.8602 to 1.039<small class="test-method">Intervals agree</small></td><td>0.8432 to 1.102</td><td>0.593</td><td>No clear evidence of a difference</td></tr><tr><td>Approach (Revised vs Standard) × Setting (Basic vs Extended)</td><td>0.8726</td><td>ratio of ratios</td><td>0.765 to 1.221<small class="test-method">Intervals agree</small></td><td>0.6675 to 1.141</td><td>0.319</td><td>No clear evidence of a difference</td></tr></tbody></table>
+<p>Bootstrap: 20/20 successful refits; 0 failed. Status: completed.</p><p>Each resampling row names the recorded procedure or says Not run with its reason. Only completed procedures supply results. Assumptions, diagnostic gates and failed-refit handling are in the technical details.</p>
+<p>A result without clear evidence does not establish that the effect is zero.
+Statistical evidence does not establish practical importance.</p>
+<section class="methodology" aria-label="What ran and why"><header><p class="eyebrow">Analysis approach</p><h2>What ran and why</h2><p>Statistical calculations · no AI</p></header><div class="method-grid"><section class="method-step"><p class="eyebrow">01</p><h3>Regression Model Selection</h3><h4>Poisson (log link)</h4><p>Nonnegative counts are compared using Poisson and overdispersed negative-binomial models.</p><p>Selected the usable candidate with the lowest AIC.</p></section><section class="method-step"><p class="eyebrow">02</p><h3>Tests and comparisons</h3><h4>Factor tests</h4><p>Wald chi-square tests of each model term with HC3 robust covariance.</p><ul><li><strong>Approach</strong> — Does Approach change the expected Calls, on average across Setting?</li><li><strong>Setting</strong> — Does Setting change the expected Calls, on average across Approach?</li><li><strong>Approach × Setting</strong> — Does the effect of Approach on Calls depend on Setting?</li></ul><h4>Comparisons</h4><p>Model-predicted averages, each condition weighted equally.</p><ul><li><strong>Approach: Revised vs Standard</strong> — How much does Calls differ between Approach = Revised and Approach = Standard?</li><li><strong>Setting: Basic vs Extended</strong> — How much does Calls differ between Setting = Basic and Setting = Extended?</li><li><strong>Approach (Revised vs Standard) × Setting (Basic vs Extended)</strong> — Does the Approach Revised vs Standard ratio change between Setting = Basic and Extended?</li></ul></section><section class="method-step"><p class="eyebrow">03</p><h3>Uncertainty checks</h3><p>Bootstrap: 20/20 successful refits; 0 failed. Status: completed.</p><p>Each resampling row names the recorded procedure or says Not run with its reason. Only completed procedures supply results. Assumptions, diagnostic gates and failed-refit handling are in the technical details.</p></section><section class="method-step"><p class="eyebrow">04</p><h3>How to interpret it</h3><ul><li>Analytic adjusted p-values are Holm-adjusted across the factor tests, and within each comparison family; resampling p-values are Holm-adjusted separately.</li><li>Primary comparison conclusions use pointwise parametric-bootstrap intervals; analytic p-values and intervals are sensitivity results. Omnibus factor tests are secondary.</li><li>Confidence intervals are not adjusted for multiple comparisons.</li><li>A result without clear evidence does not mean the effect is zero.</li><li>Results across separate metrics are exploratory.</li></ul></section></div><details><summary>Full technical details</summary><p>Calculated with statistical libraries. Explanations use fixed templates; no AI is used to generate this report.</p><section class="detail"><h3>Experimental design and analysis specification</h3><p>One whole-dataset run; replicate numbers alone do not identify matched subjects</p><p>Requires human confirmation against the intended experiment.</p><p>Included terms: Approach; Setting; Approach × Setting.</p><p>Excluded interaction terms (configured maximum order): None.</p><p>Dependence declarations: {}. Blocking/repeated-measures structure: {}. An empty declaration does not establish independence.</p><p>Observed conditions: 4 of 4 combinations of analyzed levels; 60–60 runs per observed condition. Missing combinations are model predictions, not observed conditions.</p><p>Levels retained after metric/trial exclusions: {&quot;Approach&quot;: [&quot;Revised&quot;, &quot;Standard&quot;], &quot;Setting&quot;: [&quot;Basic&quot;, &quot;Extended&quot;]}</p><table><thead><tr><th scope='col'>Factor</th><th scope='col'>Use</th><th scope='col'>Observed / declared levels</th><th scope='col'>Reason</th></tr></thead><tbody><tr><td>Approach</td><td>Included</td><td>[&quot;Revised&quot;, &quot;Standard&quot;] / []</td><td>All observed varying factors</td></tr><tr><td>Setting</td><td>Included</td><td>[&quot;Basic&quot;, &quot;Extended&quot;] / []</td><td>All observed varying factors</td></tr></tbody></table></section><section class="detail"><h3>Model selection</h3><p>Nonnegative counts are compared using Poisson and overdispersed negative-binomial models.</p><p>Selected the usable candidate with the lowest AIC.</p><p>Lower AIC means better relative fit among comparable candidates fitted to the same runs; it does not show that the selected model fits adequately in absolute terms.</p><p>Model terms: Approach, Setting with interactions through order 2, sum-to-zero coding.</p><p>Fitted model specification — formula: 1 + Approach + Setting + Approach:Setting</p><p>Fitted model specification — columns: [&#x27;Intercept&#x27;, &#x27;Approach[S.Revised]&#x27;, &#x27;Setting[S.Basic]&#x27;, &#x27;Approach[S.Revised]:Setting[S.Basic]&#x27;]</p><p>Fitted model specification — design_rank: 4</p><p>Fitted model specification — design_parameters: 4</p><p>Fitted model specification — observations: 240</p><p>Fitted model specification — residual_design_df: 236</p><p>Model selection used these observations; reported intervals do not include selection uncertainty.</p></section><section class="detail"><h3>Numerical fitting and acceptance</h3><p>Optimizer convergence is a termination report, not proof of an optimum. Numerical acceptance checks finite estimates and likelihood, identification and covariance validity. An independent local score gate is enforced only if maximum_scaled_score is configured after statistical review. No check establishes a global optimum or validates statistical inference.</p><p>IRLS permits 500 iterations. Initial and resampling fits use the same numerical acceptance checks.</p><p>Selected fit acceptance: optimizer_converged: True; finite_estimates: True; finite_likelihood: True; covariance_valid: True; identifiable: True; information_condition: 1.2994653919906065; information_stability_gate: True; maximum_scaled_score: 9.473261295781891e-14; parameter_boundary_gate: True; dispersion_boundary_gate: True; probability_boundary_gate: True; fitted_support_gate: True; configured_score_tolerance: None; diagnostics: {&#x27;critical_failures&#x27;: [], &#x27;unavailable&#x27;: [], &#x27;max_leverage&#x27;: 0.016666666666666677, &#x27;maximum_cooks_distance&#x27;: -2.659942332458759e-06, &#x27;influence_method&#x27;: &#x27;Generalized score Cook distance s_i^T H^-1 s_i / [p (1-h_i)^2]&#x27;, &#x27;pearson_dispersion&#x27;: 1.0039245203127016}; critical_diagnostics_gate: True; score_gate: None; accepted: True; independently_checked_stationary_point: False; optimum_status: Independent stationarity not established; no reviewer-configured score gate</p><p>Reportability: Initial fit accepted under the recorded numerical checks</p><table><thead><tr><th scope='col'>Attempt</th><th scope='col'>Termination code</th><th scope='col'>Numerical checks</th><th scope='col'>Failure reason</th></tr></thead><tbody><tr><td>IRLS</td><td>—</td><td>optimizer_converged: True; finite_estimates: True; finite_likelihood: True; covariance_valid: True; identifiable: True; information_condition: 1.2994653919906065; information_stability_gate: True; maximum_scaled_score: 9.473261295781891e-14; parameter_boundary_gate: True; dispersion_boundary_gate: True; probability_boundary_gate: True; fitted_support_gate: True; configured_score_tolerance: None; diagnostics: {&#x27;critical_failures&#x27;: [], &#x27;unavailable&#x27;: [], &#x27;max_leverage&#x27;: 0.016666666666666677, &#x27;maximum_cooks_distance&#x27;: -2.659942332458759e-06, &#x27;influence_method&#x27;: &#x27;Generalized score Cook distance s_i^T H^-1 s_i / [p (1-h_i)^2]&#x27;, &#x27;pearson_dispersion&#x27;: 1.0039245203127016}; critical_diagnostics_gate: True; score_gate: None; accepted: True; independently_checked_stationary_point: False; optimum_status: Independent stationarity not established; no reviewer-configured score gate</td><td>—</td></tr></tbody></table></section><section class="detail"><h3>Covariance and dispersion</h3><p>Requested covariance: HC3. Computed covariance: HC3. GLM expected-information bread and IRLS hat values (as R sandwich::vcovHC for glm). No fallback recorded.</p><p>HC3 rescales each observation&#x27;s score by 1/(1 − leverage) before forming the sandwich. Numerical covariance verification does not establish inferential calibration.</p><p>Poisson variance equals its mean; no free dispersion parameter is estimated.</p></section><section class="detail"><h3>Diagnostic rules and validation scope</h3><p>Minimum independent runs per condition: 3. Poisson/binomial Pearson dispersion above 3 excludes a candidate. Gaussian residuals are flagged as severely skewed when the D’Agostino–Pearson p is below 0.001 and absolute skewness exceeds 1 (at least 20 observations).</p><p>Discrete/beta/ordinal absolute parameters above 30 are flagged as boundary fits. Mean probabilities outside [1e-8, 1 − 1e-8] flag separation; NB2 alpha below 1e-6 is treated as a boundary fit. Thresholds are recorded in the saved request.</p><p>Information condition numbers above 1e+10, leverage at least 1 − 1e-8, fitted-support violations, and generalized Cook distance above 1 are critical failures. The same configured checks apply to initial fits and refits. Missing diagnostics are explicitly recorded, not marked as passed.</p><p>Finite estimates, usable information and reproducible numerical calculations are numerical checks. They do not establish the calibration of p-values or confidence-interval coverage.</p><p>No experiment-specific simulation validation is attached to this report. Earlier validation of other reports or model families does not validate this analysis, including beta regression. Small simulation studies cannot rule out a false-positive rate of 10% without a suitable uncertainty interval and scope.</p></section><section class="detail"><h3>Factor tests</h3><p>Available tests use the Wald chi-square reference distribution, with degrees of freedom equal to the number of jointly tested coefficients. Normal-reference z tests and pointwise normal intervals are used for analytic comparisons (delta method for nonlinear quantities). Computed robust covariance: HC3. Model scale: log-mean scale (log link). For log-scale models the main-effect tests compare geometric, not arithmetic, averages over the other factors&#x27; settings, so they can differ slightly from the comparisons of predicted averages below.</p><table><thead><tr><th scope='col'>Target</th><th scope='col'>Method</th><th scope='col'>Covariance</th><th scope='col'>Scale</th><th scope='col'>Null hypothesis</th><th scope='col'>Test explanation</th><th scope='col'>Interpretation</th></tr></thead><tbody><tr><td>Approach</td><td>Wald chi-square test (HC3 robust covariance); 1 df; statistic 8.039</td><td>HC3</td><td>log-mean scale (log link)</td><td>The log expected value, averaged with equal weight over Setting, is the same at every Approach level (Revised, Standard). Equivalently, the geometric mean over Setting settings of the model&#x27;s condition means is equal across levels. Averaged with equal weight over Setting (Basic, Extended): every combination counts once, regardless of how many runs it has.</td><td>Tests whether Approach changes Calls on average over Setting. Its size and direction are in the Approach comparison.</td><td>Evidence of an effect</td></tr><tr><td>Setting</td><td>Wald chi-square test (HC3 robust covariance); 1 df; statistic 0.3977</td><td>HC3</td><td>log-mean scale (log link)</td><td>The log expected value, averaged with equal weight over Approach, is the same at every Setting level (Basic, Extended). Equivalently, the geometric mean over Approach settings of the model&#x27;s condition means is equal across levels. Averaged with equal weight over Approach (Revised, Standard): every combination counts once, regardless of how many runs it has.</td><td>Tests whether Setting changes Calls on average over Approach. Its size and direction are in the Setting comparison.</td><td>No clear evidence of an effect</td></tr><tr><td>Approach × Setting</td><td>Wald chi-square test (HC3 robust covariance); 1 df; statistic 0.9926</td><td>HC3</td><td>log-mean scale (log link)</td><td>The Approach ratio of expected values is the same at every Setting setting: ratio of ratios = 1. No other factors to average over.</td><td>Tests whether the Approach ratio of expected values differs between Setting settings (Approach × Setting).</td><td>No clear evidence of an effect</td></tr></tbody></table></section><section class="detail"><h3>Comparisons</h3><p>Each comparison uses the model&#x27;s predicted mean for every condition, averaged with equal weight over the settings named below. Ratios divide the first-listed setting by the second; differences subtract the second from the first. Ratio tests and intervals use the log ratio and delta method; intervals are back-transformed to stay positive. These are analytic sensitivity intervals. Primary inference uses fitted-model parametric-bootstrap percentile intervals.</p><table><thead><tr><th scope='col'>Target</th><th scope='col'>Averaged over</th><th scope='col'>Primary parametric-bootstrap interval</th><th scope='col'>Primary method</th><th scope='col'>Sensitivity method</th><th scope='col'>Sensitivity analytic result</th><th scope='col'>Covariance</th><th scope='col'>Null</th><th scope='col'>Interpretation</th></tr></thead><tbody><tr><td>Approach: Revised vs Standard: Mean predicted Calls at Approach = Revised ÷ mean predicted Calls at Approach = Standard.</td><td>Averaged with equal weight over Setting (Basic, Extended): every combination counts once, regardless of how many runs it has.</td><td>0.736495 to 0.910423</td><td>Fitted-model parametric bootstrap; fixed design and selected family; percentile intervals</td><td>Delta-method Wald z-test of the log ratio (HC3 robust covariance); Log-scale delta-method confidence interval (HC3 robust covariance)</td><td>Evidence of a difference</td><td>HC3</td><td>ratio = 1</td><td>Evidence of a difference. Above 1: Revised has the higher average; below 1: Standard does. The estimate is how many times larger the Revised average is.</td></tr><tr><td>Setting: Basic vs Extended: Mean predicted Calls at Setting = Basic ÷ mean predicted Calls at Setting = Extended.</td><td>Averaged with equal weight over Approach (Revised, Standard): every combination counts once, regardless of how many runs it has.</td><td>0.860212 to 1.03856</td><td>Fitted-model parametric bootstrap; fixed design and selected family; percentile intervals</td><td>Delta-method Wald z-test of the log ratio (HC3 robust covariance); Log-scale delta-method confidence interval (HC3 robust covariance)</td><td>No clear evidence of a difference</td><td>HC3</td><td>ratio = 1</td><td>No clear evidence of a difference. Above 1: Basic has the higher average; below 1: Extended does. The estimate is how many times larger the Basic average is.</td></tr><tr><td>Approach (Revised vs Standard) × Setting (Basic vs Extended): (Revised ÷ Standard at Setting = Basic) ÷ (Revised ÷ Standard at Setting = Extended), using mean predicted Calls: a ratio of ratios.</td><td>No other factors to average over.</td><td>0.765046 to 1.22137</td><td>Fitted-model parametric bootstrap; fixed design and selected family; percentile intervals</td><td>Delta-method Wald z-test of the log ratio (HC3 robust covariance); Log-scale delta-method confidence interval (HC3 robust covariance)</td><td>No clear evidence of a difference</td><td>HC3</td><td>ratio of ratios = 1</td><td>No clear evidence of a difference. Above 1: the Revised/Standard ratio is larger at Setting = Basic than at Extended; below 1: smaller; 1: the same ratio at both settings.</td></tr></tbody></table></section><section class="detail"><h3>Permutation and null-resampling checks</h3><p>Only the procedures named in completed execution rows below ran. Unavailable methods are marked Not run with a reason. A missing implementation is distinct from failed assumptions.</p><p>Resampling p-values for the factor tests are Holm-adjusted together, separately from the analytic p-values. Agreement between methods is descriptive, not proof of validity.</p><table><thead><tr><th scope='col'>Target</th><th scope='col'>Procedure</th><th scope='col'>Null hypothesis</th><th scope='col'>Required assumptions</th><th scope='col'>Draws and p-value</th><th scope='col'>Seed</th></tr></thead><tbody><tr><td>Approach</td><td>labels permuted within strata of Setting (exact for the sharp null that Approach has no effect at any setting of the other factors); statistic: working-scale OLS F, a sensitivity check, not the fitted model&#x27;s Wald statistic</td><td>Approach has no effect on the distribution of Calls at any setting of the other factors.</td><td>Independent runs with working-scale values exchangeable within each stratum under the null.</td><td>99 requested, 99 completed, 0 failed. Monte Carlo p = (exceedances + 1)/(completed + 1) = 0.03 (minimum 0.01); Holm-adjusted 0.09.</td><td>20261016 / stream 2202</td></tr><tr><td>Setting</td><td>labels permuted within strata of Approach (exact for the sharp null that Setting has no effect at any setting of the other factors); statistic: working-scale OLS F, a sensitivity check, not the fitted model&#x27;s Wald statistic</td><td>Setting has no effect on the distribution of Calls at any setting of the other factors.</td><td>Independent runs with working-scale values exchangeable within each stratum under the null.</td><td>99 requested, 99 completed, 0 failed. Monte Carlo p = (exceedances + 1)/(completed + 1) = 0.61 (minimum 0.01); Holm-adjusted 0.7.</td><td>20261016 / stream 2202</td></tr><tr><td>Approach × Setting</td><td>Approximate GLM Freedman–Lane analogue: fitted-null quantile-residual permutation (poisson); statistic: HC3 Wald chi-square of the fitted poisson model (the analytic test&#x27;s own statistic)</td><td>All sum-coded coefficients for C(f0, Sum):C(f1, Sum) are zero on the fitted model&#x27;s scale; only this term is removed, retaining all other fitted terms.</td><td>Independent observations or explicitly exchangeable observations within the named blocks; correct fitted null distribution and adequate residual exchangeability. Parameters and nuisance terms are estimated, so inference is approximate. Support preservation does not establish exchangeability. Diagnostic gate: {&quot;finite_interior_pit&quot;: true, &quot;limitation&quot;: &quot;These numerical checks do not establish exchangeability&quot;, &quot;null_fit_accepted&quot;: true} Numerical refit checks: recorded_fits: 99; optimizer_converged: 99; accepted: 99; independently_checked_stationary_points: 0; fits_with_configured_score_gate: 0; fits_with_retries: 0; failed_checks: {}; maximum_scaled_score: 4.3735339424107643e-13</td><td>99 requested, 99 completed, 0 failed. Monte Carlo p = (exceedances + 1)/(completed + 1) = 0.35 (minimum 0.01); Holm-adjusted 0.7.</td><td>20261016 / stream 3303</td></tr></tbody></table></section><section class="detail"><h3>Bootstrap intervals</h3><p>Bootstrap confidence level: 95%; percentile cutoffs 0.025 and 0.975.</p><p>Fitted-model parametric bootstrap; fixed design and selected family; percentile intervals: 20 requested, 20 attempted, 20 successful, 0 failed. Status: completed. Seed 20261016, stream 1101.</p><p>Intervals require a completed run with at least 90% successful refits. Failed refits are excluded from the quantiles and counted, never replaced by zero effects. The selected family is held fixed, so model-selection uncertainty is not included.</p><p>Failures: {}. </p><p>Independent outcomes are simulated from the fitted full-model distribution on the original fixed design, then the selected family is refitted. Factor settings and trial totals stay fixed. Intervals are percentile intervals of refitted comparisons. Distribution: Poisson with fitted mean.</p><p>Numerical refit checks: recorded_fits: 20; optimizer_converged: 20; accepted: 20; independently_checked_stationary_points: 0; fits_with_configured_score_gate: 0; fits_with_retries: 0; failed_checks: {}; maximum_scaled_score: 1.0710728600334581e-12. Complete per-draw checks are retained in the saved analysis tables.</p></section><section class="detail"><h3>Multiplicity and interpretation</h3><p>Analytic factor tests: Holm across 3 factor tests.</p><p>Resampling checks: Holm across 3 resampling p-values.</p><p>Comparisons for Approach: one comparison in its family, so the Holm-adjusted p equals the unadjusted p.</p><p>Comparisons for Setting: one comparison in its family, so the Holm-adjusted p equals the unadjusted p.</p><p>Comparisons for Approach × Setting: one comparison in its family, so the Holm-adjusted p equals the unadjusted p.</p><p>Primary comparison conclusions use the configured pointwise parametric-bootstrap percentile interval: it must exclude zero for a difference or one for a ratio. These intervals are not multiplicity-adjusted. No adjusted bootstrap p-value is inferred from an interval. Omnibus factor tests and analytic adjusted p-values are secondary sensitivity results; disagreements never change the designated primary method.</p><p>Multiplicity families are formed by model term (analytic factor tests together; resampling checks together) and by each factor or factor-pair comparison family. Unavailable p-values are omitted from Holm adjustment and receive no conclusion; this missing-test policy requires statistical review.</p><p>“Analytic result” means the analytic Holm-adjusted p-value is below 0.05; it does not use the resampling or bootstrap results.</p><p>Analytic intervals are pointwise 95%; bootstrap intervals are pointwise 95%. Neither is multiplicity-adjusted. Interval agreement compares whether both exclude the null value.</p><p>Separate metrics are not corrected together; cross-metric findings are exploratory. A result without clear evidence does not show that an effect is zero, and statistical evidence is not practical importance.</p></section></details></section>
+<h2>Limitations and exclusions</h2><ul><li>DEMONSTRATION: synthetic data, not results from a real experiment.</li><li>Measurement type detected as count from producer context and observed values.</li><li>Inference assumes independent runs and is conditional on the observed experimental inputs.</li><li>Model selection used these observations; reported intervals do not include selection uncertainty.</li><li>Exploratory simulation count: confidence intervals need more draws for final reporting.</li></ul>
+<details><summary>Reproducibility</summary>
+<p>Analysis: synthetic-demo-1 · Created: 2026-10-30T00:00:00+00:00</p>
+<pre>{
+  &quot;fingerprint&quot;: &quot;215ec4f381cc5753a7f0bea33fbfe00ca17a410f9fcb0b608ab5ca12a7cef13e&quot;,
+  &quot;design_revision&quot;: 1,
+  &quot;seed&quot;: 20261016,
+  &quot;libraries&quot;: {
+    &quot;numpy&quot;: &quot;2.5.1&quot;,
+    &quot;scipy&quot;: &quot;1.18.0&quot;,
+    &quot;statsmodels&quot;: &quot;0.14.6&quot;,
+    &quot;pandas&quot;: &quot;3.0.5&quot;,
+    &quot;patsy&quot;: &quot;1.0.2&quot;
+  },
+  &quot;python&quot;: &quot;3.14.4&quot;,
+  &quot;policy_version&quot;: 5,
+  &quot;candidates&quot;: [
+    {
+      &quot;family&quot;: &quot;poisson&quot;,
+      &quot;name&quot;: &quot;Poisson (log link)&quot;,
+      &quot;usable&quot;: true,
+      &quot;aic&quot;: 988.8779094930069,
+      &quot;n&quot;: 240,
+      &quot;n_parameters&quot;: 4,
+      &quot;likelihood_basis&quot;: &quot;native maximum likelihood&quot;,
+      &quot;fit_execution&quot;: [
+        {
+          &quot;attempts&quot;: [
+            {
+              &quot;method&quot;: &quot;IRLS&quot;,
+              &quot;termination&quot;: null,
+              &quot;iterations&quot;: null,
+              &quot;checks&quot;: {
+                &quot;optimizer_converged&quot;: true,
+                &quot;finite_estimates&quot;: true,
+                &quot;finite_likelihood&quot;: true,
+                &quot;covariance_valid&quot;: true,
+                &quot;identifiable&quot;: true,
+                &quot;information_condition&quot;: 1.2994653919906065,
+                &quot;information_stability_gate&quot;: true,
+                &quot;maximum_scaled_score&quot;: 9.473261295781891e-14,
+                &quot;parameter_boundary_gate&quot;: true,
+                &quot;dispersion_boundary_gate&quot;: true,
+                &quot;probability_boundary_gate&quot;: true,
+                &quot;fitted_support_gate&quot;: true,
+                &quot;configured_score_tolerance&quot;: null,
+                &quot;diagnostics&quot;: {
+                  &quot;critical_failures&quot;: [],
+                  &quot;unavailable&quot;: [],
+                  &quot;max_leverage&quot;: 0.016666666666666677,
+                  &quot;maximum_cooks_distance&quot;: -2.659942332458759e-06,
+                  &quot;influence_method&quot;: &quot;Generalized score Cook distance s_i^T H^-1 s_i / [p (1-h_i)^2]&quot;,
+                  &quot;pearson_dispersion&quot;: 1.0039245203127016
+                },
+                &quot;critical_diagnostics_gate&quot;: true,
+                &quot;score_gate&quot;: null,
+                &quot;accepted&quot;: true,
+                &quot;independently_checked_stationary_point&quot;: false,
+                &quot;optimum_status&quot;: &quot;Independent stationarity not established; no reviewer-configured score gate&quot;
+              }
+            }
+          ],
+          &quot;checks&quot;: {
+            &quot;optimizer_converged&quot;: true,
+            &quot;finite_estimates&quot;: true,
+            &quot;finite_likelihood&quot;: true,
+            &quot;covariance_valid&quot;: true,
+            &quot;identifiable&quot;: true,
+            &quot;information_condition&quot;: 1.2994653919906065,
+            &quot;information_stability_gate&quot;: true,
+            &quot;maximum_scaled_score&quot;: 9.473261295781891e-14,
+            &quot;parameter_boundary_gate&quot;: true,
+            &quot;dispersion_boundary_gate&quot;: true,
+            &quot;probability_boundary_gate&quot;: true,
+            &quot;fitted_support_gate&quot;: true,
+            &quot;configured_score_tolerance&quot;: null,
+            &quot;diagnostics&quot;: {
+              &quot;critical_failures&quot;: [],
+              &quot;unavailable&quot;: [],
+              &quot;max_leverage&quot;: 0.016666666666666677,
+              &quot;maximum_cooks_distance&quot;: -2.659942332458759e-06,
+              &quot;influence_method&quot;: &quot;Generalized score Cook distance s_i^T H^-1 s_i / [p (1-h_i)^2]&quot;,
+              &quot;pearson_dispersion&quot;: 1.0039245203127016
+            },
+            &quot;critical_diagnostics_gate&quot;: true,
+            &quot;score_gate&quot;: null,
+            &quot;accepted&quot;: true,
+            &quot;independently_checked_stationary_point&quot;: false,
+            &quot;optimum_status&quot;: &quot;Independent stationarity not established; no reviewer-configured score gate&quot;
+          },
+          &quot;retry_sequence&quot;: [],
+          &quot;maxiter&quot;: 500,
+          &quot;reportability_reason&quot;: &quot;Initial fit accepted under the recorded numerical checks&quot;
+        }
+      ],
+      &quot;diagnostics&quot;: [
+        {
+          &quot;family&quot;: &quot;poisson&quot;,
+          &quot;severe&quot;: false,
+          &quot;flags&quot;: &quot;&quot;,
+          &quot;pearson_dispersion&quot;: 1.0039245203127016
+        }
+      ],
+      &quot;selected&quot;: true,
+      &quot;delta_aic&quot;: 0.0,
+      &quot;status&quot;: &quot;Selected&quot;
+    },
+    {
+      &quot;family&quot;: &quot;negbin&quot;,
+      &quot;name&quot;: &quot;Negative binomial (NB2, log link)&quot;,
+      &quot;usable&quot;: true,
+      &quot;aic&quot;: 990.8808353147839,
+      &quot;n&quot;: 240,
+      &quot;n_parameters&quot;: 5,
+      &quot;likelihood_basis&quot;: &quot;native maximum likelihood&quot;,
+      &quot;fit_execution&quot;: [
+        {
+          &quot;attempts&quot;: [
+            {
+              &quot;method&quot;: &quot;bfgs&quot;,
+              &quot;termination&quot;: 0,
+              &quot;iterations&quot;: 17,
+              &quot;checks&quot;: {
+                &quot;optimizer_converged&quot;: true,
+                &quot;finite_estimates&quot;: true,
+                &quot;finite_likelihood&quot;: true,
+                &quot;covariance_valid&quot;: true,
+                &quot;identifiable&quot;: true,
+                &quot;information_condition&quot;: 1.9619208510655597,
+                &quot;information_stability_gate&quot;: true,
+                &quot;maximum_scaled_score&quot;: 0.013750797587866232,
+                &quot;parameter_boundary_gate&quot;: true,
+                &quot;dispersion_boundary_gate&quot;: true,
+                &quot;probability_boundary_gate&quot;: true,
+                &quot;fitted_support_gate&quot;: true,
+                &quot;configured_score_tolerance&quot;: null,
+                &quot;diagnostics&quot;: {
+                  &quot;critical_failures&quot;: [],
+                  &quot;unavailable&quot;: [],
+                  &quot;max_leverage&quot;: 0.01666666666666668,
+                  &quot;maximum_cooks_distance&quot;: 0.0460947099449927,
+                  &quot;influence_method&quot;: &quot;Generalized score Cook distance s_i^T H^-1 s_i / [p (1-h_i)^2]&quot;,
+                  &quot;pearson_dispersion&quot;: 1.0020854791937002
+                },
+                &quot;critical_diagnostics_gate&quot;: true,
+                &quot;score_gate&quot;: null,
+                &quot;accepted&quot;: true,
+                &quot;independently_checked_stationary_point&quot;: false,
+                &quot;optimum_status&quot;: &quot;Independent stationarity not established; no reviewer-configured score gate&quot;
+              }
+            }
+          ],
+          &quot;checks&quot;: {
+            &quot;optimizer_converged&quot;: true,
+            &quot;finite_estimates&quot;: true,
+            &quot;finite_likelihood&quot;: true,
+            &quot;covariance_valid&quot;: true,
+            &quot;identifiable&quot;: true,
+            &quot;information_condition&quot;: 1.9619208510655597,
+            &quot;information_stability_gate&quot;: true,
+            &quot;maximum_scaled_score&quot;: 0.013750797587866232,
+            &quot;parameter_boundary_gate&quot;: true,
+            &quot;dispersion_boundary_gate&quot;: true,
+            &quot;probability_boundary_gate&quot;: true,
+            &quot;fitted_support_gate&quot;: true,
+            &quot;configured_score_tolerance&quot;: null,
+            &quot;diagnostics&quot;: {
+              &quot;critical_failures&quot;: [],
+              &quot;unavailable&quot;: [],
+              &quot;max_leverage&quot;: 0.01666666666666668,
+              &quot;maximum_cooks_distance&quot;: 0.0460947099449927,
+              &quot;influence_method&quot;: &quot;Generalized score Cook distance s_i^T H^-1 s_i / [p (1-h_i)^2]&quot;,
+              &quot;pearson_dispersion&quot;: 1.0020854791937002
+            },
+            &quot;critical_diagnostics_gate&quot;: true,
+            &quot;score_gate&quot;: null,
+            &quot;accepted&quot;: true,
+            &quot;independently_checked_stationary_point&quot;: false,
+            &quot;optimum_status&quot;: &quot;Independent stationarity not established; no reviewer-configured score gate&quot;
+          },
+          &quot;retry_sequence&quot;: [
+            &quot;lbfgs&quot;,
+            &quot;newton&quot;
+          ],
+          &quot;maxiter&quot;: 500,
+          &quot;reportability_reason&quot;: &quot;Initial fit accepted under the recorded numerical checks&quot;
+        }
+      ],
+      &quot;diagnostics&quot;: [
+        {
+          &quot;family&quot;: &quot;negbin&quot;,
+          &quot;severe&quot;: false,
+          &quot;flags&quot;: &quot;&quot;,
+          &quot;pearson_dispersion&quot;: 1.0020854791937002,
+          &quot;negbin_alpha&quot;: 0.0004986176083059205
+        }
+      ],
+      &quot;selected&quot;: false,
+      &quot;delta_aic&quot;: 2.002925821777012,
+      &quot;status&quot;: &quot;Usable, not selected&quot;
+    }
+  ],
+  &quot;covariance&quot;: {
+    &quot;requested&quot;: &quot;HC3&quot;,
+    &quot;computed&quot;: &quot;HC3&quot;,
+    &quot;implementation&quot;: &quot;GLM expected-information bread and IRLS hat values (as R sandwich::vcovHC for glm)&quot;,
+    &quot;max_leverage&quot;: 0.016666666666666677,
+    &quot;leverage_sum&quot;: 4.0,
+    &quot;verified&quot;: true
+  },
+  &quot;model_specification&quot;: {
+    &quot;formula&quot;: &quot;1 + C(f0, Sum) + C(f1, Sum) + C(f0, Sum):C(f1, Sum)&quot;,
+    &quot;columns&quot;: [
+      &quot;Intercept&quot;,
+      &quot;C(f0, Sum)[S.Revised]&quot;,
+      &quot;C(f1, Sum)[S.Basic]&quot;,
+      &quot;C(f0, Sum)[S.Revised]:C(f1, Sum)[S.Basic]&quot;
+    ],
+    &quot;design_rank&quot;: 4,
+    &quot;design_parameters&quot;: 4,
+    &quot;observations&quot;: 240,
+    &quot;residual_design_df&quot;: 236
+  },
+  &quot;treatment_labels&quot;: {
+    &quot;Approach&quot;: [
+      &quot;Standard&quot;,
+      &quot;Revised&quot;
+    ],
+    &quot;Setting&quot;: [
+      &quot;Basic&quot;,
+      &quot;Extended&quot;
+    ]
+  },
+  &quot;resolved_config&quot;: {
+    &quot;metric&quot;: &quot;Calls&quot;,
+    &quot;factors&quot;: [
+      &quot;Approach&quot;,
+      &quot;Setting&quot;
+    ],
+    &quot;family&quot;: &quot;poisson&quot;,
+    &quot;measurement_type&quot;: &quot;count&quot;,
+    &quot;denominator&quot;: null,
+    &quot;ordinal_levels&quot;: [],
+    &quot;max_order&quot;: 2,
+    &quot;n_boot&quot;: 20,
+    &quot;n_perm&quot;: 99,
+    &quot;seed&quot;: 20261016,
+    &quot;alpha&quot;: 0.05,
+    &quot;minimum_success_fraction&quot;: 0.9,
+    &quot;excluded_factor_reasons&quot;: {},
+    &quot;optimizer_maxiter&quot;: 500,
+    &quot;maximum_scaled_score&quot;: null,
+    &quot;minimum_runs_per_condition&quot;: 3,
+    &quot;maximum_pearson_dispersion&quot;: 3.0,
+    &quot;maximum_absolute_parameter&quot;: 30.0,
+    &quot;exchangeability_alpha&quot;: 0.01,
+    &quot;hc3_fallback&quot;: &quot;hc0&quot;,
+    &quot;bootstrap_method&quot;: &quot;parametric&quot;,
+    &quot;confidence_level&quot;: 0.95,
+    &quot;maximum_information_condition&quot;: 10000000000.0,
+    &quot;maximum_cooks_distance&quot;: 1.0,
+    &quot;exchangeability_blocks&quot;: [],
+    &quot;n_diagnostic_simulations&quot;: 250,
+    &quot;robust&quot;: true
+  },
+  &quot;requested_config&quot;: {
+    &quot;metric&quot;: &quot;Calls&quot;,
+    &quot;factors&quot;: [],
+    &quot;family&quot;: &quot;auto&quot;,
+    &quot;measurement_type&quot;: &quot;auto&quot;,
+    &quot;denominator&quot;: null,
+    &quot;ordinal_levels&quot;: [],
+    &quot;max_order&quot;: 2,
+    &quot;n_boot&quot;: 20,
+    &quot;n_perm&quot;: 99,
+    &quot;seed&quot;: 20261016,
+    &quot;alpha&quot;: 0.05,
+    &quot;minimum_success_fraction&quot;: 0.9,
+    &quot;excluded_factor_reasons&quot;: {},
+    &quot;optimizer_maxiter&quot;: 500,
+    &quot;maximum_scaled_score&quot;: null,
+    &quot;minimum_runs_per_condition&quot;: 3,
+    &quot;maximum_pearson_dispersion&quot;: 3.0,
+    &quot;maximum_absolute_parameter&quot;: 30.0,
+    &quot;exchangeability_alpha&quot;: 0.01,
+    &quot;hc3_fallback&quot;: &quot;hc0&quot;,
+    &quot;bootstrap_method&quot;: &quot;parametric&quot;,
+    &quot;confidence_level&quot;: 0.95,
+    &quot;maximum_information_condition&quot;: 10000000000.0,
+    &quot;maximum_cooks_distance&quot;: 1.0,
+    &quot;exchangeability_blocks&quot;: [],
+    &quot;n_diagnostic_simulations&quot;: 250
+  },
+  &quot;resampling&quot;: {
+    &quot;bootstrap&quot;: {
+      &quot;kind&quot;: &quot;bootstrap&quot;,
+      &quot;procedure&quot;: &quot;fitted_model_parametric_bootstrap&quot;,
+      &quot;method&quot;: &quot;Fitted-model parametric bootstrap; fixed design and selected family; percentile intervals&quot;,
+      &quot;distribution&quot;: &quot;Poisson with fitted mean&quot;,
+      &quot;generating_fit&quot;: {
+        &quot;attempts&quot;: [
+          {
+            &quot;method&quot;: &quot;IRLS&quot;,
+            &quot;termination&quot;: null,
+            &quot;iterations&quot;: null,
+            &quot;checks&quot;: {
+              &quot;optimizer_converged&quot;: true,
+              &quot;finite_estimates&quot;: true,
+              &quot;finite_likelihood&quot;: true,
+              &quot;covariance_valid&quot;: true,
+              &quot;identifiable&quot;: true,
+              &quot;information_condition&quot;: 1.2994653919906065,
+              &quot;information_stability_gate&quot;: true,
+              &quot;maximum_scaled_score&quot;: 9.473261295781891e-14,
+              &quot;parameter_boundary_gate&quot;: true,
+              &quot;dispersion_boundary_gate&quot;: true,
+              &quot;probability_boundary_gate&quot;: true,
+              &quot;fitted_support_gate&quot;: true,
+              &quot;configured_score_tolerance&quot;: null,
+              &quot;diagnostics&quot;: {
+                &quot;critical_failures&quot;: [],
+                &quot;unavailable&quot;: [],
+                &quot;max_leverage&quot;: 0.016666666666666677,
+                &quot;maximum_cooks_distance&quot;: -2.659942332458759e-06,
+                &quot;influence_method&quot;: &quot;Generalized score Cook distance s_i^T H^-1 s_i / [p (1-h_i)^2]&quot;,
+                &quot;pearson_dispersion&quot;: 1.0039245203127016
+              },
+              &quot;critical_diagnostics_gate&quot;: true,
+              &quot;score_gate&quot;: null,
+              &quot;accepted&quot;: true,
+              &quot;independently_checked_stationary_point&quot;: false,
+              &quot;optimum_status&quot;: &quot;Independent stationarity not established; no reviewer-configured score gate&quot;
+            }
+          }
+        ],
+        &quot;checks&quot;: {
+          &quot;optimizer_converged&quot;: true,
+          &quot;finite_estimates&quot;: true,
+          &quot;finite_likelihood&quot;: true,
+          &quot;covariance_valid&quot;: true,
+          &quot;identifiable&quot;: true,
+          &quot;information_condition&quot;: 1.2994653919906065,
+          &quot;information_stability_gate&quot;: true,
+          &quot;maximum_scaled_score&quot;: 9.473261295781891e-14,
+          &quot;parameter_boundary_gate&quot;: true,
+          &quot;dispersion_boundary_gate&quot;: true,
+          &quot;probability_boundary_gate&quot;: true,
+          &quot;fitted_support_gate&quot;: true,
+          &quot;configured_score_tolerance&quot;: null,
+          &quot;diagnostics&quot;: {
+            &quot;critical_failures&quot;: [],
+            &quot;unavailable&quot;: [],
+            &quot;max_leverage&quot;: 0.016666666666666677,
+            &quot;maximum_cooks_distance&quot;: -2.659942332458759e-06,
+            &quot;influence_method&quot;: &quot;Generalized score Cook distance s_i^T H^-1 s_i / [p (1-h_i)^2]&quot;,
+            &quot;pearson_dispersion&quot;: 1.0039245203127016
+          },
+          &quot;critical_diagnostics_gate&quot;: true,
+          &quot;score_gate&quot;: null,
+          &quot;accepted&quot;: true,
+          &quot;independently_checked_stationary_point&quot;: false,
+          &quot;optimum_status&quot;: &quot;Independent stationarity not established; no reviewer-configured score gate&quot;
+        },
+        &quot;retry_sequence&quot;: [],
+        &quot;maxiter&quot;: 500,
+        &quot;reportability_reason&quot;: &quot;Initial fit accepted under the recorded numerical checks&quot;
+      },
+      &quot;generating_fit_warnings&quot;: [],
+      &quot;confidence_level&quot;: 0.95,
+      &quot;requested&quot;: 20,
+      &quot;attempted&quot;: 20,
+      &quot;successful&quot;: 20,
+      &quot;failed&quot;: 0,
+      &quot;status&quot;: &quot;completed&quot;,
+      &quot;seed&quot;: 20261016,
+      &quot;seed_stream&quot;: 1101,
+      &quot;minimum_success_fraction&quot;: 0.9,
+      &quot;reason&quot;: &quot;&quot;,
+      &quot;failure_reasons&quot;: {},
+      &quot;refit_summary&quot;: {
+        &quot;recorded_fits&quot;: 20,
+        &quot;optimizer_converged&quot;: 20,
+        &quot;accepted&quot;: 20,
+        &quot;independently_checked_stationary_points&quot;: 0,
+        &quot;fits_with_configured_score_gate&quot;: 0,
+        &quot;fits_with_retries&quot;: 0,
+        &quot;failed_checks&quot;: {},
+        &quot;maximum_scaled_score&quot;: 1.0710728600334581e-12
+      }
+    },
+    &quot;permutations&quot;: [
+      {
+        &quot;term&quot;: &quot;factor_0&quot;,
+        &quot;statistic&quot;: &quot;Type III F (OLS, working scale)&quot;,
+        &quot;F_obs&quot;: 7.96723570389674,
+        &quot;df1&quot;: 1,
+        &quot;df2&quot;: 236,
+        &quot;n_perm&quot;: 99,
+        &quot;p_perm&quot;: 0.03,
+        &quot;requested&quot;: 99,
+        &quot;attempted&quot;: 99,
+        &quot;completed&quot;: 99,
+        &quot;failed&quot;: 0,
+        &quot;exceedances&quot;: 2,
+        &quot;status&quot;: &quot;completed&quot;,
+        &quot;reason&quot;: &quot;&quot;,
+        &quot;minimum_success_fraction&quot;: 0.9,
+        &quot;method&quot;: &quot;labels permuted within strata of factor_1&quot;,
+        &quot;log10_distinct_permutations&quot;: 69.97008829687866,
+        &quot;working_scale&quot;: &quot;response&quot;,
+        &quot;kind&quot;: &quot;permutation&quot;,
+        &quot;seed&quot;: 20261016,
+        &quot;seed_stream&quot;: 2202,
+        &quot;procedure&quot;: &quot;label_permutation&quot;,
+        &quot;p_holm&quot;: 0.09
+      },
+      {
+        &quot;term&quot;: &quot;factor_1&quot;,
+        &quot;statistic&quot;: &quot;Type III F (OLS, working scale)&quot;,
+        &quot;F_obs&quot;: 0.28906070581030846,
+        &quot;df1&quot;: 1,
+        &quot;df2&quot;: 236,
+        &quot;n_perm&quot;: 99,
+        &quot;p_perm&quot;: 0.61,
+        &quot;requested&quot;: 99,
+        &quot;attempted&quot;: 99,
+        &quot;completed&quot;: 99,
+        &quot;failed&quot;: 0,
+        &quot;exceedances&quot;: 60,
+        &quot;status&quot;: &quot;completed&quot;,
+        &quot;reason&quot;: &quot;&quot;,
+        &quot;minimum_success_fraction&quot;: 0.9,
+        &quot;method&quot;: &quot;labels permuted within strata of factor_0&quot;,
+        &quot;log10_distinct_permutations&quot;: 69.97008829687866,
+        &quot;working_scale&quot;: &quot;response&quot;,
+        &quot;kind&quot;: &quot;permutation&quot;,
+        &quot;seed&quot;: 20261016,
+        &quot;seed_stream&quot;: 2202,
+        &quot;procedure&quot;: &quot;label_permutation&quot;,
+        &quot;p_holm&quot;: 0.7
+      },
+      {
+        &quot;term&quot;: &quot;C(f0, Sum):C(f1, Sum)&quot;,
+        &quot;kind&quot;: &quot;permutation&quot;,
+        &quot;statistic&quot;: &quot;HC3 Wald chi-square of the fitted poisson model&quot;,
+        &quot;df&quot;: 1,
+        &quot;observed_statistic&quot;: 0.9926152881635284,
+        &quot;requested&quot;: 99,
+        &quot;attempted&quot;: 99,
+        &quot;completed&quot;: 99,
+        &quot;failed&quot;: 0,
+        &quot;p_perm&quot;: 0.35,
+        &quot;assumptions&quot;: &quot;Independent observations or explicitly exchangeable observations within the named blocks; correct fitted null distribution and adequate residual exchangeability. Parameters and nuisance terms are estimated, so inference is approximate. Support preservation does not establish exchangeability.&quot;,
+        &quot;seed&quot;: 20261016,
+        &quot;seed_stream&quot;: 3303,
+        &quot;reason&quot;: &quot;&quot;,
+        &quot;status&quot;: &quot;completed&quot;,
+        &quot;procedure&quot;: &quot;quantile_residual_permutation&quot;,
+        &quot;minimum_success_fraction&quot;: 0.9,
+        &quot;removed_columns&quot;: [
+          &quot;C(f0, Sum)[S.Revised]:C(f1, Sum)[S.Basic]&quot;
+        ],
+        &quot;retained_columns&quot;: [
+          &quot;Intercept&quot;,
+          &quot;C(f0, Sum)[S.Revised]&quot;,
+          &quot;C(f1, Sum)[S.Basic]&quot;
+        ],
+        &quot;exchangeability_blocks&quot;: [],
+        &quot;null_hypothesis&quot;: &quot;All sum-coded coefficients for C(f0, Sum):C(f1, Sum) are zero on the fitted model&#x27;s scale; only this term is removed, retaining all other fitted terms.&quot;,
+        &quot;method&quot;: &quot;Approximate GLM Freedman–Lane analogue: fitted-null quantile-residual permutation (poisson)&quot;,
+        &quot;working_scale&quot;: &quot;Randomized PIT for discrete outcomes; fitted CDF for continuous outcomes&quot;,
+        &quot;null_fit_checks&quot;: {
+          &quot;attempts&quot;: [
+            {
+              &quot;method&quot;: &quot;IRLS&quot;,
+              &quot;termination&quot;: null,
+              &quot;iterations&quot;: null,
+              &quot;checks&quot;: {
+                &quot;optimizer_converged&quot;: true,
+                &quot;finite_estimates&quot;: true,
+                &quot;finite_likelihood&quot;: true,
+                &quot;covariance_valid&quot;: true,
+                &quot;identifiable&quot;: true,
+                &quot;information_condition&quot;: 1.2163051037413088,
+                &quot;information_stability_gate&quot;: true,
+                &quot;maximum_scaled_score&quot;: 1.0325074129013956e-13,
+                &quot;parameter_boundary_gate&quot;: true,
+                &quot;dispersion_boundary_gate&quot;: true,
+                &quot;probability_boundary_gate&quot;: true,
+                &quot;fitted_support_gate&quot;: true,
+                &quot;configured_score_tolerance&quot;: null,
+                &quot;diagnostics&quot;: {
+                  &quot;critical_failures&quot;: [],
+                  &quot;unavailable&quot;: [],
+                  &quot;max_leverage&quot;: 0.012968349283793187,
+                  &quot;maximum_cooks_distance&quot;: -5.814766530824095e-06,
+                  &quot;influence_method&quot;: &quot;Generalized score Cook distance s_i^T H^-1 s_i / [p (1-h_i)^2]&quot;,
+                  &quot;pearson_dispersion&quot;: 1.0079419332093833
+                },
+                &quot;critical_diagnostics_gate&quot;: true,
+                &quot;score_gate&quot;: null,
+                &quot;accepted&quot;: true,
+                &quot;independently_checked_stationary_point&quot;: false,
+                &quot;optimum_status&quot;: &quot;Independent stationarity not established; no reviewer-configured score gate&quot;
+              }
+            }
+          ],
+          &quot;checks&quot;: {
+            &quot;optimizer_converged&quot;: true,
+            &quot;finite_estimates&quot;: true,
+            &quot;finite_likelihood&quot;: true,
+            &quot;covariance_valid&quot;: true,
+            &quot;identifiable&quot;: true,
+            &quot;information_condition&quot;: 1.2163051037413088,
+            &quot;information_stability_gate&quot;: true,
+            &quot;maximum_scaled_score&quot;: 1.0325074129013956e-13,
+            &quot;parameter_boundary_gate&quot;: true,
+            &quot;dispersion_boundary_gate&quot;: true,
+            &quot;probability_boundary_gate&quot;: true,
+            &quot;fitted_support_gate&quot;: true,
+            &quot;configured_score_tolerance&quot;: null,
+            &quot;diagnostics&quot;: {
+              &quot;critical_failures&quot;: [],
+              &quot;unavailable&quot;: [],
+              &quot;max_leverage&quot;: 0.012968349283793187,
+              &quot;maximum_cooks_distance&quot;: -5.814766530824095e-06,
+              &quot;influence_method&quot;: &quot;Generalized score Cook distance s_i^T H^-1 s_i / [p (1-h_i)^2]&quot;,
+              &quot;pearson_dispersion&quot;: 1.0079419332093833
+            },
+            &quot;critical_diagnostics_gate&quot;: true,
+            &quot;score_gate&quot;: null,
+            &quot;accepted&quot;: true,
+            &quot;independently_checked_stationary_point&quot;: false,
+            &quot;optimum_status&quot;: &quot;Independent stationarity not established; no reviewer-configured score gate&quot;
+          },
+          &quot;retry_sequence&quot;: [],
+          &quot;maxiter&quot;: 500,
+          &quot;reportability_reason&quot;: &quot;Initial fit accepted under the recorded numerical checks&quot;
+        },
+        &quot;diagnostic_gate&quot;: {
+          &quot;null_fit_accepted&quot;: true,
+          &quot;finite_interior_pit&quot;: true,
+          &quot;limitation&quot;: &quot;These numerical checks do not establish exchangeability&quot;
+        },
+        &quot;null_distribution&quot;: &quot;Poisson with fitted mean&quot;,
+        &quot;failure_reasons&quot;: {},
+        &quot;exceedances&quot;: 34,
+        &quot;n_perm&quot;: 99,
+        &quot;p_holm&quot;: 0.7,
+        &quot;refit_summary&quot;: {
+          &quot;recorded_fits&quot;: 99,
+          &quot;optimizer_converged&quot;: 99,
+          &quot;accepted&quot;: 99,
+          &quot;independently_checked_stationary_points&quot;: 0,
+          &quot;fits_with_configured_score_gate&quot;: 0,
+          &quot;fits_with_retries&quot;: 0,
+          &quot;failed_checks&quot;: {},
+          &quot;maximum_scaled_score&quot;: 4.3735339424107643e-13
+        }
+      }
+    ]
+  }
+}</pre>
+</details>
+</body></html>

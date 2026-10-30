@@ -132,6 +132,54 @@ or other non-rankable values with `legacy.unknown` provenance when their
 original producer was never recorded; choose an explicit producer before
 running that legacy declaration again.
 
+### Automatic statistics reports
+
+In an experiment’s **Results** panel, open **Statistics** and select **Analyze all metrics**.
+Statistics use only the experiment version being viewed, including when viewing history.
+The action is enabled once that version has completed whole-dataset replicates with recorded measurements.
+Reports are filtered to the selected version; rerun older unscoped reports to attach them to a version.
+Reanalyzing replaces that version’s previous automatic reports; older report copies are not retained.
+Each report shows the selected model distribution and the stored observed summaries
+(replicate count, minimum, maximum, mean, standard deviation, distinct values, and zero count),
+both in the panel and the HTML download.
+The observed distribution uses a histogram or category-frequency chart. Older reports
+recover observations from their immutable input snapshot, including ordinal categories and
+binomial counts; no experiment rerun or statistical refit is needed. Missing evidence is
+explained instead of leaving an empty chart. “What ran and why” presents the model,
+tests, uncertainty checks, and interpretation in a responsive overview with optional technical details.
+Findings use plain-language templates; statistics and report generation make no LLM calls.
+Available reports appear in a collapsible list; reports without valid statistical conclusions are hidden. New reports
+show analytic factor-test p-values alongside separately Holm-adjusted permutation
+sensitivity p-values, and analytic comparison intervals alongside bootstrap
+intervals. Defaults are 1,000 bootstrap refits and 1,999 permutations per term.
+Existing saved reports must be rerun to include the new results.
+
+Native-model intervals use a cell-stratified bootstrap of independent runs;
+specialized custom models retain their parametric bootstrap. Model selection is
+held fixed. Bootstrap intervals require all requested attempts and at least 90%
+successful refits; native refitting has a 60-second budget per metric and reports
+incomplete attempts explicitly. Analytic results remain available if resampling
+cannot produce a reliable interval.
+
+Permutation checks use working-scale OLS statistics, not the model's Wald
+statistic. Main effects use within-other-factor-stratum exchanges; interactions
+use approximate Freedman–Lane residual permutation. Exchangeability is an extra
+assumption: agreement does not validate a model, and different methods can test
+different null hypotheses. Known paired/repeated designs are withheld until a
+dependence model is supported; unequal trial totals withhold proportion
+permutation checks. Residual-permutation interaction checks are withheld for
+non-Gaussian models and when Gaussian cell variances show strong heterogeneity.
+Passing that screen does not prove exchangeability. Pointwise intervals are not multiplicity-adjusted, and
+separate metrics are exploratory rather than jointly corrected.
+
+**Download HTML report** includes the same results, test names, rationale,
+requested/completed/failed counts, seed, limitations, and a script-free observed-distribution chart.
+To regenerate the labeled synthetic examples without a database or credentials:
+
+```bash
+python scripts/stats_example.py artifacts/statistics-demo
+```
+
 ## Everyday commands
 
 ```bash
@@ -153,6 +201,39 @@ docker compose run --rm --build asaree-tests
 The tests themselves still run under pytest; only pytest and its real Postgres
 dependency are placed on the same network. The `test` profile keeps this
 service out of a normal `docker compose up`.
+
+CI selects checks from the complete PR diff or every commit in a push:
+
+| Changes | Checks |
+| --- | --- |
+| Documentation only | Dependency-free CI selector tests |
+| Frontend | Type check, frontend tests and lint |
+| Backend | Lint, type check, migrations and regression tests |
+| Statistics source/tests or Python dependencies | Backend checks plus statistical validation |
+| CI configuration, shared build files, or unknown paths | All checks |
+
+Statistical validation includes the repeated null simulations, non-Gaussian and
+custom-model uncertainty checks, and repeated interaction/bootstrap integration
+checks. Fast formula/reference checks, failure handling, API and migration tests
+remain in the regression suite. No tests are removed. Tests unrelated to
+resampling use small explicit simulation counts rather than production defaults.
+
+With the test environment installed and any required PostgreSQL URLs configured:
+
+```bash
+uv run pytest tests/ -m 'not stats_validation' -q  # regression suite
+uv run pytest tests/ -m stats_validation -q      # expensive validation
+uv run pytest tests/ -q                         # both suites
+python3 -m unittest discover -s .github/ci -p 'test_*.py'
+```
+
+Before a release, run the CI workflow manually using GitHub Actions' **Run
+workflow** control; manual runs always select every suite. Unknown or unavailable
+diffs also select every suite. Skipped backend/frontend jobs retain their existing
+required check names; a failed selector blocks the backend check. CI prints the
+slowest test durations for both backend tiers. New expensive tests should use
+`@pytest.mark.stats_validation`; keep their input paths covered by
+`.github/ci/scope.py` and its tests.
 
 The frontend hot-reloads from your checkout; backend changes need a rebuild.
 

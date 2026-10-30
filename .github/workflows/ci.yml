@@ -6,6 +6,7 @@ on:
   pull_request:
     branches: [develop, main]
     types: [opened, synchronize, reopened]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -21,6 +22,7 @@ jobs:
     outputs:
       backend: ${{ steps.scope.outputs.backend }}
       frontend: ${{ steps.scope.outputs.frontend }}
+      stats_validation: ${{ steps.scope.outputs.stats_validation }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -35,9 +37,7 @@ jobs:
   backend:
     name: Lint & Test (backend)
     needs: changes
-    # A skipped job satisfies the existing required check without starting services.
-    # A failed dispatcher must fail this required check instead of approving a change.
-    # The branch-target guard must also run for a docs-only feat/fix PR targeting main.
+    # The target guard must run even for docs-only feature/fix PRs into main.
     if: >-
       ${{ !cancelled() && (
         needs.changes.result != 'success' || needs.changes.outputs.backend == 'true' ||
@@ -117,7 +117,7 @@ jobs:
       - name: Check lockfile is up to date
         run: uv lock --check
 
-      # The slow step by a wide margin -- motoro depends unconditionally on
+      # Cold installs are large -- motoro depends unconditionally on
       # sentence-transformers, which pulls ~4.5 GB of torch + CUDA that
       # nothing in ASAREE imports (EpistasisLab/motoro#6). The uv cache above
       # absorbs it on warm runs; when that issue lands, this drops to well
@@ -171,10 +171,12 @@ jobs:
       - name: Seed row-test users
         run: uv run python scripts/seed_row_test_users.py
 
-      # The whole suite, on purpose: 769 tests in ~13s locally, so there is no
-      # slow tier worth splitting out.
-      - name: Pytest
-        run: uv run pytest tests/ -q --tb=short
+      - name: Regression tests
+        run: uv run pytest tests/ -m 'not stats_validation' -q --tb=short --durations=15
+
+      - name: Statistical validation
+        if: needs.changes.outputs.stats_validation == 'true'
+        run: uv run pytest tests/ -m stats_validation -q --tb=short --durations=15
 
   frontend:
     name: Type Check & Lint (frontend)

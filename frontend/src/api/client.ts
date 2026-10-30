@@ -33,6 +33,7 @@ import type { OkfBundle, OkfDocument } from '@/types/okf'
 import type { CellRunBatch, DatasetRowSchema, PromptPreview, Protocol, ProtocolGraph, ProtocolRevision, ProtocolRun, TestRun } from '@/types/protocols'
 import type { Run, RunStep } from '@/types/runs'
 import type { Skill, SkillListResponse, SkillUrlPreview } from '@/types/skills'
+import type { StatsAnalysis, StatsSource } from '@/types/stats'
 import type { Persona } from '@/types/personas'
 import type { AttemptDetail, AttemptPage, CursorPage, ExecutionCell, ExecutionSlot, ExecutionSummary, ResultJob, UsageDistribution } from '@/types/executionResults'
 
@@ -176,6 +177,22 @@ export const authApi = {
   getMe: () => request<User>('/auth/me'),
   updateMe: (data: UserUpdate) => request<User>('/auth/me', { method: 'PATCH', body: data }),
   changePassword: (data: PasswordChangeRequest) => request<void>('/auth/me/password', { method: 'POST', body: data }),
+}
+
+export const statsApi = {
+  automatic: (experiment: string, version: string) => request<StatsAnalysis[]>(`/stats/${experiment}/automatic-analyses?protocol_revision_id=${encodeURIComponent(version)}`, {
+    method: 'POST',
+  }),
+  report: async (experiment: string, id: string) => {
+    const response = await authedFetch(`/stats/${experiment}/analyses/${id}/report`)
+    const filename = response.headers.get('Content-Disposition')?.match(/filename="([^"]+)"/)?.[1]
+      ?? 'statistics-report.html'
+    return { blob: await response.blob(), filename }
+  },
+  source: (experiment: string, version?: string) => request<StatsSource>(`/stats/${experiment}/source${version ? `?protocol_revision_id=${encodeURIComponent(version)}` : ''}`),
+  history: (experiment: string, version?: string) =>
+    request<StatsAnalysis[]>(`/stats/${experiment}/analyses${version ? `?protocol_revision_id=${encodeURIComponent(version)}` : ''}`),
+  get: (experiment: string, id: string) => request<StatsAnalysis>(`/stats/${experiment}/analyses/${id}`),
 }
 
 export const tokenApi = {

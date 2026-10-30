@@ -32,6 +32,28 @@ def classify(paths: list[str]) -> tuple[bool, bool]:
     return backend, frontend
 
 
+def needs_stats_validation(paths: list[str]) -> bool:
+    """Numerical inputs, tests and dependencies can invalidate simulation evidence."""
+    for path in paths:
+        if classify([path]) == (False, False):
+            continue
+        if (
+            path.startswith(("src/asaree/stats/", "src/asaree/services/stats_", "scripts/stats_"))
+            or path in {
+                "src/asaree/api/stats.py",
+                "src/asaree/worker/stats_task.py",
+                "src/asaree/models/stats_analysis.py",
+                "tests/conftest.py",
+                "pyproject.toml",
+                "uv.lock",
+            }
+            or path.startswith(("tests/test_stats_", "tests/test_beta_", "tests/fixtures/"))
+            or classify([path]) == (True, True)
+        ):
+            return True
+    return False
+
+
 def changed_paths(event_name: str, event: dict[str, Any], *, cwd: Path | None = None) -> list[str]:
     if event_name == "pull_request":
         base, head = event["pull_request"]["base"]["sha"], event["pull_request"]["head"]["sha"]
@@ -57,13 +79,21 @@ def changed_paths(event_name: str, event: dict[str, Any], *, cwd: Path | None = 
 def main() -> None:
     try:
         event = json.loads(Path(os.environ["GITHUB_EVENT_PATH"]).read_text())
-        paths = changed_paths(os.environ["GITHUB_EVENT_NAME"], event)
-        backend, frontend = classify(paths)
-        print(f"Examined {len(paths)} changed paths.")
+        if os.environ["GITHUB_EVENT_NAME"] == "workflow_dispatch":
+            backend = frontend = stats_validation = True
+            print("Manual full validation: running all suites.")
+        else:
+            paths = changed_paths(os.environ["GITHUB_EVENT_NAME"], event)
+            backend, frontend = classify(paths)
+            stats_validation = needs_stats_validation(paths)
+            print(f"Examined {len(paths)} changed paths.")
     except (OSError, ValueError, KeyError, TypeError, subprocess.CalledProcessError):
-        print("Unable to determine the complete change scope; running both suites.")
-        backend = frontend = True
-    output = f"backend={str(backend).lower()}\nfrontend={str(frontend).lower()}\n"
+        print("Unable to determine the complete change scope; running all suites.")
+        backend = frontend = stats_validation = True
+    output = (
+        f"backend={str(backend).lower()}\nfrontend={str(frontend).lower()}\n"
+        f"stats_validation={str(stats_validation).lower()}\n"
+    )
     print(output, end="")
     with Path(os.environ["GITHUB_OUTPUT"]).open("a") as stream:
         stream.write(output)

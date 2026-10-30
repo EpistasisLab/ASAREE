@@ -1,4 +1,5 @@
 import { NodeSelectionDrawer } from './NodeSelectionDrawer'
+import { RunAllCellsButton } from './RunsTab'
 import type { PersonaNodeConfig } from '@/types/protocols'
 import { PersonaBrowserPanel } from './PersonaBrowserPanel'
 import { PERSONA_BROWSE, nodeDataForPersona } from './personaCatalog'
@@ -61,7 +62,7 @@ import { Lock, Play, Plus, Square, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { ApiError, experimentsApi, protocolsApi } from '@/api/client'
 import { CONNECTOR_HANDLES } from '@/lib/coordinationStrategy'
-import { graphWithFactorBaseline, reconcileFactorBaselines } from '@/lib/factorBindings'
+import { graphWithFactorBaseline, reconcileFactorBaselines, type FactorBindingDiscrepancy } from '@/lib/factorBindings'
 import { newNodeId } from '@/lib/nodeId'
 import { handoffPeers, promptReferenceScope } from '@/lib/promptReferences'
 import { mergeProtocolSaveIntoCache, protocolForExperimentQueryKey, protocolGraphQueryKey, toPersistedGraph } from '@/lib/protocolGraph'
@@ -409,7 +410,11 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   hasUnpublishedChanges: boolean
   publishedRevision: number | null
   experimentLocked?: boolean
-}>(function ProtocolCanvas({ protocolId, experimentId, initialGraph, hasUnpublishedChanges, publishedRevision, experimentLocked = false }, canvasHandleRef) {
+  protocol?: Protocol
+  regenerationRequired?: boolean
+  unboundFactors?: string[]
+  bindingDiscrepancies?: FactorBindingDiscrepancy[]
+}>(function ProtocolCanvas({ protocolId, experimentId, initialGraph, hasUnpublishedChanges, publishedRevision, experimentLocked = false, protocol, regenerationRequired = false, unboundFactors = [], bindingDiscrepancies = [] }, canvasHandleRef) {
   const [nodes, setNodes, onNodesChange] = useNodesState<Node>(migrateLegacyNodes(initialGraph))
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>(migrateLegacyHandles(initialGraph))
   const queryClient = useQueryClient()
@@ -2432,6 +2437,16 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
               <Play className="size-4" />
               {testRunIsRunning ? 'Test Run running…' : 'Test Run'}
             </Button>
+            {protocol && experimentId && (
+              <RunAllCellsButton
+                protocol={protocol}
+                experimentId={experimentId}
+                regenerationRequired={regenerationRequired}
+                unboundFactors={unboundFactors}
+                bindingDiscrepancies={bindingDiscrepancies}
+                label="Run experiment"
+              />
+            )}
             {testRunQuery.data && !testResultsOpen && (
               <ReopenTestRunResultsButton detail={describeRun('Test Run', testRunQuery.data)} onOpen={() => setTestResultsOpen(true)} refresh={() => { testRunQuery.refetch() }} />
             )}

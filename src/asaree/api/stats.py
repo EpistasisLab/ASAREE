@@ -58,7 +58,9 @@ def summary(analysis: StatsAnalysis, *, detail: bool = False, report_status: str
     if detail:
         result["output"] = dict(analysis.output)
         if report := analysis.output.get("summary"):
-            result["output"]["summary"] = dict(report, findings=describe_findings(report.get("tests", [])))
+            result["output"]["summary"] = dict(report, findings=describe_findings(
+                report.get("tests", []), report.get("alpha", 0.05)
+            ))
             if distribution := report_distribution(
                 analysis.output, analysis.request["source"], analysis.request["config"],
             ):
@@ -117,7 +119,7 @@ async def report(experiment_id: uuid.UUID, analysis_id: uuid.UUID, user: Current
     from asaree.services.stats_html import render_html
 
     saved = await detail(experiment_id, analysis_id, user, db)
-    if saved["status"] != "completed":
+    if saved["status"] not in {"completed", "incomplete"} or not saved["output"].get("summary"):
         raise HTTPException(409, "The analysis has not completed.")
     try:
         html = render_html(saved)

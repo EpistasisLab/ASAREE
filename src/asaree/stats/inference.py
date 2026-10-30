@@ -65,21 +65,37 @@ class Predictor:
 
 
 # ============================================================ bootstrap CI
-def _boot_chunk(model: Model, theta_hat, predictor: Predictor, qset: QuantitySet, seed, n, info0=None, correct=True):
+def _boot_chunk(
+    model: Model, theta_hat, predictor: Predictor, qset: QuantitySet, seed, n, info0=None, correct=True, fit_config=None
+):
+    from .fit_checks import custom_fit_checks
+
     rng = np.random.default_rng(seed)
     etas = model.etas(model.simulation_theta(theta_hat, correct))
     nq = len(qset.meta)
     out = np.full((n, nq), np.nan)
     fails = 0
+    checks = []
     for i in range(n):
-        y = model.family.simulate(etas, model.aux, rng)
-        r = model.with_response(y).fit(theta0=theta_hat, compute_cov=False, max_iter=100, info0=info0)
-        if not r.converged:
+        try:
+            y = model.family.simulate(etas, model.aux, rng)
+            r = model.with_response(y).fit(theta0=theta_hat, compute_cov=True, max_iter=100, info0=info0)
+            record = custom_fit_checks(r, fit_config or {})
+            checks.append(dict(draw=i + 1, **record))
+            if not record["accepted"]:
+                fails += 1
+                continue
+            cm, cl = predictor.cells(r.theta)
+            values = qset.evaluate(cm, cl)
+            if not np.isfinite(values).all():
+                fails += 1
+                checks[-1]["prediction_error"] = "Non-finite quantities"
+                continue
+            out[i] = values
+        except (ValueError, RuntimeError, FloatingPointError, np.linalg.LinAlgError) as exc:
             fails += 1
-            continue
-        cm, cl = predictor.cells(r.theta)
-        out[i] = qset.evaluate(cm, cl)
-    return out, fails
+            checks.append(dict(draw=i + 1, error=str(exc)))
+    return out, fails, checks
 
 
 def parametric_bootstrap(
@@ -91,6 +107,8 @@ def parametric_bootstrap(
     seed: int,
     n_jobs: int = 1,
     dispersion_correction: bool = True,
+    fit_config: dict | None = None,
+    audit: list | None = None,
 ):
     """Simulate from the fitted model, refit on the fixed design, recompute quantities."""
     jobs = effective_jobs(n_jobs)
@@ -99,13 +117,15 @@ def parametric_bootstrap(
     res = run_parallel(
         _boot_chunk,
         [
-            (model, fit.theta, predictor, qset, s, k, fit.information, dispersion_correction)
+            (model, fit.theta, predictor, qset, s, k, fit.information, dispersion_correction, fit_config)
             for s, k in zip(seeds, sizes, strict=True)
         ],
         jobs,
     )
     draws = np.vstack([r[0] for r in res])
     fails = int(sum(r[1] for r in res))
+    if audit is not None:
+        audit.extend(dict(chunk=chunk, **check) for chunk, row in enumerate(res) for check in row[2])
     return draws, fails
 
 

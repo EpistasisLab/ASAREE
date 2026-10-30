@@ -107,9 +107,48 @@ def test_automatic_report_preserves_analytic_inference_when_bootstrap_cannot_fin
     assert result["validity"] == "valid"
     summary = result["summary"]
     assert summary["resampling"]["bootstrap"]["attempted"] == 0
+    assert result["execution_status"] == summary["execution_status"] == "incomplete"
     effect = summary["effects"][0]
     assert effect["ci_low"] is not None
     assert effect["p_adjusted"] is not None
     assert effect["bootstrap_ci_low"] is None
     assert "budget" in effect["bootstrap_status"]
     assert summary["tests"][0]["permutation_p_adjusted"] is not None
+
+
+def test_configured_success_fraction_controls_failed_refit_handling(monkeypatch):
+    from asaree.stats.analysis import fit_model
+
+    frame, x, y, grid, weights, config = bootstrap_input()
+    attempts = 0
+
+    def alternating(*args, **kwargs):
+        nonlocal attempts
+        attempts += 1
+        if attempts % 2:
+            raise ValueError("Deliberate invalid refit")
+        return fit_model(*args, **kwargs)
+
+    monkeypatch.setattr("asaree.stats.analysis.fit_model", alternating)
+    rejected, strict = bootstrap_intervals(frame, x, y, grid, weights, "gaussian", config, False)
+    accepted, relaxed = bootstrap_intervals(
+        frame, x, y, grid, weights, "gaussian", dict(config, minimum_success_fraction=0.5), False
+    )
+    assert rejected.isna().all().all()
+    assert accepted.notna().all().all()
+    assert strict["successful"] == relaxed["successful"] == 10
+    assert strict["failure_reasons"] == {"Deliberate invalid refit": 10}
+    assert strict["status"] == "unavailable"
+    assert relaxed["status"] == "completed"
+
+
+def test_nested_f_statistic_does_not_turn_a_zero_effect_into_negative_roundoff():
+    from asaree.stats.nonparametric import OLS, f_statistic
+
+    group = np.tile([1.0, -1.0], 60)
+    x = np.column_stack((np.ones(120), group))
+    y = np.tile([0.0, 1.0, 1.0, 0.0], 30)
+    statistic, df1, df2 = f_statistic(OLS(x), OLS(x[:, :1]), y)
+    assert df1 == 1 and df2 == 118
+    assert statistic >= 0
+    assert statistic == pytest.approx(0, abs=1e-20)

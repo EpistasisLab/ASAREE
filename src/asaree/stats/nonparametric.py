@@ -28,8 +28,8 @@ class OLS:
 
     def rss(self, Y):
         """Residual sum of squares for one response or a batch (n, B)."""
-        proj = self.Q.T @ Y
-        return np.sum(Y * Y, axis=0) - np.sum(proj * proj, axis=0)
+        residual = Y - self.Q @ (self.Q.T @ Y)
+        return np.sum(residual * residual, axis=0)
 
 
 def _drop(X, cols):
@@ -40,8 +40,12 @@ def _drop(X, cols):
 def f_statistic(full: OLS, red: OLS, Y):
     df1 = full.rank - red.rank
     df2 = full.n - full.rank
-    rf, rr = full.rss(Y), red.rss(Y)
-    return ((rr - rf) / df1) / (rf / df2), df1, df2
+    rf = full.rss(Y)
+    # Nested-model extra sum of squares as a squared projection difference.
+    # Subtracting two nearly equal RSS values can make a genuine zero negative,
+    # spuriously classifying valid discrete-response permutations as failures.
+    extra = full.Q @ (full.Q.T @ Y) - red.Q @ (red.Q.T @ Y)
+    return (np.sum(extra * extra, axis=0) / df1) / (rf / df2), df1, df2
 
 
 # =========================================================== permutation
@@ -67,7 +71,9 @@ def log10_n_permutations(strata: np.ndarray, groups: np.ndarray) -> float:
     return float(tot / np.log(10))
 
 
-def permutation_tests(w, df, builder: DesignBuilder, n_perm: int, rng, batch: int = 1000) -> pd.DataFrame:
+def permutation_tests(
+    w, df, builder: DesignBuilder, n_perm: int, rng, batch: int = 1000, minimum_success_fraction: float = 0.9
+) -> pd.DataFrame:
     """Design-preserving permutation tests for main effects (OLS Type III F on working scale).
 
     Each factor's labels are permuted within strata formed by all other factors
@@ -86,12 +92,16 @@ def permutation_tests(w, df, builder: DesignBuilder, n_perm: int, rng, batch: in
         F_obs, d1, d2 = f_statistic(full, red, w)
         others = [f for f in s.factors if f != t[0]] + s.blocks
         strata = stratum_index(df, others)
-        count, done = 0, 0
+        count, done, successful = 0, 0, 0
         while done < n_perm:
             k = min(batch, n_perm - done)
             Fb, _, _ = f_statistic(full, red, _within_strata_perms(strata, k, rng, w))
-            count += int(np.sum(Fb >= F_obs * (1 - 1e-10)))
+            valid = np.isfinite(Fb) & (Fb >= 0)
+            successful += int(np.sum(valid))
+            count += int(np.sum(valid & (Fb >= F_obs * (1 - 1e-10))))
             done += k
+        valid_observed = np.isfinite(F_obs) and F_obs >= 0 and d1 > 0 and d2 > 0
+        usable = valid_observed and successful >= minimum_success_fraction * n_perm
         rows.append(
             dict(
                 term=name,
@@ -100,7 +110,19 @@ def permutation_tests(w, df, builder: DesignBuilder, n_perm: int, rng, batch: in
                 df1=d1,
                 df2=d2,
                 n_perm=n_perm,
-                p_perm=(1 + count) / (n_perm + 1),
+                p_perm=(1 + count) / (successful + 1) if usable else np.nan,
+                requested=n_perm,
+                attempted=done,
+                completed=successful,
+                failed=done - successful,
+                exceedances=count,
+                status="completed" if usable else "unavailable",
+                reason=""
+                if usable
+                else "Invalid observed F statistic"
+                if not valid_observed
+                else "Too many invalid resampled F statistics",
+                minimum_success_fraction=minimum_success_fraction,
                 method=f"labels permuted within strata of {' x '.join(others) if others else '(none)'}",
                 log10_distinct_permutations=log10_n_permutations(strata, df[t[0]].to_numpy()),
             )

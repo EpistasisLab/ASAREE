@@ -99,6 +99,19 @@ it('shows concise statistics and a report download', async () => {
   expect(screen.getByText(/checks whether the factor contributes to the fitted model/)).toBeInTheDocument()
 })
 
+it('keeps completed analytic results visible while marking interrupted resampling incomplete', async () => {
+  const incomplete: StatsAnalysis = { ...saved, status: 'incomplete', output: { ...saved.output!, summary: {
+    ...saved.output!.summary!, execution_status: 'incomplete',
+  } } }
+  vi.spyOn(statsApi, 'history').mockResolvedValue([incomplete])
+  vi.spyOn(statsApi, 'get').mockResolvedValue(incomplete)
+  mount()
+  expect(await screen.findByText(/Analysis incomplete. Rerun/)).toBeInTheDocument()
+  fireEvent.click(await screen.findByRole('button', { name: /Duration/ }))
+  expect(await screen.findByText(/Interrupted procedures supply no inference/)).toBeInTheDocument()
+  expect(screen.getByText('Evidence of an effect')).toBeInTheDocument()
+})
+
 it('hides reports without valid conclusions', async () => {
   const unavailable = { ...saved, report_status: 'unavailable' as const, output: { ...saved.output!, summary: { ...saved.output!.summary!,
     status: 'unavailable' as const, tests: [], effects: [], warnings: ['Free text has no established statistical ordering.'] } } }
@@ -252,7 +265,7 @@ it('presents both inference methods with counts and unavailable checks explicitl
   mount()
   fireEvent.click(await screen.findByRole('button', { name: /Duration/ }))
   expect(await screen.findAllByText('Analytic adjusted p', { selector: 'th' })).toHaveLength(2)
-  expect(screen.getByText('Permutation adjusted p')).toBeInTheDocument()
+  expect(screen.getByText('Resampling adjusted p')).toBeInTheDocument()
   expect(screen.getByText('0.080')).toBeInTheDocument()
   expect(screen.getByText('No clear evidence in sensitivity check')).toBeInTheDocument()
   expect(screen.getByText('Bootstrap 95% interval')).toBeInTheDocument()

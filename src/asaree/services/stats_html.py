@@ -10,11 +10,19 @@ from asaree.services.stats_distribution import saved_distribution_plot
 from asaree.services.stats_findings import describe_findings
 
 DISTRIBUTION_NAMES = {
-    "gaussian": "Gaussian (normal)", "gamma": "Gamma (log link)", "lognormal": "Lognormal",
-    "poisson": "Poisson (log link)", "negbin": "Negative binomial (NB2, log link)", "binomial": "Binomial (logit link)",
-    "beta": "Beta", "betabinomial": "Beta-binomial", "ordinal_logit": "Ordered categorical (cumulative logit)",
-    "zip": "Zero-inflated Poisson", "zinb": "Zero-inflated negative binomial",
-    "zoib": "Zero/one-inflated beta", "gamma_hurdle": "Hurdle Gamma",
+    "gaussian": "Gaussian (normal)",
+    "gamma": "Gamma (log link)",
+    "lognormal": "Lognormal",
+    "poisson": "Poisson (log link)",
+    "negbin": "Negative binomial (NB2, log link)",
+    "binomial": "Binomial (logit link)",
+    "beta": "Beta",
+    "betabinomial": "Beta-binomial",
+    "ordinal_logit": "Ordered categorical (cumulative logit)",
+    "zip": "Zero-inflated Poisson",
+    "zinb": "Zero-inflated negative binomial",
+    "zoib": "Zero/one-inflated beta",
+    "gamma_hurdle": "Hurdle Gamma",
 }
 
 
@@ -94,8 +102,11 @@ def model_fit_panel(summary, family, text):
         + "<table><caption>Candidate models</caption><thead><tr><th scope='col'>Distribution</th>"
         "<th scope='col'>AIC</th><th scope='col'>ΔAIC vs best usable</th><th scope='col'>Status</th>"
         f"<th scope='col'>Exclusion reason</th></tr></thead><tbody>{rows}</tbody></table>"
-        + (f"<p>Likelihood basis for the selected model: {text(fit['likelihood_basis'])}.</p>"
-           if fit.get("likelihood_basis") else "")
+        + (
+            f"<p>Likelihood basis for the selected model: {text(fit['likelihood_basis'])}.</p>"
+            if fit.get("likelihood_basis")
+            else ""
+        )
         + f"<p>{text(note)}</p>{diagnostic_table}</section>"
     )
 
@@ -217,25 +228,28 @@ def render_html(analysis: dict) -> str:
                 f'<span aria-hidden="true" class="bar" style="height:{100 * bin["count"] / maximum:.4f}%"></span></li>'
                 for bin in bins
             )
-            ticks = "".join(f'<span>{text(step * tick)}</span>' for tick in (4, 3, 2, 1, 0))
+            ticks = "".join(f"<span>{text(step * tick)}</span>" for tick in (4, 3, 2, 1, 0))
             if plot["kind"] == "histogram":
                 low = bins[0].get("lower", distribution["minimum"])
                 high = bins[-1].get("upper", distribution["maximum"])
-                labels = "".join(f'<span>{text(low + (high - low) * tick / 4)}</span>' for tick in range(5))
+                labels = "".join(f"<span>{text(low + (high - low) * tick / 4)}</span>" for tick in range(5))
                 axis = f'<div aria-hidden="true" class="numeric-ticks">{labels}</div>'
             else:
-                labels = "".join(f'<span>{text(bin["label"])}</span>' for bin in bins)
-                axis = f'<div aria-hidden="true" class="x-ticks" style="grid-template-columns:repeat({len(bins)},minmax(0,1fr))">{labels}</div>'
+                labels = "".join(f"<span>{text(bin['label'])}</span>" for bin in bins)
+                axis = (
+                    f'<div aria-hidden="true" class="x-ticks" '
+                    f'style="grid-template-columns:repeat({len(bins)},minmax(0,1fr))">{labels}</div>'
+                )
             caption = "Histogram" if plot["kind"] == "histogram" else "Observed frequencies"
-            method = f' · {text(plot["binning"])}' if plot.get("binning") else ""
-            unit = f' ({text(info["unit"])})' if info.get("unit") else ""
+            method = f" · {text(plot['binning'])}" if plot.get("binning") else ""
+            unit = f" ({text(info['unit'])})" if info.get("unit") else ""
             kind = "frequencies" if plot["kind"] == "frequency" else "histogram"
             distribution_section += (
                 f'<figure aria-label="Observed distribution"><figcaption>{caption}{method}</figcaption>'
                 '<div class="chart"><span class="y-title">Replicates</span>'
                 f'<div aria-hidden="true" class="y-ticks">{ticks}</div><div class="chart-body">'
                 f'<ol class="distribution {kind}">{bars}</ol>'
-                f'{axis}'
+                f"{axis}"
                 f'<p class="x-title">Metric value{unit}</p></div></div></figure>'
             )
         distribution_section += (
@@ -248,11 +262,18 @@ def render_html(analysis: dict) -> str:
                 "Their numeric summaries depend on that coding.</p>"
             )
         distribution_section += table(
-            [{"statistic": title, "value": distribution.get(key)} for key, title in (
-                ("n", "Replicates"), ("minimum", "Minimum"), ("maximum", "Maximum"),
-                ("mean", "Mean"), ("sd", "Standard deviation"), ("distinct", "Distinct values"),
-                ("zeros", "Zero values"),
-            )],
+            [
+                {"statistic": title, "value": distribution.get(key)}
+                for key, title in (
+                    ("n", "Replicates"),
+                    ("minimum", "Minimum"),
+                    ("maximum", "Maximum"),
+                    ("mean", "Mean"),
+                    ("sd", "Standard deviation"),
+                    ("distinct", "Distinct values"),
+                    ("zeros", "Zero values"),
+                )
+            ],
             [("statistic", "Statistic"), ("value", "Value")],
         )
     distribution_section += model_fit_panel(summary, family, text)
@@ -263,44 +284,65 @@ def render_html(analysis: dict) -> str:
         resampling_note = (
             f"<p>Bootstrap: {text(bootstrap['successful'])}/{text(bootstrap['requested'])} successful refits; "
             f"{text(bootstrap['failed'])} failed. Status: {text(str(bootstrap['status']).rstrip('.'))}.</p>"
-            "<p>Resampling p-values: main effects exchange factor labels within strata of the other factors and use "
-            "a working-scale OLS F, a sensitivity check that can test a different null than the analytic test. "
-            "Interactions resample the fitted model's own HC3 Wald statistic: Freedman–Lane permutation where "
-            "errors are exchangeable, otherwise a parametric null-model bootstrap. Each cell names its procedure; "
-            "assumptions are in the technical details.</p>"
+            "<p>Each resampling row names the recorded procedure or says Not run with its reason. "
+            "Only completed procedures supply results. Assumptions, diagnostic gates and failed-refit "
+            "handling are in the technical details.</p>"
         )
 
     def named_entries(rows, name_key):
-        return "<ul>" + "".join(
-            f"<li><strong>{text(row.get('label') or row.get(name_key))}</strong> — "
-            f"{text(row.get('question') or row.get('purpose'))}</li>"
-            for row in rows
-        ) + "</ul>"
+        return (
+            "<ul>"
+            + "".join(
+                f"<li><strong>{text(row.get('label') or row.get(name_key))}</strong> — "
+                f"{text(row.get('question') or row.get('purpose'))}</li>"
+                for row in rows
+            )
+            + "</ul>"
+        )
 
     covariance = summary.get("covariance") or {}
     estimator = covariance.get("computed")
     overview = [
-        ("01", "Regression Model Selection", f"<h4>{text(DISTRIBUTION_NAMES.get(family, family))}</h4>"
-         + (f"<p>{text(summary['methods'][0])}</p>" if summary["methods"] else "")
-         + (f"<p>{text((summary.get('model_fit') or {}).get('rule'))}</p>"
-            if (summary.get("model_fit") or {}).get("rule") else "")),
-        ("02", "Tests and comparisons",
-         "<h4>Factor tests</h4>"
-         + (f"<p>Wald chi-square tests of each model term with {text(estimator)} robust covariance.</p>"
-            if estimator else "")
-         + named_entries(summary["tests"], "effect")
-         + "<h4>Comparisons</h4>"
-         + "<p>Model-predicted averages, each condition weighted equally.</p>"
-         + named_entries(summary["effects"], "comparison")),
+        (
+            "01",
+            "Regression Model Selection",
+            f"<h4>{text(DISTRIBUTION_NAMES.get(family, family))}</h4>"
+            + (f"<p>{text(summary['methods'][0])}</p>" if summary["methods"] else "")
+            + (
+                f"<p>{text((summary.get('model_fit') or {}).get('rule'))}</p>"
+                if (summary.get("model_fit") or {}).get("rule")
+                else ""
+            ),
+        ),
+        (
+            "02",
+            "Tests and comparisons",
+            "<h4>Factor tests</h4>"
+            + (
+                f"<p>Wald chi-square tests of each model term with {text(estimator)} robust covariance.</p>"
+                if estimator
+                else ""
+            )
+            + named_entries(summary["tests"], "effect")
+            + "<h4>Comparisons</h4>"
+            + "<p>Model-predicted averages, each condition weighted equally.</p>"
+            + named_entries(summary["effects"], "comparison"),
+        ),
         ("03", "Uncertainty checks", resampling_note or "<p>No resampling results were recorded.</p>"),
-        ("04", "How to interpret it", listing([
-            "Analytic adjusted p-values are Holm-adjusted across the factor tests, and within each comparison "
-            "family; resampling p-values are Holm-adjusted separately.",
-            "“Analytic result” means the analytic adjusted p-value is below 0.05.",
-            "Confidence intervals are not adjusted for multiple comparisons.",
-            "A result without clear evidence does not mean the effect is zero.",
-            "Results across separate metrics are exploratory.",
-        ])),
+        (
+            "04",
+            "How to interpret it",
+            listing(
+                [
+                    "Analytic adjusted p-values are Holm-adjusted across the factor tests, and within each comparison "
+                    "family; resampling p-values are Holm-adjusted separately.",
+                    f"“Analytic result” means the analytic adjusted p-value is below {summary.get('alpha', 0.05):g}.",
+                    "Confidence intervals are not adjusted for multiple comparisons.",
+                    "A result without clear evidence does not mean the effect is zero.",
+                    "Results across separate metrics are exploratory.",
+                ]
+            ),
+        ),
     ]
 
     def detail_section(section):
@@ -318,10 +360,9 @@ def render_html(analysis: dict) -> str:
             f'<section class="method-step"><p class="eyebrow">{number}</p><h3>{title}</h3>{content}</section>'
             for number, title, content in overview
         )
-        + '</div><details><summary>Full technical details</summary>'
-        '<p>Calculated with statistical libraries. Explanations use fixed templates; '
-        'no AI is used to generate this report.</p>'
-        + technical + '</details></section>'
+        + "</div><details><summary>Full technical details</summary>"
+        "<p>Calculated with statistical libraries. Explanations use fixed templates; "
+        "no AI is used to generate this report.</p>" + technical + "</details></section>"
     )
     columns = summary.get("column_methods") or {}
     test_methods, effect_methods = columns.get("tests") or {}, columns.get("effects") or {}
@@ -346,7 +387,8 @@ figure{{margin:20px 0;padding:20px;border:1px solid #dce6eb;border-radius:8px;br
 figcaption{{font-size:12px;color:#526170;margin-bottom:16px}}
 .chart{{display:flex;gap:8px}}.chart-body{{flex:1;min-width:0}}
 .y-title{{writing-mode:vertical-rl;transform:rotate(180deg);height:180px;text-align:center;font-size:12px}}
-.y-ticks{{display:flex;height:180px;flex-direction:column;justify-content:space-between;text-align:right;font:11px monospace;color:#526170}}
+.y-ticks{{display:flex;height:180px;flex-direction:column;justify-content:space-between;
+text-align:right;font:11px monospace;color:#526170}}
 .distribution{{display:flex;gap:1px;list-style:none;padding:0;margin:0;height:180px;border-bottom:1px solid #94a3b8;
 background:repeating-linear-gradient(to top,transparent 0,transparent calc(25% - 1px),#dce6eb 25%)}}
 .distribution.frequencies{{gap:8px}}.distribution li{{display:flex;align-items:flex-end;flex:1;min-width:0}}
@@ -366,18 +408,22 @@ background:repeating-linear-gradient(to top,transparent 0,transparent calc(25% -
 @media print{{body{{margin:0;max-width:none}}tr{{break-inside:avoid}}}}</style></head>
 <body><h1>Statistical results: {text(summary["metric"])}</h1>
 {metric_context}
-<p>Status: {text(summary["status"])}</p><p>{text(summary["description"])}</p>
-{listing(describe_findings(summary["tests"]))}
+<p>Status: {text(summary["status"])} · Execution: {text(summary.get("execution_status", "completed"))}</p>
+<p>{text(summary["description"])}</p>
+{listing(describe_findings(summary["tests"], summary.get("alpha", 0.05)))}
 {distribution_section}
-{f'<p role="alert" class="notice"><strong>Inference unavailable.</strong> {text(inference_reason)} '
- 'Tests, confidence intervals, bootstrap intervals and resampling checks were not computed.</p>'
- if inference_reason else ""}
+{
+        f'<p role="alert" class="notice"><strong>Inference unavailable.</strong> {text(inference_reason)} '
+        "Tests, confidence intervals, bootstrap intervals and resampling checks were not computed.</p>"
+        if inference_reason
+        else ""
+    }
 <h2>Statistical tests</h2>{
         table(
             [dict(row, effect=row.get("label") or row["effect"]) for row in summary["tests"]],
             [("effect", "Effect"), ("p_adjusted", "Analytic adjusted p" if resampled else "Adjusted p-value")]
             + ([("permutation_p_adjusted", "Resampling adjusted p")] if resampled else [])
-            + [("result", "Analytic result (adjusted p < 0.05)")],
+            + [("result", f"Analytic result (adjusted p < {summary.get('alpha', 0.05):g})")],
             dict(p_adjusted=test_methods.get("p_adjusted"), permutation_p_adjusted=test_methods.get("permutation")),
         )
     }
@@ -393,7 +439,7 @@ background:repeating-linear-gradient(to top,transparent 0,transparent calc(25% -
             + ([("bootstrap_interval", "Bootstrap 95% interval")] if resampled else [])
             + [
                 ("p_adjusted", "Analytic adjusted p" if resampled else "Adjusted p-value"),
-                ("result", "Analytic result (adjusted p < 0.05)"),
+                ("result", f"Analytic result (adjusted p < {summary.get('alpha', 0.05):g})"),
             ],
             dict(
                 interval=effect_methods.get("interval"),

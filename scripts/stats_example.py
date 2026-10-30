@@ -6,9 +6,9 @@ No database, model calls, or credentials are required.
 
 from __future__ import annotations
 
+import argparse
 import hashlib
 import json
-import sys
 from datetime import UTC, datetime
 from html import escape
 from pathlib import Path
@@ -20,7 +20,13 @@ from asaree.services.stats_source import StatsRequest, compute
 
 
 def main():
-    destination = Path(sys.argv[1])
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("destination", type=Path)
+    parser.add_argument("--n-boot", type=int, default=1000)
+    parser.add_argument("--n-perm", type=int, default=1999)
+    parser.add_argument("--created-at", default=None, help="Fixed ISO timestamp for reproducible HTML")
+    args = parser.parse_args()
+    destination = args.destination
     destination.mkdir(parents=True, exist_ok=True)
     rng = np.random.default_rng(20261022)
     rows = []
@@ -81,9 +87,11 @@ def main():
     source["fingerprint"] = hashlib.sha256(json.dumps(source, sort_keys=True).encode()).hexdigest()
     links = []
     for index, metric in enumerate(source["metric_metadata"]):
-        config = StatsRequest(metric=metric).model_dump(mode="json")
+        config = StatsRequest(metric=metric, n_boot=args.n_boot, n_perm=args.n_perm).model_dump(mode="json")
         output = compute(source, config)
-        analysis = dict(id=f"synthetic-demo-{index}", created_at=datetime.now(UTC).isoformat(), output=output)
+        analysis = dict(
+            id=f"synthetic-demo-{index}", created_at=args.created_at or datetime.now(UTC).isoformat(), output=output
+        )
         filename = f"statistics-{metric.lower()}-example.html"
         (destination / filename).write_text(render_html(analysis))
         description = output["summary"]["metric_info"]["description"]

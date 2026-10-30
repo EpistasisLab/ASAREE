@@ -10,14 +10,16 @@ from __future__ import annotations
 import importlib.metadata
 import json
 import math
+import platform
 import re
 
 import numpy as np
 from statsmodels.stats.multitest import multipletests
 
+from asaree.services.stats_specification import design_specification, specification_section
 from asaree.stats.analysis import analyze
 
-REPORT_VERSION = 3
+REPORT_VERSION = 4
 ORDERED_LABELS = (
     ("very low", "low", "medium", "high", "very high"),
     ("strongly disagree", "disagree", "neutral", "agree", "strongly agree"),
@@ -51,6 +53,9 @@ LINK_SCALES = {
     "binomial": ("logit", "log-odds scale (logit link)"),
     "beta": ("logit", "logit-mean scale (logit link)"),
     "ordinal_logit": ("cumulative", "cumulative log-odds scale"),
+    "betabinomial": ("logit", "logit-mean scale; constant beta-binomial precision"),
+    "zoib": ("custom", "joint beta-mean logit and configured boundary-part scales"),
+    "gamma_hurdle": ("custom", "joint positive-mean log link and nonzero-probability logit link"),
 }
 INTERACTION_SIGN = " × "
 
@@ -96,12 +101,18 @@ def factor_test_text(factors, other_factors, levels, family, metric):
             f", on average across {join_names(other_factors)}?" if other_factors else "?"
         )
         interpretation = (
-            f"Evidence that {factor} changes {metric}"
+            f"Tests whether {factor} changes {metric}"
             + (f" on average over {join_names(other_factors)}" if other_factors else "")
             + f". Its size and direction are in the {factor} comparison."
         )
         return question, null, interpretation
     first, rest = factors[0], factors[1:]
+    if len(factors) > 2:
+        return (
+            f"Tests whether {named} has a joint interaction on the model scale.",
+            f"All sum-coded coefficients for {named} equal zero on the model scale.",
+            f"Tests whether the joint {named} interaction coefficients differ from zero.",
+        )
     rest_names = join_names(rest)
     effect = {
         "identity": ("difference", "difference of differences = 0"),
@@ -113,10 +124,7 @@ def factor_test_text(factors, other_factors, levels, family, metric):
     if family == "lognormal":
         null += " This equals a ratio of ratios of means only when the log-scale variance is constant."
     question = f"Does the effect of {first} on {metric} depend on {rest_names}?"
-    interpretation = (
-        f"Evidence that the {first} {effect[0]} differs between {rest_names} settings, so {named} "
-        "effects should be read together rather than separately."
-    )
+    interpretation = f"Tests whether the {first} {effect[0]} differs between {rest_names} settings ({named})."
     return question, null, interpretation
 
 
@@ -510,9 +518,10 @@ def analyze_automatic(source: dict, config: dict) -> dict:
         if len(source.get("protocol_revision_ids", [])) > 1:
             raise ValueError("Runs span different published protocols; statistical pooling was withheld.")
         dependence = source.get("dependence", {})
-        if dependence.get("paired") or dependence.get("clustered") or dependence.get("repeated"):
+        if any(dependence.values()) or source.get("design_structure"):
             raise ValueError(
-                "Paired or repeated observations require a dependence model; independent-run tests withheld."
+                "Paired, blocked, clustered, covariate-adjusted or repeated observations require a specified "
+                "design/dependence model; this automatic path has not implemented it. Independent-run tests withheld."
             )
         converted_source, resolved, treatment_labels = automatic_inputs(source, config, plan)
         factors = resolved["factors"]
@@ -523,8 +532,11 @@ def analyze_automatic(source: dict, config: dict) -> dict:
             try:
                 frame = prepare_frame(converted_source, candidate_config)
                 cell_counts = frame.groupby([f"factor_{i}" for i in range(len(factors))]).size()
-                if cell_counts.min() < 3:
-                    raise ValueError("At least three measured independent runs per observed condition are required.")
+                minimum_runs = config.get("minimum_runs_per_condition", 3)
+                if cell_counts.min() < minimum_runs:
+                    raise ValueError(
+                        f"At least {minimum_runs} measured independent runs per observed condition are required."
+                    )
                 if family in {"zoib", "gamma_hurdle", "betabinomial"}:
                     output = json_safe(analyze_custom(frame, candidate_config))
                     diagnostics = output["tables"]["diagnostics"][0]
@@ -555,6 +567,7 @@ def analyze_automatic(source: dict, config: dict) -> dict:
                         n=fit.get("n", len(frame)),
                         n_parameters=fit.get("n_parameters"),
                         likelihood_basis=fit.get("likelihood_basis"),
+                        fit_execution=output["tables"].get("fit_execution", []),
                         **({} if valid else {"reason": fit.get("exclusion_reason") or "fit failed reliability checks"}),
                     )
                 )
@@ -571,7 +584,7 @@ def analyze_automatic(source: dict, config: dict) -> dict:
             result = unavailable(source, config, f"No usable model. {reason}")
             result["summary"]["provenance"]["candidates"] = candidates
             result["summary"]["methods"].append(
-                "Attempted models: " + ", ".join(row["family"] for row in candidates) + ". None passed validation."
+                "Attempted models: " + ", ".join(row["family"] for row in candidates) + ". None passed fit checks."
             )
             return result
         ranked = [row for row in fitted if row[0] is not None]
@@ -618,6 +631,9 @@ def analyze_automatic(source: dict, config: dict) -> dict:
                     row.update(
                         p_perm=None,
                         p_holm=None,
+                        method="Not run",
+                        status="not_run",
+                        availability="not_implemented",
                         reason=(
                             "Interaction permutation withheld: the custom multipart model has no exchangeable "
                             "residual, and null-model simulation is not implemented for it."
@@ -680,6 +696,11 @@ def analyze_automatic(source: dict, config: dict) -> dict:
         output["summary"]["provenance"]["treatment_labels"] = {
             name: list(mapping.values()) for name, mapping in treatment_labels.items()
         }
+        spec = design_specification(source, config, frame)
+        output["summary"]["design_specification"] = spec
+        output["summary"]["details"].insert(0, specification_section(spec))
+        output["summary"]["provenance"]["resolved_config"] = selected_config
+        output["summary"]["provenance"]["requested_config"] = config
         from asaree.services.stats_distribution import observed_distribution
 
         output["summary"]["distribution"] = observed_distribution(
@@ -757,10 +778,20 @@ def selection_summary(output, family, candidates, rule, constant_cells, n_cells)
 
 def build_summary(output, source, config, plan, family, warnings, model_selection=None, levels=None):
     """One interpretation shared by the UI and HTML export; no generated claims."""
+    from asaree.stats.fit_checks import refit_summary
+
+    def compact_refits(row):
+        row = dict(row)
+        if records := row.pop("refit_checks", None):
+            row["refit_summary"] = refit_summary(records)
+        return row
+
     factors = config["factors"]
     aliases = {f"factor_{i}": name for i, name in enumerate(factors)}
     aliases.update({f"C(f{i}, Sum)": name for i, name in enumerate(factors)})
     metric = config["metric"]
+    alpha = config.get("alpha", 0.05)
+    minimum_success = config.get("minimum_success_fraction", 0.9)
     unit = plan["metadata"].get("unit")
     levels = levels or {name: [] for name in factors}
 
@@ -798,15 +829,24 @@ def build_summary(output, source, config, plan, family, warnings, model_selectio
             attempted=ok + failed,
             successful=ok,
             failed=failed,
-            status="completed" if ok >= 0.9 * config["n_boot"] else "Too many failed refits",
+            status="completed"
+            if ok + failed == config["n_boot"] and ok >= minimum_success * config["n_boot"]
+            else "unavailable",
+            minimum_success_fraction=minimum_success,
             seed=config["seed"],
+            seed_stream="SeedSequence(seed).spawn(1)[0].spawn(5)[2], split into four deterministic chunks",
+            procedure="fitted_model_parametric_bootstrap",
+            refit_checks=output["tables"].get("custom_bootstrap_checks", []),
         )
     else:
         bootstrap = next(
             iter(output["tables"].get("resampling", [])),
             dict(requested=config["n_boot"], attempted=0, successful=0, failed=0, status="Unavailable"),
         )
-    permutation_rows = {label(row["term"]): row for row in output["tables"].get("permutation_tests", [])}
+    bootstrap = compact_refits(bootstrap)
+    permutation_rows = {
+        label(row["term"]): compact_refits(row) for row in output["tables"].get("permutation_tests", [])
+    }
     if bootstrap["status"] != "completed" and not inference_reason:
         warnings.append(f"Bootstrap intervals unavailable: {bootstrap['status']}. Analytic inference is retained.")
     if output.get("permutation_reason"):
@@ -858,7 +898,11 @@ def build_summary(output, source, config, plan, family, warnings, model_selectio
             else (row.get("bootstrap_ci_low"), row.get("bootstrap_ci_high"))
         )
         boot_usable = bootstrap["status"] == "completed" and all(number(v) for v in (boot_low, boot_high))
-        boot_status = "completed" if boot_usable else bootstrap["status"]
+        boot_status = (
+            "completed"
+            if boot_usable
+            else ": ".join(str(value) for value in (bootstrap["status"], bootstrap.get("reason")) if value)
+        )
         if boot_usable and not inference_reason and abs(boot_high - boot_low) <= 1e-9 * max(1.0, abs(boot_high)):
             # Every refit reproduced the same value: resampling saw no variation, not certainty.
             boot_usable = False
@@ -899,7 +943,7 @@ def build_summary(output, source, config, plan, family, warnings, model_selectio
                 scale=row.get("scale", "difference"),
                 unit=unit if str(row.get("scale", "difference")).startswith("difference") else None,
                 result="Evidence of a difference"
-                if usable and p < 0.05
+                if usable and p < alpha
                 else "No clear evidence of a difference"
                 if usable
                 else "Inference unavailable",
@@ -925,33 +969,43 @@ def build_summary(output, source, config, plan, family, warnings, model_selectio
         term_factors = term.split(":")
         others = [f for f in factors if f not in term_factors]
         question, null, interpretation = factor_test_text(term_factors, others, levels, family, metric)
+        if specialized:
+            null = label(row.get("null_hypothesis", null))
+            interpretation = "Tests whether the named term's coefficients are zero in every fitted regression part."
         permutation = permutation_rows.get(term, {})
         permutation_p = permutation.get("p_holm")
-        kind = permutation.get("kind") or "permutation"
+        kind = permutation.get("kind")
         purpose = f"{question} Null: {null}"
         if "in every model part (joint)" in row.get("null_hypothesis", ""):
             purpose += " Coefficients are tested jointly across the model's parts."
         method = ("HC3 Wald chi-square test" if specialized else recorded_method(row)) if number(p) else None
         resampling_name = "parametric bootstrap check" if kind == "parametric bootstrap" else "permutation check"
+        reason = (
+            permutation.get("reason") or output.get("permutation_reason") or "Procedure not implemented for this model"
+        )
+        # Procedure names come only from execution records, never from the term's order.
         resampling_label = (
-            "Null-model parametric bootstrap of the HC3 Wald statistic"
-            if kind == "parametric bootstrap"
-            else "Freedman–Lane permutation of the HC3 Wald statistic"
-            if len(term_factors) > 1
-            else "Label permutation within strata; working-scale OLS F (sensitivity check)"
+            label(permutation.get("method") or "Method not recorded") if number(permutation_p) else f"Not run: {reason}"
         )
         tests.append(
             dict(
                 effect=term,
                 label=INTERACTION_SIGN.join(term_factors),
                 p_adjusted=p if number(p) else None,
-                statistic=row.get("statistic") if number(row.get("statistic")) else None,
+                statistic=row.get("statistic", row.get("wald_hc3_chi2"))
+                if number(row.get("statistic", row.get("wald_hc3_chi2")))
+                else None,
                 df=row.get("df"),
                 method=method or "Inference unavailable",
                 purpose=purpose,
                 question=question,
                 null_hypothesis=null,
-                interpretation=interpretation,
+                explanation=interpretation,
+                interpretation="Evidence of an effect"
+                if number(p) and p < alpha
+                else "No clear evidence of an effect"
+                if number(p)
+                else "Inference unavailable",
                 covariance=estimator if method else None,
                 scale=scale_text,
                 averaged_over=averaged_phrase(others, levels),
@@ -962,21 +1016,18 @@ def build_summary(output, source, config, plan, family, warnings, model_selectio
                 permutation_method=label(permutation["method"]) if permutation.get("method") else None,
                 resampling_kind=kind if permutation else None,
                 resampling_name=resampling_name,
-                resampling_label=resampling_label
-                if permutation and permutation.get("method") != "Permutation withheld"
-                else None,
-                permutation_status="completed"
-                if number(permutation_p)
-                else permutation.get("reason") or output.get("permutation_reason", "Unavailable"),
+                resampling_label=resampling_label,
+                resampling_procedure=permutation.get("procedure"),
+                permutation_status="completed" if number(permutation_p) else f"Not run: {reason}",
                 permutation_result=(
                     f"Evidence in {resampling_name}"
-                    if permutation_p < 0.05
+                    if permutation_p < alpha
                     else f"No clear evidence in {resampling_name}"
                 )
                 if number(permutation_p)
                 else "Unavailable",
                 result="Evidence of an effect"
-                if number(p) and p < 0.05
+                if number(p) and p < alpha
                 else "No clear evidence of an effect"
                 if number(p)
                 else "Inference unavailable",
@@ -1027,25 +1078,140 @@ def build_summary(output, source, config, plan, family, warnings, model_selectio
         "it does not show that the selected model fits adequately in absolute terms.",
         f"Model terms: {', '.join(factors)} with interactions through order {config['max_order']}, sum-to-zero coding.",
     ]
+    model_spec = output.get("model_specification", {})
+    selection_items += [f"Fitted model specification — {key}: {label(value)}" for key, value in model_spec.items()]
     if sum(bool(row.get("usable")) for row in selection.get("candidates", [])) > 1:
         selection_items.append(
             "Model selection used these observations; reported intervals do not include selection uncertainty."
         )
     details.append(dict(title="Model selection", items=[item for item in selection_items if item]))
+    fit_rows = output["tables"].get("fit_execution", [])
+    fit_items = [
+        "Optimizer convergence is a termination report, not proof of an optimum. Numerical acceptance checks "
+        "finite estimates and likelihood, identification and covariance validity. An independent local score "
+        "gate is enforced only if maximum_scaled_score is configured after statistical review. "
+        "No check establishes a global optimum or validates statistical inference.",
+        (
+            "Custom fits use damped Newton with step halving (200 iterations); resampling starts with "
+            "a nearby-information BFGS step sequence, falling back to damped Newton (100 iterations). "
+            "Stopping uses gradient tolerance 1e-7 or Newton decrement below 1e-10; a documented numerical "
+            "precision-floor stop can also report convergence. Final finite-parameter, likelihood, information "
+            "and covariance checks apply to initial fits and refits."
+            if specialized
+            else "OLS uses a direct pseudoinverse solve; no iterative optimizer termination is involved."
+            if family in {"gaussian", "lognormal"}
+            else f"IRLS permits {config.get('optimizer_maxiter', 500)} iterations. Initial and resampling fits "
+            "use the same numerical acceptance checks."
+            if family in {"gamma", "poisson", "binomial"}
+            else f"Native MLE fits retry L-BFGS then Newton, up to {config.get('optimizer_maxiter', 500)} iterations "
+            "per optimizer, from the last finite estimate. Initial and resampling fits use the same checks."
+        ),
+    ]
+    for fit_row in fit_rows:
+        checks = fit_row.get("checks", {})
+        fit_items.append("Selected fit acceptance: " + "; ".join(f"{key}: {value}" for key, value in checks.items()))
+        fit_items.append("Reportability: " + fit_row.get("reportability_reason", "Not recorded"))
+    diagnostics = next(iter(output["tables"].get("diagnostics", [])), {})
+    if diagnostics.get("gamma_shape_fit"):
+        fit_items.append(
+            "Dispersion ML optimization: "
+            + "; ".join(f"{key}: {value}" for key, value in diagnostics["gamma_shape_fit"].items())
+        )
+    details.append(
+        dict(
+            title="Numerical fitting and acceptance",
+            items=fit_items,
+            columns=[
+                ("method", "Attempt"),
+                ("termination", "Termination code"),
+                ("checks", "Numerical checks"),
+                ("error", "Failure reason"),
+            ],
+            rows=[
+                dict(attempt, checks="; ".join(f"{key}: {value}" for key, value in attempt.get("checks", {}).items()))
+                for fit in fit_rows
+                for attempt in fit.get("attempts", [])
+            ],
+        )
+    )
+    details.append(
+        dict(
+            title="Covariance and dispersion",
+            items=[
+                f"Requested covariance: {covariance.get('requested', 'Not recorded')}. "
+                f"Computed covariance: {estimator}. "
+                + (covariance.get("implementation") or "")
+                + ". "
+                + (covariance.get("reason") or "No fallback recorded."),
+                (
+                    "HC3 rescales each observation's score by 1/(1 − leverage) before forming the sandwich."
+                    if estimator == "HC3"
+                    else "HC0 forms the sandwich from unadjusted per-observation scores."
+                    if estimator == "HC0"
+                    else "No robust covariance is available; analytic inference is withheld."
+                )
+                + " Numerical covariance verification does not establish inferential calibration.",
+                {
+                    "gaussian": "OLS residual variance is estimated; response-scale AIC counts that parameter.",
+                    "lognormal": "OLS residual variance on log(outcome) is estimated; predicted arithmetic means apply "
+                    "the lognormal variance correction. AIC includes the response-scale Jacobian.",
+                    "gamma": "A common Gamma shape is estimated by ML for AIC; the GLM fit uses Pearson dispersion. "
+                    "Dispersion cancels from the explicitly constructed robust sandwich.",
+                    "beta": "A single intercept-only precision is estimated jointly with the logit mean model; "
+                    "A computed sandwich includes mean and precision scores with observed-information bread.",
+                    "negbin": "NB2 dispersion alpha is estimated jointly; its score and observed information "
+                    "enter the sandwich.",
+                    "poisson": "Poisson variance equals its mean; no free dispersion parameter is estimated.",
+                    "binomial": "Binomial variance is fixed by probability and trial totals; "
+                    "no free dispersion parameter is estimated.",
+                }.get(
+                    family, "Ancillary parameters are estimated in the selected likelihood; see its model definition."
+                ),
+            ],
+        )
+    )
+    details.append(
+        dict(
+            title="Diagnostic rules and validation scope",
+            items=[
+                f"Minimum independent runs per condition: {config.get('minimum_runs_per_condition', 3)}. "
+                f"Poisson/binomial Pearson dispersion above {config.get('maximum_pearson_dispersion', 3):g} excludes a "
+                "candidate. Gaussian residuals are flagged as severely skewed when the D’Agostino–Pearson p is below "
+                "0.001 and absolute skewness exceeds 1 (at least 20 observations).",
+                f"Discrete/beta/ordinal absolute parameters above {config.get('maximum_absolute_parameter', 30):g} are "
+                "flagged as boundary fits. Mean probabilities outside [1e-8, 1 − 1e-8] flag separation; NB2 alpha "
+                "below 1e-6 is treated as a boundary fit. These are inherited rules pending statistical review.",
+                "Finite estimates, usable information and reproducible numerical calculations are numerical checks. "
+                "They do not establish the calibration of p-values or confidence-interval coverage.",
+                "No experiment-specific simulation validation is attached to this report. Earlier validation of other "
+                "reports or model families does not validate this analysis, including beta regression. "
+                "Small simulation studies cannot rule out a false-positive rate of 10% without a suitable "
+                "uncertainty interval and scope.",
+            ],
+        )
+    )
     test_columns = [
         ("target", "Target"),
         ("method", "Method"),
         ("covariance", "Covariance"),
         ("scale", "Scale"),
         ("null", "Null hypothesis"),
+        ("explanation", "Test explanation"),
         ("interpretation", "Interpretation"),
     ]
     details.append(
         dict(
             title="Factor tests",
             items=[
-                "Each test is a Wald chi-square test of all coefficients belonging to one model term, using the "
-                f"{estimator} robust covariance, on the model's scale: {scale_text}. For log-scale models the "
+                (
+                    "Available tests use the Wald chi-square reference distribution, with degrees of freedom equal "
+                    "to the number of jointly tested coefficients. Normal-reference z tests and pointwise normal "
+                    "intervals are used for analytic comparisons (delta method for nonlinear quantities). "
+                    f"Computed robust covariance: {estimator}. Model scale: {scale_text}. "
+                    if available_tests
+                    else "Factor tests: Not run; reasons are recorded per row. "
+                )
+                + "For log-scale models the "
                 "main-effect tests compare geometric, not arithmetic, averages over the other factors' settings, "
                 "so they can differ slightly from the comparisons of predicted averages below."
             ],
@@ -1061,6 +1227,7 @@ def build_summary(output, source, config, plan, family, warnings, model_selectio
                     covariance=t["covariance"] or "—",
                     scale=t["scale"],
                     null=t["null_hypothesis"] + " " + t["averaged_over"],
+                    explanation=t["explanation"],
                     interpretation=t["interpretation"]
                     if t["p_adjusted"] is not None
                     else f"Unavailable: {t['unavailable_reason']}",
@@ -1075,8 +1242,8 @@ def build_summary(output, source, config, plan, family, warnings, model_selectio
             items=[
                 "Each comparison uses the model's predicted mean for every condition, averaged with equal weight "
                 "over the settings named below. Ratios divide the first-listed setting by the second; differences "
-                "subtract it. Ratio tests and intervals are computed for the log ratio by the delta method and "
-                "back-transformed, so intervals stay positive."
+                "subtract the second from the first. Ratio tests and intervals use the log ratio and delta method; "
+                "intervals are back-transformed to stay positive."
             ],
             columns=[
                 ("target", "Target"),
@@ -1093,7 +1260,7 @@ def build_summary(output, source, config, plan, family, warnings, model_selectio
                     method=f"{e['method']}; {e['interval_method']}" if e["interval_method"] else e["method"],
                     covariance=e["covariance"] or "—",
                     null=e["null_hypothesis"] or "—",
-                    interpretation=e["interpretation"]
+                    interpretation=e["result"] + ". " + (e["interpretation"] or "")
                     if e["p_adjusted"] is not None
                     else f"Descriptive only. Unavailable: {e['unavailable_reason']}",
                 )
@@ -1105,14 +1272,14 @@ def build_summary(output, source, config, plan, family, warnings, model_selectio
     for t in tests:
         row = permutation_rows.get(t["effect"])
         if not row:
-            continue
+            row = dict(reason=t["permutation_status"], method="Not run")
         requested = row.get("requested", config["n_perm"])
         completed = row.get("completed", row.get("n_perm", 0)) or 0
         failed = row.get("failed", 0) or 0
         statistic = row.get("statistic") or "Type III F (OLS, working scale)"
-        if row.get("method") in ("Permutation withheld", "Withheld"):
-            procedure = "Not run"
-        elif row.get("kind") == "permutation" and ":" not in t["effect"]:
+        if not number(row.get("p_perm")):
+            procedure = "Not run: " + (row.get("reason") or "No completed procedure recorded")
+        elif row.get("procedure") == "label_permutation":
             procedure = (
                 f"{label(row.get('method', ''))} (exact for the sharp null that {t['label']} has no effect at "
                 f"any setting of the other factors); statistic: working-scale OLS F, a sensitivity check, not the "
@@ -1134,8 +1301,26 @@ def build_summary(output, source, config, plan, family, warnings, model_selectio
                 procedure=procedure,
                 null=row.get("null_hypothesis")
                 or f"{t['label']} has no effect on the distribution of {metric} at any setting of the other factors.",
-                assumptions=row.get("assumptions")
-                or "Independent runs whose working-scale values are exchangeable within each stratum under the null.",
+                assumptions=(
+                    row.get("assumptions")
+                    or "Independent runs with working-scale values exchangeable within each stratum under the null."
+                )
+                + (
+                    " Diagnostic gate: " + json.dumps(row["diagnostic_gate"], sort_keys=True)
+                    if row.get("diagnostic_gate")
+                    else ""
+                )
+                + (
+                    " Failed refits: " + json.dumps(row["failure_reasons"], sort_keys=True)
+                    if row.get("failure_reasons")
+                    else ""
+                )
+                + (
+                    " Numerical refit checks: "
+                    + "; ".join(f"{key}: {value}" for key, value in row["refit_summary"].items())
+                    if row.get("refit_summary")
+                    else ""
+                ),
                 draws=outcome,
                 seed=f"{row.get('seed', config['seed'])} / stream {row.get('seed_stream', '—')}",
             )
@@ -1144,10 +1329,8 @@ def build_summary(output, source, config, plan, family, warnings, model_selectio
         dict(
             title="Permutation and null-resampling checks",
             items=[
-                "Main effects: labels are exchanged within strata of the other factors (whole runs), with a "
-                "working-scale OLS F statistic. Interactions: the fitted model's own HC3 Wald statistic is "
-                "resampled around the fitted no-interaction model, by Freedman–Lane permutation when errors are "
-                "exchangeable on some scale, otherwise by a parametric (null-model) bootstrap.",
+                "Only the procedures named in completed execution rows below ran. Unavailable methods are "
+                "marked Not run with a reason. A missing implementation is distinct from failed assumptions.",
                 "Resampling p-values for the factor tests are Holm-adjusted together, separately from the analytic "
                 "p-values. Agreement between methods is descriptive, not proof of validity.",
             ],
@@ -1168,14 +1351,33 @@ def build_summary(output, source, config, plan, family, warnings, model_selectio
         f"{bootstrap['status']}. Seed {bootstrap.get('seed', config['seed'])}"
         + (f", stream {bootstrap['seed_stream']}" if bootstrap.get("seed_stream") else "")
         + ".",
-        "Intervals require a completed run with at least 90% successful refits. The selected model family is held "
+        f"Intervals require a completed run with at least {minimum_success:.0%} successful refits. Failed refits "
+        "are excluded from the quantiles and counted, never replaced by zero effects. The selected family is held "
         "fixed, so model-selection uncertainty is not included.",
+        "Failures: "
+        + json.dumps(bootstrap.get("failure_reasons", {}), sort_keys=True)
+        + ". "
+        + (bootstrap.get("reason") or ""),
     ]
-    if not specialized:
+    if not specialized and bootstrap["status"] == "completed":
         bootstrap_items.append(
             "Whole runs are resampled with replacement within each observed condition and the selected model is "
             "refitted; factor values and trial totals stay attached to their runs. Intervals are the 2.5th and "
-            "97.5th percentiles of the refitted comparison."
+            "97.5th percentiles of the refitted comparison. This assumes independent, identically distributed "
+            "runs within each condition."
+        )
+    if specialized:
+        bootstrap_items.append(
+            "Parametric intervals simulate independent responses from the fitted full model on the fixed design; "
+            "they are distinct from null-model simulation for p-values. Model-specific dispersion parameters "
+            "receive the inherited first-order n/(n − p) correction when n − p ≥ 5 (p is the mean-design size). "
+            "Refits use the same numerical checks as initial fits. Dispersion correction requires statistical review."
+        )
+    if bootstrap.get("refit_summary"):
+        bootstrap_items.append(
+            "Numerical refit checks: "
+            + "; ".join(f"{key}: {value}" for key, value in bootstrap["refit_summary"].items())
+            + ". Complete per-draw checks are retained in the saved analysis tables."
         )
     details.append(dict(title="Bootstrap intervals", items=bootstrap_items))
     holm_items = [
@@ -1185,7 +1387,10 @@ def build_summary(output, source, config, plan, family, warnings, model_selectio
     for title, count in family_sizes.items():
         holm_items.append(f"Comparisons for {title}: " + holm_note(count, "comparisons") + ".")
     holm_items += [
-        "“Analytic result” means the analytic Holm-adjusted p-value is below 0.05; it does not use the "
+        "Multiplicity families are formed by model term (analytic factor tests together; resampling checks "
+        "together) and by each factor or factor-pair comparison family. Unavailable p-values are omitted "
+        "from Holm adjustment and receive no conclusion; this missing-test policy requires statistical review.",
+        f"“Analytic result” means the analytic Holm-adjusted p-value is below {alpha:g}; it does not use the "
         "resampling or bootstrap results.",
         "Confidence intervals (analytic and bootstrap) are pointwise 95% intervals, not multiplicity-adjusted. "
         "Interval agreement compares whether both exclude the null value.",
@@ -1236,10 +1441,11 @@ def build_summary(output, source, config, plan, family, warnings, model_selectio
         )
     from asaree.services.stats_findings import describe_findings
 
-    findings = describe_findings(tests)
-    versions = {name: importlib.metadata.version(name) for name in ("numpy", "scipy", "statsmodels")}
+    findings = describe_findings(tests, alpha)
+    versions = {name: importlib.metadata.version(name) for name in ("numpy", "scipy", "statsmodels", "pandas", "patsy")}
     return dict(
         version=REPORT_VERSION,
+        alpha=alpha,
         metric=metric,
         status="valid",
         metric_info=metric_information(source, metric, plan),
@@ -1262,8 +1468,10 @@ def build_summary(output, source, config, plan, family, warnings, model_selectio
             design_revision=source.get("design_revision"),
             seed=config["seed"],
             libraries=versions,
+            python=platform.python_version(),
             policy_version=REPORT_VERSION,
             candidates=output["tables"]["automatic_candidates"],
             covariance=covariance,
+            model_specification=model_spec,
         ),
     )

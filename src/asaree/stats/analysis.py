@@ -27,6 +27,7 @@ from asaree.stats.covariance import (
     robust_covariance,
     singular_directions,
 )
+from asaree.stats.fit_checks import fit_accepted, native_fit_checks, optimizer_converged
 
 FAMILIES = (
     "gaussian",
@@ -49,50 +50,110 @@ def fit_model(y, x, family, config, trials=None):
     ``covariance.robust_covariance`` because statsmodels' ``cov_type="HC3"``
     silently means HC0 outside OLS.
     """
+    result = _initial_fit(y, x, family, config, trials)
+    return finish_fit(result, config, family)
+
+
+def _initial_fit(y, x, family, config, trials=None):
+    maxiter = config.get("optimizer_maxiter", 500)
     if family in ("gaussian", "lognormal"):
         return sm.OLS(np.log(y) if family == "lognormal" else y, x).fit()
     if family == "negbin":
-        return finish_fit(sm.NegativeBinomial(y, x, loglike_method="nb2").fit(disp=0, maxiter=500))
+        return sm.NegativeBinomial(y, x, loglike_method="nb2").fit(disp=0, maxiter=maxiter)
     if family in ("zip", "zinb"):
         cls = ZeroInflatedPoisson if family == "zip" else ZeroInflatedNegativeBinomialP
-        return finish_fit(cls(y, x, exog_infl=np.ones((len(y), 1))).fit(disp=0, maxiter=500))
+        return cls(y, x, exog_infl=np.ones((len(y), 1))).fit(disp=0, maxiter=maxiter)
     if family == "beta":
-        return finish_fit(BetaModel(y, x).fit(method="bfgs", gtol=1e-9, disp=0, maxiter=500))
+        return BetaModel(y, x).fit(method="bfgs", gtol=1e-9, disp=0, maxiter=maxiter)
     if family == "ordinal_logit":
         if len(config["ordinal_levels"]) < 2 or len(np.unique(y)) != len(config["ordinal_levels"]):
             raise ValueError("A bootstrap sample omitted an ordinal category.")
-        return finish_fit(OrderedModel(y, x[:, 1:], distr="logit").fit(method="bfgs", disp=0, maxiter=500))
+        return OrderedModel(y, x[:, 1:], distr="logit").fit(method="bfgs", disp=0, maxiter=maxiter)
     families = {
         "gamma": sm.families.Gamma(sm.families.links.Log()),
         "poisson": sm.families.Poisson(),
         "binomial": sm.families.Binomial(),
     }
     response = np.column_stack((y, trials - y)) if family == "binomial" and trials is not None else y
-    return sm.GLM(response, x, family=families[family]).fit()
+    return sm.GLM(response, x, family=families[family]).fit(maxiter=maxiter)
 
 
-def finish_fit(result):
+def finish_fit(result, config=None, family=None):
     """Let other native optimizers finish a maximum-likelihood fit that stopped early.
 
-    Newton (NB2) and BFGS (beta) can stop just short of an optimum, notably when
-    the NB2 dispersion is small. L-BFGS, then Newton, restart from the last
-    estimate; convergence is only ever what a native optimizer reports.
+    Native MLE optimizers can stop short of an optimum, notably when the NB2
+    dispersion is small. L-BFGS, then Newton, restart from the last
+    estimate. Every attempt records the optimizer's termination separately from
+    finite-likelihood, covariance/identification and optional score-gate checks.
     """
-    for method in ("lbfgs", "newton"):
-        if converged_fit(result) or not np.isfinite(result.params).all():
+    config = config or {}
+    attempts = []
+
+    def record(method, fitted):
+        checks = native_fit_checks(fitted, dict(config, family=family))
+        retvals = getattr(fitted, "mle_retvals", {})
+        attempts.append(
+            dict(
+                method=method,
+                termination=retvals.get("warnflag"),
+                iterations=retvals.get("iterations", retvals.get("fcalls")),
+                checks=checks,
+            )
+        )
+        return checks
+
+    initial_method = {
+        "beta": "bfgs (gtol=1e-9)",
+        "ordinal_logit": "bfgs",
+        "negbin": "bfgs",
+        "zip": "bfgs",
+        "zinb": "bfgs",
+        "gaussian": "OLS pseudoinverse",
+        "lognormal": "OLS pseudoinverse",
+    }
+    checks = record(initial_method.get(family, "IRLS"), result)
+    retry = family not in {"gaussian", "lognormal", "gamma", "poisson", "binomial"}
+    for method in ("lbfgs", "newton") if retry else ():
+        boundary_ok = all(
+            checks[key] for key in ("parameter_boundary_gate", "dispersion_boundary_gate", "probability_boundary_gate")
+        )
+        if checks["accepted"] or not np.isfinite(result.params).all() or not boundary_ok:
             break
-        attempt = result.model.fit(start_params=result.params, method=method, disp=0, maxiter=500)
+        try:
+            attempt = result.model.fit(
+                start_params=result.params, method=method, disp=0, maxiter=config.get("optimizer_maxiter", 500)
+            )
+        except (ValueError, RuntimeError, np.linalg.LinAlgError, FloatingPointError) as exc:
+            attempts.append(dict(method=method, error=str(exc)))
+            continue
+        candidate_checks = record(method, attempt)
         if not np.isfinite(attempt.params).all():
-            break
+            continue
         result = attempt
+        checks = candidate_checks
+    if not checks["accepted"]:
+        reportability = "Fit withheld: numerical acceptance checks failed"
+    elif attempts[0]["checks"]["accepted"]:
+        reportability = "Initial fit accepted under the recorded numerical checks"
+    else:
+        successful = next(row["method"] for row in attempts if row.get("checks", {}).get("accepted"))
+        reportability = f"Previously failed numerical checks became reportable after {successful}; "
+        reportability += "finite estimates/likelihood, identification and covariance checks now pass"
+    result._stats_fit_execution = dict(
+        attempts=attempts,
+        checks=checks,
+        retry_sequence=["lbfgs", "newton"] if retry else [],
+        maxiter=config.get("optimizer_maxiter", 500),
+        reportability_reason=reportability,
+    )
     return result
 
 
 def converged_fit(result):
-    return bool(getattr(result, "converged", getattr(result, "mle_retvals", {}).get("converged", True)))
+    return fit_accepted(result)
 
 
-def comparable_likelihood(result, family, y):
+def comparable_likelihood(result, family, y, config=None):
     """Response-scale log-likelihood at the MLE of every parameter, and its parameter count.
 
     AIC is only comparable across candidates when each likelihood is for the
@@ -119,12 +180,30 @@ def comparable_likelihood(result, family, y):
             )
 
         start = np.log(max(float(result.scale), 1e-300))
-        optimum = minimize_scalar(negative, bracket=(start - 1, start + 1))
+        optimum = minimize_scalar(
+            negative,
+            bracket=(start - 1, start + 1),
+            method="brent",
+            options={"maxiter": (config or {}).get("optimizer_maxiter", 500)},
+        )
+        with np.errstate(over="ignore", under="ignore"):
+            shape = float(np.exp(-optimum.x))
+        accepted = bool(
+            optimum.success and np.isfinite(optimum.x) and np.isfinite(optimum.fun) and np.isfinite(shape) and shape > 0
+        )
         return (
-            float(-optimum.fun),
+            float(-optimum.fun) if accepted else np.nan,
             k + 1,
             "Gamma likelihood with the shape estimated by maximum likelihood",
-            dict(gamma_shape_ml=float(np.exp(-optimum.x))),
+            dict(
+                gamma_shape_ml=shape if accepted else None,
+                gamma_shape_fit=dict(
+                    method="Brent scalar ML optimization of log dispersion",
+                    accepted=accepted,
+                    termination=" ".join(str(optimum.message).split()),
+                    iterations=int(optimum.nit),
+                ),
+            ),
         )
     return float(result.llf), k, "native maximum likelihood", {}
 
@@ -202,7 +281,7 @@ def analyze(frame: pd.DataFrame, config: dict) -> dict:
             return predict_model(result, matrix, family, config)
 
         means, fitted = np.asarray(predict(grid)), np.asarray(predict(x))
-        converged = converged_fit(result)
+        converged = optimizer_converged(result)
         # Exact fit: no residual variation, so no sampling uncertainty can be estimated.
         # Checked on the scale the model is fitted on (log scale for log-normal OLS).
         exact = family not in ("ordinal_logit",) and residual_check(
@@ -223,9 +302,13 @@ def analyze(frame: pd.DataFrame, config: dict) -> dict:
             reasons.append("parameters are not identified (singular information matrix)")
         if not np.isfinite(means).all():
             reasons.append("non-finite predicted means")
+        execution = result._stats_fit_execution
+        if not exact and not execution["checks"]["accepted"]:
+            reasons.append("numerical fit acceptance checks failed")
+        tables["fit_execution"] = pd.DataFrame([execution])
         llf, n_parameters, likelihood_basis, likelihood_extra = (np.nan, len(result.params), "unavailable", {})
         with contextlib.suppress(ValueError, FloatingPointError, np.linalg.LinAlgError):
-            llf, n_parameters, likelihood_basis, likelihood_extra = comparable_likelihood(result, family, y)
+            llf, n_parameters, likelihood_basis, likelihood_extra = comparable_likelihood(result, family, y, config)
         aic = -2 * llf + 2 * n_parameters if np.isfinite(llf) else np.nan
         if exact and family not in ("poisson", "binomial"):
             # The dispersion MLE sits on its boundary (zero variance), so the likelihood is unbounded.
@@ -235,7 +318,9 @@ def analyze(frame: pd.DataFrame, config: dict) -> dict:
             reasons.append("non-finite likelihood")
         if family in ("binomial", "beta") and np.any((fitted < 1e-8) | (fitted > 1 - 1e-8)):
             reasons.append("boundary probabilities or separation")
-        if family not in ("gaussian", "lognormal", "gamma") and np.max(np.abs(result.params)) > 30:
+        if family not in ("gaussian", "lognormal", "gamma") and np.max(np.abs(result.params)) > config.get(
+            "maximum_absolute_parameter", 30
+        ):
             reasons.append("extreme parameters suggest separation or a boundary fit")
         if family in ("negbin", "zinb") and np.isfinite(result.params[-1]) and result.params[-1] < 1e-6:
             reasons.append(
@@ -254,7 +339,9 @@ def analyze(frame: pd.DataFrame, config: dict) -> dict:
         pearson = getattr(result, "resid_pearson", None)
         if family in ("poisson", "binomial", "negbin", "gamma") and pearson is not None and result.df_resid > 0:
             diagnostic["pearson_dispersion"] = float(np.sum(np.asarray(pearson) ** 2) / result.df_resid)
-            if family in ("poisson", "binomial") and diagnostic["pearson_dispersion"] > 3:
+            if family in ("poisson", "binomial") and diagnostic["pearson_dispersion"] > config.get(
+                "maximum_pearson_dispersion", 3
+            ):
                 flags.append("Residual variation substantially exceeds this model's variance assumption.")
                 diagnostic["severe"] = True
         if family == "negbin":
@@ -282,7 +369,7 @@ def analyze(frame: pd.DataFrame, config: dict) -> dict:
             )
         if usable and robust and not exact:
             try:
-                covariance, covariance_record = robust_covariance(result, family)
+                covariance, covariance_record = robust_covariance(result, family, config.get("hc3_fallback", "hc0"))
                 install_covariance(result, covariance, covariance_record)
                 covariance_label = f"{covariance_record['computed']} robust covariance"
             except (CovarianceUnavailableError, np.linalg.LinAlgError) as exc:
@@ -373,6 +460,9 @@ def analyze(frame: pd.DataFrame, config: dict) -> dict:
                         statistic=float(test.statistic),
                         p=float(test.pvalue),
                         p_method=f"{test_name} ({covariance_label})",
+                        reference_distribution=test.distribution,
+                        df_numerator=len(idx),
+                        df_denominator=float(test.df_denom) if test.distribution == "F" else None,
                     )
                 except (ValueError, np.linalg.LinAlgError):
                     row["unavailable_reason"] = "The library cannot provide a Wald test for this term."
@@ -572,6 +662,7 @@ def analyze(frame: pd.DataFrame, config: dict) -> dict:
         else:
             metadata = dict(
                 kind="bootstrap",
+                procedure="case_bootstrap",
                 method="Cell-stratified case bootstrap; fixed selected model; percentile intervals",
                 requested=config["n_boot"],
                 attempted=0,
@@ -580,7 +671,7 @@ def analyze(frame: pd.DataFrame, config: dict) -> dict:
                 status=f"Not run: {inference_reason.rstrip('.')}",
                 seed=config["seed"],
                 seed_stream=1101,
-                minimum_success_fraction=0.9,
+                minimum_success_fraction=config.get("minimum_success_fraction", 0.9),
             )
         tables["resampling"] = pd.DataFrame([metadata])
         tables["interaction_resampling"] = pd.DataFrame(
@@ -608,4 +699,12 @@ def analyze(frame: pd.DataFrame, config: dict) -> dict:
         "validity": validity,
         "covariance": covariance_record,
         "inference_reason": inference_reason,
+        "model_specification": dict(
+            formula=formula,
+            columns=list(design.columns),
+            design_rank=int(np.linalg.matrix_rank(x)),
+            design_parameters=x.shape[1],
+            observations=len(y),
+            residual_design_df=len(y) - x.shape[1],
+        ),
     }

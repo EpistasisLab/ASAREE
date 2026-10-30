@@ -7,25 +7,57 @@ h1,h2{line-height:1.25}table{border-collapse:collapse;width:100%;font-size:14px;
 th,td{border-bottom:1px solid #cbd5e1;text-align:left;padding:10px;vertical-align:top;overflow-wrap:anywhere}
 th{background:#eff3f6}pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px}
 .test-method{display:block;margin-top:4px;color:#526170;font-size:12px}
+.column-method{display:block;margin-top:4px;color:#526170;font-size:11px;font-weight:normal}
+.model-fit{margin:20px 0;padding:20px;border:1px solid #dce6eb;border-radius:8px}.model-fit h3{margin:0 0 12px}
+.fit-summary{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin:0}
+.fit-summary dt{font-size:12px;color:#526170}.fit-summary dd{margin:2px 0 0;font:15px monospace}
+.detail h3{font-size:14px;margin:20px 0 4px}
+.notice{padding:12px 16px;border:1px solid #d97706;border-radius:8px;background:#fff7ed}
+.detail table{font-size:12px}
+figure{margin:20px 0;padding:20px;border:1px solid #dce6eb;border-radius:8px;break-inside:avoid}
+figcaption{font-size:12px;color:#526170;margin-bottom:16px}
+.chart{display:flex;gap:8px}.chart-body{flex:1;min-width:0}
+.y-title{writing-mode:vertical-rl;transform:rotate(180deg);height:180px;text-align:center;font-size:12px}
+.y-ticks{display:flex;height:180px;flex-direction:column;justify-content:space-between;
+text-align:right;font:11px monospace;color:#526170}
+.distribution{display:flex;gap:1px;list-style:none;padding:0;margin:0;height:180px;border-bottom:1px solid #94a3b8;
+background:repeating-linear-gradient(to top,transparent 0,transparent calc(25% - 1px),#dce6eb 25%)}
+.distribution.frequencies{gap:8px}.distribution li{display:flex;align-items:flex-end;flex:1;min-width:0}
+.bar{display:block;width:100%;background:#318eaa;border:1px solid #167fa2;box-sizing:border-box}
+.x-ticks{display:grid;margin-top:8px;font:10px monospace;color:#526170;overflow-wrap:anywhere}
+.x-ticks span{text-align:center}.x-title{text-align:center;font-size:12px;color:#526170}
+.numeric-ticks{display:flex;justify-content:space-between;gap:4px;margin-top:8px;font:10px monospace;color:#526170}
+.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
+.methodology{margin:24px 0;border:1px solid #b6d9e4;border-radius:12px;overflow:hidden}
+.methodology header{padding:20px;background:#eef8fb;border-bottom:1px solid #b6d9e4}
+.methodology h2,.methodology h3{margin:4px 0 12px}.methodology p{font-size:13px}
+.eyebrow{font:11px monospace;color:#167fa2;text-transform:uppercase;letter-spacing:2px}
+.method-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,280px),1fr));gap:12px;padding:16px}
+.method-step{padding:16px;border:1px solid #dce6eb;border-radius:8px;min-width:0;overflow-wrap:anywhere}
+.method-step h3{font-size:15px}.method-step h4{font-size:13px;margin:12px 0 4px}
+.method-step li{font-size:13px;margin:8px 0}.methodology details{padding:16px;border-top:1px solid #dce6eb}
 @media print{body{margin:0;max-width:none}tr{break-inside:avoid}}</style></head>
 <body><h1>Statistical results: Explanation</h1>
 <p>Free-text explanation produced by a run, rather than a numeric measurement.</p>
-<p>Status: unavailable</p><p>SYNTHETIC DEMONSTRATION. A reliable statistical comparison could not be produced.</p>
+<p>Status: unavailable · Execution: completed</p>
+<p>SYNTHETIC DEMONSTRATION. A reliable statistical comparison could not be produced.</p>
 <ul></ul>
+<p>Selected regression model distribution: unavailable</p>
+
 <h2>Statistical tests</h2><p>No statistical comparisons are available.</p>
 <h2>Comparisons</h2><p>No statistical comparisons are available.</p>
 
 <p>A result without clear evidence does not establish that the effect is zero.
 Statistical evidence does not establish practical importance.</p>
-<details><summary>What ran and why</summary><ul><li>Inspected the declared metric, producer context, observed values, and experimental design. No inferential result is reported.</li></ul></details>
+<section class="methodology" aria-label="What ran and why"><header><p class="eyebrow">Analysis approach</p><h2>What ran and why</h2><p>Statistical calculations · no AI</p></header><div class="method-grid"><section class="method-step"><p class="eyebrow">01</p><h3>Regression Model Selection</h3><h4>unavailable</h4><p>Inspected the declared metric, producer context, observed values, and experimental design. No inferential result is reported.</p></section><section class="method-step"><p class="eyebrow">02</p><h3>Tests and comparisons</h3><h4>Factor tests</h4><ul></ul><h4>Comparisons</h4><p>Model-predicted averages, each condition weighted equally.</p><ul></ul></section><section class="method-step"><p class="eyebrow">03</p><h3>Uncertainty checks</h3><p>No resampling results were recorded.</p></section><section class="method-step"><p class="eyebrow">04</p><h3>How to interpret it</h3><ul><li>Analytic adjusted p-values are Holm-adjusted across the factor tests, and within each comparison family; resampling p-values are Holm-adjusted separately.</li><li>“Analytic result” means the analytic adjusted p-value is below 0.05.</li><li>Confidence intervals are not adjusted for multiple comparisons.</li><li>A result without clear evidence does not mean the effect is zero.</li><li>Results across separate metrics are exploratory.</li></ul></section></div><details><summary>Full technical details</summary><p>Calculated with statistical libraries. Explanations use fixed templates; no AI is used to generate this report.</p><section class="detail"><h3>Experimental design and analysis specification</h3><p>One whole-dataset run; replicate numbers alone do not identify matched subjects</p><p>Requires human confirmation against the intended experiment.</p><p>Included terms: Approach; Setting; Approach × Setting.</p><p>Excluded interaction terms (configured maximum order): None.</p><p>Dependence declarations: {}. Blocking/repeated-measures structure: {}. An empty declaration does not establish independence.</p><table><thead><tr><th scope='col'>Factor</th><th scope='col'>Use</th><th scope='col'>Observed / declared levels</th><th scope='col'>Reason</th></tr></thead><tbody><tr><td>Approach</td><td>Included</td><td>[&quot;Revised&quot;, &quot;Standard&quot;] / []</td><td>All observed varying factors</td></tr><tr><td>Setting</td><td>Included</td><td>[&quot;Basic&quot;, &quot;Extended&quot;] / []</td><td>All observed varying factors</td></tr></tbody></table></section><section class="detail"><h3>Analysis availability</h3><p>Values are nonnumeric and their statistical ordering cannot be established.</p><p>Fitting, comparisons and resampling: Not run or withheld for the reasons above.</p></section></details></section>
 <h2>Limitations and exclusions</h2><ul><li>Values are nonnumeric and their statistical ordering cannot be established.</li></ul>
 <details><summary>Reproducibility</summary>
-<p>Analysis: synthetic-demo-4 · Created: 2026-10-23T04:04:19.161544+00:00</p>
+<p>Analysis: synthetic-demo-4 · Created: 2026-10-30T00:00:00+00:00</p>
 <pre>{
-  &quot;fingerprint&quot;: &quot;888ec1ecca061606345ce2305ce6654d13385920889a9b0accae19c538501f7a&quot;,
+  &quot;fingerprint&quot;: &quot;215ec4f381cc5753a7f0bea33fbfe00ca17a410f9fcb0b608ab5ca12a7cef13e&quot;,
   &quot;design_revision&quot;: 1,
   &quot;observed&quot;: 240,
-  &quot;policy_version&quot;: 2,
+  &quot;policy_version&quot;: 4,
   &quot;resampling&quot;: null
 }</pre>
 </details>

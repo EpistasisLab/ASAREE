@@ -70,7 +70,7 @@ export function AnalysisMethods({ analysis, report, modelName }: {
           <p className="text-xs leading-relaxed text-muted-foreground">Repeated fits estimate the uncertainty in each comparison. {bootstrap.failed} refits failed.{bootstrap.status !== 'completed' ? ` ${bootstrap.status}.` : ''}</p>
         </div> : <p className="text-xs text-muted-foreground">No bootstrap results were recorded for this report.</p>}
         <div className="space-y-1 border-t border-border pt-3">
-          <p className="text-xs">Permutation checks: <span className="font-mono">{permutationCount} / {report.tests.length}</span> available</p>
+          <p className="text-xs">Resampling checks: <span className="font-mono">{permutationCount} / {report.tests.length}</span> available</p>
           <p className="text-xs leading-relaxed text-muted-foreground">These provide an additional sensitivity check. Agreement with the main test does not establish that the model is valid.</p>
         </div>
       </MethodStep>

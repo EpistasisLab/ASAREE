@@ -10,6 +10,8 @@ export interface StatsConfig {
   n_boot: number
   n_perm: number
   seed: number
+  alpha?: number
+  minimum_success_fraction?: number
 }
 export interface StatsSource {
   factors: { name: string; levels: string[] }[]
@@ -23,7 +25,7 @@ export interface StatsSource {
 }
 export interface StatsAnalysis {
   id: string
-  status: 'pending' | 'running' | 'completed' | 'failed'
+  status: 'pending' | 'running' | 'completed' | 'incomplete' | 'failed'
   error: string | null
   created_at: string
   config: StatsConfig
@@ -58,13 +60,16 @@ export interface StatsSummary {
   metric_info?: { description: string; unit: string | null; coding: string[] }
   metric_definition?: { description?: string; unit?: string }
   version: number
+  alpha?: number
+  execution_status?: 'completed' | 'incomplete'
   metric: string
   status: 'valid' | 'unreliable' | 'unavailable'
   description: string
   findings: string[]
   tests: { effect: string; p_adjusted: number | null; result: string; method?: string; purpose?: string
     permutation_p_adjusted?: number | null; permutation_method?: string | null
-    permutation_status?: string; permutation_result?: string }[]
+    permutation_status?: string; permutation_result?: string; resampling_name?: string
+    resampling_label?: string }[]
   effects: {
     comparison: string; estimate: number | null; scale: string
     unit?: string | null

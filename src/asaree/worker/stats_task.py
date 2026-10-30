@@ -26,7 +26,7 @@ async def check_stale_stats(ctx: dict) -> None:
                     (StatsAnalysis.status == "running") & (StatsAnalysis.updated_at < now - timedelta(minutes=35)),
                 )
             )
-            .values(status="failed", error="Worker interrupted or queue expired; rerun the saved configuration.")
+            .values(status="incomplete", error="Worker interrupted or queue expired; rerun the saved configuration.")
         )
 
 
@@ -48,13 +48,17 @@ async def execute_stats_task(ctx: dict, analysis_id: str) -> None:
             stderr=asyncio.subprocess.PIPE,
         )
         stdout, stderr = await asyncio.wait_for(process.communicate(json.dumps(request).encode()), timeout=1800)
+        if process.returncode is not None and process.returncode < 0:
+            raise InterruptedError(
+                f"Analysis subprocess interrupted by signal {-process.returncode}; rerun the snapshot."
+            )
         if process.returncode:
             raise ValueError(stderr.decode(errors="replace")[-3000:])
         output = json.loads(stdout)
         async with get_session() as db:
             analysis = await db.get(StatsAnalysis, uuid.UUID(analysis_id))
             if analysis is not None:
-                analysis.output, analysis.status = output, "completed"
+                analysis.output, analysis.status = output, output.get("execution_status", "completed")
     except (Exception, asyncio.CancelledError) as exc:
         if process is not None and process.returncode is None:
             process.kill()
@@ -62,7 +66,11 @@ async def execute_stats_task(ctx: dict, analysis_id: str) -> None:
         async with get_session() as db:
             analysis = await db.get(StatsAnalysis, uuid.UUID(analysis_id))
             if analysis is not None:
-                analysis.status = "failed"
+                analysis.status = (
+                    "incomplete"
+                    if isinstance(exc, (TimeoutError, asyncio.CancelledError, InterruptedError))
+                    else "failed"
+                )
                 analysis.error = (
                     "Analysis exceeded 30 minutes."
                     if isinstance(exc, TimeoutError)

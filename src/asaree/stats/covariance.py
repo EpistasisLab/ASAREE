@@ -31,10 +31,10 @@ import numpy as np
 
 HC3_FAMILIES = ("gaussian", "lognormal", "gamma", "poisson", "binomial", "negbin")
 HC0_ONLY = {
-    "zip": "zero-inflated models have two linear predictors and no established HC3 leverage",
-    "zinb": "zero-inflated models have two linear predictors and no established HC3 leverage",
-    "beta": "beta regression has separate mean and precision parts and no established HC3 leverage",
-    "ordinal_logit": "ordinal thresholds have no established HC3 leverage",
+    "zip": "this pipeline has no reviewed HC3 leverage construction for its two linear predictors",
+    "zinb": "this pipeline has no reviewed HC3 leverage construction for its two linear predictors",
+    "beta": "this pipeline has no reviewed HC3 leverage construction for the separate mean and precision parts",
+    "ordinal_logit": "this pipeline has no reviewed HC3 leverage construction for ordinal thresholds",
 }
 # A leverage this close to 1 makes 1 / (1 - h) unbounded: HC3 is undefined.
 MAX_LEVERAGE = 1 - 1e-8
@@ -83,7 +83,7 @@ def negbin_parts(result):
     return scores, bread, leverage
 
 
-def robust_covariance(result, family):
+def robust_covariance(result, family, fallback="hc0"):
     """Return (covariance, record) with the estimator actually computed."""
     if family in ("gaussian", "lognormal"):
         scores, bread, leverage = ols_parts(result)
@@ -98,6 +98,8 @@ def robust_covariance(result, family):
             "leverage from the regression block with weights mu / (1 + alpha mu)"
         )
     elif family in HC0_ONLY:
+        if fallback == "withhold":
+            raise CovarianceUnavailableError(f"HC3 not implemented for {family}; configured fallback is withhold")
         # statsmodels' white-simple sandwich: verified HC0, not relabelled as HC3.
         from statsmodels.stats.sandwich_covariance import cov_white_simple
 
@@ -106,7 +108,7 @@ def robust_covariance(result, family):
             requested="HC3",
             computed="HC0",
             implementation="statsmodels sandwich_covariance.cov_white_simple (no small-sample correction)",
-            reason=f"HC3 unsupported: {HC0_ONLY[family]}.",
+            reason=f"HC3 not implemented in this pipeline: {HC0_ONLY[family]}. Configured fallback: HC0.",
         )
     else:
         raise CovarianceUnavailableError(f"no robust covariance mapping for {family}")

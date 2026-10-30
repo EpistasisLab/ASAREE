@@ -39,6 +39,18 @@ class StatsRequest(BaseModel):
     n_boot: int = Field(default=1000, ge=20, le=5000)
     n_perm: int = Field(default=1999, ge=99, le=10000)
     seed: int = Field(default=20261016, ge=0, le=2**32 - 1)
+    alpha: float = Field(default=0.05, gt=0, lt=1)
+    minimum_success_fraction: float = Field(default=0.9, gt=0, le=1)
+    excluded_factor_reasons: dict[str, str] = Field(default_factory=dict)
+    optimizer_maxiter: int = Field(default=500, ge=1, le=5000)
+    # Optional independent score gate. No new statistical acceptance threshold
+    # is silently imposed on existing analyses; a reviewer must configure it.
+    maximum_scaled_score: float | None = Field(default=None, gt=0)
+    minimum_runs_per_condition: int = Field(default=3, ge=1)
+    maximum_pearson_dispersion: float = Field(default=3, gt=0)
+    maximum_absolute_parameter: float = Field(default=30, gt=0)
+    exchangeability_alpha: float = Field(default=0.01, gt=0, lt=1)
+    hc3_fallback: str = Field(default="hc0", pattern="^(hc0|withhold)$")
 
 
 def finite_number(value: Any) -> float | None:
@@ -69,7 +81,9 @@ def metric_definitions(design: dict, plan: dict) -> dict:
 
 
 async def read_source(
-    db: AsyncSession, experiment_id: uuid.UUID, protocol_revision_id: uuid.UUID | None = None,
+    db: AsyncSession,
+    experiment_id: uuid.UUID,
+    protocol_revision_id: uuid.UUID | None = None,
 ) -> dict:
     if protocol_revision_id is not None:
         return await read_version_source(db, experiment_id, protocol_revision_id)
@@ -137,10 +151,16 @@ async def read_version_source(db: AsyncSession, experiment_id: uuid.UUID, protoc
     selected = (
         await db.execute(
             select(slots.c.replicate_id, slots.c.replicate_number, slots.c.factor_values, ProtocolRun)
-            .options(load_only(
-                ProtocolRun.id, ProtocolRun.status, ProtocolRun.protocol_revision_id,
-                ProtocolRun.replicate_result_id, ProtocolRun.attempt_result, ProtocolRun.usage_summary,
-            ))
+            .options(
+                load_only(
+                    ProtocolRun.id,
+                    ProtocolRun.status,
+                    ProtocolRun.protocol_revision_id,
+                    ProtocolRun.replicate_result_id,
+                    ProtocolRun.attempt_result,
+                    ProtocolRun.usage_summary,
+                )
+            )
             .join(ProtocolRun, ProtocolRun.id == slots.c.run_id)
             .where(slots.c.status == "completed")
             .order_by(slots.c.replicate_id)
@@ -151,10 +171,15 @@ async def read_version_source(db: AsyncSession, experiment_id: uuid.UUID, protoc
         raise ValueError("Statistics support at most 5,000 completed replicates per version.")
     replicates, runs = [], []
     for replicate_id, number, factors, run in selected:
-        replicates.append(SimpleNamespace(
-            id=replicate_id, replicate_number=number, factor_values=factors,
-            run_id=run.id, metric_values=(run.attempt_result or {}).get("metric_values") or {},
-        ))
+        replicates.append(
+            SimpleNamespace(
+                id=replicate_id,
+                replicate_number=number,
+                factor_values=factors,
+                run_id=run.id,
+                metric_values=(run.attempt_result or {}).get("metric_values") or {},
+            )
+        )
         runs.append(run)
     revision = SimpleNamespace(id=scope.design_revision_id, revision=scope.design_revision)
     snapshot = build_snapshot(replicates, runs, scope.design_spec or {}, scope.measurement_plan or {}, revision, set())
@@ -228,6 +253,11 @@ def build_snapshot(replicates, runs, design, plan, revision, row_parents) -> dic
         metric_conflicts=sorted(conflicts),
         metric_errors={name: sorted(errors) for name, errors in metric_errors.items()},
         dependence={key: bool(design.get(key)) for key in ("paired", "clustered", "repeated")},
+        design_structure={
+            key: design[key]
+            for key in ("blocks", "blocking", "subjects", "repeated_measures", "random_effects", "covariates")
+            if design.get(key)
+        },
         protocol_revision_ids=sorted(protocol_revisions),
     )
     payload["fingerprint"] = fingerprint(payload)
@@ -357,5 +387,36 @@ def compute(source: dict, config: dict) -> dict:
 
     started = time.perf_counter()
     output = analyze_automatic(source, config)
+    from asaree.services.stats_specification import design_specification, specification_section
+
+    summary = output["summary"]
+    if "design_specification" not in summary:
+        spec = design_specification(source, config)
+        summary["design_specification"] = spec
+        summary.setdefault("details", []).insert(0, specification_section(spec))
+        summary["details"].append(
+            dict(
+                title="Analysis availability",
+                items=summary.get("warnings", [])
+                + ["Fitting, comparisons and resampling: Not run or withheld for the reasons above."],
+            )
+        )
+    design_section = summary["details"][0]
+    if design_section["title"] == "Experimental design and analysis specification":
+        summary["methods"] += [design_section["title"] + " — " + item for item in design_section["items"]]
+        summary["methods"] += [
+            f"Factor {row['factor']}: {row['status']}; levels {row['levels']}; {row['reason']}"
+            for row in design_section["rows"]
+        ]
+    resampling = summary.get("resampling", {})
+    procedures = [resampling.get("bootstrap", {}), *resampling.get("permutations", [])]
+    incomplete = any(row.get("status") == "incomplete" for row in procedures)
+    output["execution_status"] = "incomplete" if incomplete else "completed"
+    summary["execution_status"] = output["execution_status"]
+    if incomplete:
+        summary["warnings"].append(
+            "Analysis incomplete: at least one requested resampling procedure was interrupted. "
+            "Its inference is withheld; completed analytic results are reported separately."
+        )
     output["runtime_s"] = time.perf_counter() - started
     return output

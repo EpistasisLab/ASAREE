@@ -31,7 +31,7 @@ export function StatisticsReport({ analysis, experiment }: { analysis: StatsAnal
   const report = analysis.output?.summary
   if (!report) return <p className="text-sm text-muted-foreground">Run an automatic analysis to create a concise report for this metric.</p>
   const resampled = !!report.resampling
-  const findings = describeStatsFindings(report.tests)
+  const findings = describeStatsFindings(report.tests, report.alpha)
   const distribution = report.distribution
   const bins = distribution?.plot?.bins ?? []
   const tickStep = Math.max(1, Math.ceil(Math.max(1, ...bins.map(bin => bin.count)) / 4))
@@ -75,6 +75,7 @@ export function StatisticsReport({ analysis, experiment }: { analysis: StatsAnal
     </CardHeader>
     <CardContent className="space-y-5">
       <p className="text-sm text-muted-foreground">{report.description}</p>
+      {report.execution_status === 'incomplete' && <p role="alert" className="text-sm text-destructive">Analysis incomplete. Interrupted procedures supply no inference.</p>}
       {!!findings.length && <ul aria-label="Key findings" className="list-disc space-y-3 pl-5 text-sm">
         {findings.map((finding, i) => <li key={i}>{finding}</li>)}
       </ul>}
@@ -122,15 +123,15 @@ export function StatisticsReport({ analysis, experiment }: { analysis: StatsAnal
       </section>}
       {!!report.tests.length && <div className="overflow-x-auto"><table className="w-full text-left text-sm">
         <caption className="mb-2 text-left font-medium">Statistical tests</caption>
-        <thead><tr>{['Effect', resampled ? 'Analytic adjusted p' : 'Adjusted p-value', ...(resampled ? ['Permutation adjusted p'] : []), 'Analytic result'].map(title => <th scope="col" key={title} className="border-b border-border p-3">{title}</th>)}</tr></thead>
+        <thead><tr>{['Effect', resampled ? 'Analytic adjusted p' : 'Adjusted p-value', ...(resampled ? ['Resampling adjusted p'] : []), 'Analytic result'].map(title => <th scope="col" key={title} className="border-b border-border p-3">{title}</th>)}</tr></thead>
         <tbody>{report.tests.map((row, i) => <tr key={i}>
           <td className="border-b border-border p-3">{row.effect}{row.method && <span className="mt-1 block text-xs text-muted-foreground">{row.method}</span>}</td>
           <td className="border-b border-border p-3 font-mono">{value(row.p_adjusted, true)}</td>
-          {resampled && <td className="border-b border-border p-3"><span className="font-mono">{value(row.permutation_p_adjusted ?? null, true)}</span><span className="mt-1 block text-xs text-muted-foreground">{row.permutation_p_adjusted == null ? row.permutation_status : row.permutation_result}</span></td>}
+          {resampled && <td className="border-b border-border p-3"><span className="font-mono">{value(row.permutation_p_adjusted ?? null, true)}</span><span className="mt-1 block text-xs text-muted-foreground">{row.permutation_p_adjusted == null ? row.permutation_status : row.permutation_result}</span>{row.permutation_p_adjusted != null && <span className="mt-1 block text-xs text-muted-foreground">{row.resampling_label}</span>}</td>}
           <td className="border-b border-border p-3">{row.result}</td>
         </tr>)}</tbody>
       </table></div>}
-      {resampled && !!report.tests.length && <p className="text-xs text-muted-foreground">Permutation results are working-scale sensitivity checks and may test a different null hypothesis. See “What ran and why” for assumptions.</p>}
+      {resampled && !!report.tests.length && <p className="text-xs text-muted-foreground">Resampling procedures are named per row. Some test a different null hypothesis from the analytic test. Agreement does not establish validity.</p>}
       {!!report.effects.length && <div className="overflow-x-auto"><table className="w-full text-left text-sm">
         <caption className="mb-2 text-left font-medium">Comparisons · 95% confidence intervals</caption>
         <thead><tr>{['Comparison', 'Effect', resampled ? 'Analytic 95% interval' : '95% interval', ...(resampled ? ['Bootstrap 95% interval'] : []), 'Analytic adjusted p', 'Result'].map(title => <th scope="col" key={title} className="border-b border-border p-3">{title}</th>)}</tr></thead>

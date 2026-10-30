@@ -3,11 +3,11 @@
 import math
 
 
-def describe_findings(tests: list[dict]) -> list[str]:
+def describe_findings(tests: list[dict], alpha: float = 0.05) -> list[str]:
     def evidence(value):
         if not isinstance(value, int | float) or not math.isfinite(value):
             return None
-        return value < 0.05
+        return value < alpha
 
     findings = []
     for test in tests:

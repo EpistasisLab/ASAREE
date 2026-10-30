@@ -1,0 +1,1886 @@
+{
+  "configuration": {
+    "alpha": 0.05,
+    "denominator": null,
+    "exchangeability_alpha": 0.01,
+    "excluded_factor_reasons": {},
+    "factors": [],
+    "family": "auto",
+    "hc3_fallback": "hc0",
+    "max_order": 2,
+    "maximum_absolute_parameter": 30,
+    "maximum_pearson_dispersion": 3,
+    "maximum_scaled_score": null,
+    "measurement_type": "auto",
+    "metric": "fraction",
+    "minimum_runs_per_condition": 3,
+    "minimum_success_fraction": 0.9,
+    "n_boot": 20,
+    "n_perm": 99,
+    "optimizer_maxiter": 500,
+    "ordinal_levels": [],
+    "seed": 20261030
+  },
+  "execution_status": "completed",
+  "libraries": {
+    "numpy": "2.5.1",
+    "scipy": "1.18.0",
+    "statsmodels": "0.14.6"
+  },
+  "limitations": "Small null-rejection and pointwise null-coverage smoke study only. not validation of actual experiment reports, and not a basis for ruling out a 10% false-positive rate unless the recorded uncertainty and scope support that statement.",
+  "python": "3.14.4",
+  "scope": "Native beta regression only; separate from any earlier six-report validation",
+  "seed": 20261030,
+  "studies": [
+    {
+      "data_generating_process": "Independent Beta(3, 5) observations; all factor effects zero; common precision 8; no blocks or repeated measures",
+      "design": "one-factor-three-level",
+      "execution_status": "completed",
+      "factor_levels": [
+        3
+      ],
+      "pointwise_noncoverage": [
+        {
+          "comparison": "Factor 1: 0 vs 1",
+          "event": "Pointwise 95% interval excludes known null difference zero",
+          "method": "analytic",
+          "summary": {
+            "all_simulations_bounds": [
+              0.16666666666666666,
+              0.16666666666666666
+            ],
+            "confidence": 0.95,
+            "denominator": "Reportable simulations only; withheld, failed and incomplete simulations excluded",
+            "failed": 0,
+            "incomplete": 0,
+            "interpretation": "Calibration applies only to the recorded model, design, data-generating process and analysis configuration. It is not validation of other reports or designs.",
+            "not_rejected": 5,
+            "rejected": 1,
+            "rejection_rate": 0.16666666666666666,
+            "reportable": 6,
+            "simulations": 6,
+            "uncertainty_high": 0.6412345789976748,
+            "uncertainty_low": 0.004210744514489473,
+            "uncertainty_method": "Two-sided Clopper\u2013Pearson exact binomial interval",
+            "withheld": 0
+          }
+        },
+        {
+          "comparison": "Factor 1: 0 vs 1",
+          "event": "Pointwise 95% interval excludes known null difference zero",
+          "method": "bootstrap",
+          "summary": {
+            "all_simulations_bounds": [
+              0.16666666666666666,
+              0.16666666666666666
+            ],
+            "confidence": 0.95,
+            "denominator": "Reportable simulations only; withheld, failed and incomplete simulations excluded",
+            "failed": 0,
+            "incomplete": 0,
+            "interpretation": "Calibration applies only to the recorded model, design, data-generating process and analysis configuration. It is not validation of other reports or designs.",
+            "not_rejected": 5,
+            "rejected": 1,
+            "rejection_rate": 0.16666666666666666,
+            "reportable": 6,
+            "simulations": 6,
+            "uncertainty_high": 0.6412345789976748,
+            "uncertainty_low": 0.004210744514489473,
+            "uncertainty_method": "Two-sided Clopper\u2013Pearson exact binomial interval",
+            "withheld": 0
+          }
+        },
+        {
+          "comparison": "Factor 1: 0 vs 2",
+          "event": "Pointwise 95% interval excludes known null difference zero",
+          "method": "analytic",
+          "summary": {
+            "all_simulations_bounds": [
+              0.0,
+              0.0
+            ],
+            "confidence": 0.95,
+            "denominator": "Reportable simulations only; withheld, failed and incomplete simulations excluded",
+            "failed": 0,
+            "incomplete": 0,
+            "interpretation": "Calibration applies only to the recorded model, design, data-generating process and analysis configuration. It is not validation of other reports or designs.",
+            "not_rejected": 6,
+            "rejected": 0,
+            "rejection_rate": 0.0,
+            "reportable": 6,
+            "simulations": 6,
+            "uncertainty_high": 0.4592581264399005,
+            "uncertainty_low": 0.0,
+            "uncertainty_method": "Two-sided Clopper\u2013Pearson exact binomial interval",
+            "withheld": 0
+          }
+        },
+        {
+          "comparison": "Factor 1: 0 vs 2",
+          "event": "Pointwise 95% interval excludes known null difference zero",
+          "method": "bootstrap",
+          "summary": {
+            "all_simulations_bounds": [
+              0.16666666666666666,
+              0.16666666666666666
+            ],
+            "confidence": 0.95,
+            "denominator": "Reportable simulations only; withheld, failed and incomplete simulations excluded",
+            "failed": 0,
+            "incomplete": 0,
+            "interpretation": "Calibration applies only to the recorded model, design, data-generating process and analysis configuration. It is not validation of other reports or designs.",
+            "not_rejected": 5,
+            "rejected": 1,
+            "rejection_rate": 0.16666666666666666,
+            "reportable": 6,
+            "simulations": 6,
+            "uncertainty_high": 0.6412345789976748,
+            "uncertainty_low": 0.004210744514489473,
+            "uncertainty_method": "Two-sided Clopper\u2013Pearson exact binomial interval",
+            "withheld": 0
+          }
+        },
+        {
+          "comparison": "Factor 1: 1 vs 2",
+          "event": "Pointwise 95% interval excludes known null difference zero",
+          "method": "analytic",
+          "summary": {
+            "all_simulations_bounds": [
+              0.0,
+              0.0
+            ],
+            "confidence": 0.95,
+            "denominator": "Reportable simulations only; withheld, failed and incomplete simulations excluded",
+            "failed": 0,
+            "incomplete": 0,
+            "interpretation": "Calibration applies only to the recorded model, design, data-generating process and analysis configuration. It is not validation of other reports or designs.",
+            "not_rejected": 6,
+            "rejected": 0,
+            "rejection_rate": 0.0,
+            "reportable": 6,
+            "simulations": 6,
+            "uncertainty_high": 0.4592581264399005,
+            "uncertainty_low": 0.0,
+            "uncertainty_method": "Two-sided Clopper\u2013Pearson exact binomial interval",
+            "withheld": 0
+          }
+        },
+        {
+          "comparison": "Factor 1: 1 vs 2",
+          "event": "Pointwise 95% interval excludes known null difference zero",
+          "method": "bootstrap",
+          "summary": {
+            "all_simulations_bounds": [
+              0.16666666666666666,
+              0.16666666666666666
+            ],
+            "confidence": 0.95,
+            "denominator": "Reportable simulations only; withheld, failed and incomplete simulations excluded",
+            "failed": 0,
+            "incomplete": 0,
+            "interpretation": "Calibration applies only to the recorded model, design, data-generating process and analysis configuration. It is not validation of other reports or designs.",
+            "not_rejected": 5,
+            "rejected": 1,
+            "rejection_rate": 0.16666666666666666,
+            "reportable": 6,
+            "simulations": 6,
+            "uncertainty_high": 0.6412345789976748,
+            "uncertainty_low": 0.004210744514489473,
+            "uncertainty_method": "Two-sided Clopper\u2013Pearson exact binomial interval",
+            "withheld": 0
+          }
+        }
+      ],
+      "rejection_event": "Any analytic Holm-adjusted factor-test p < configured alpha",
+      "requested_simulations": 6,
+      "runs_per_condition": 20,
+      "simulations": [
+        {
+          "interval_coverage": {
+            "Factor 1: 0 vs 1": {
+              "analytic": true,
+              "bootstrap": true
+            },
+            "Factor 1: 0 vs 2": {
+              "analytic": true,
+              "bootstrap": true
+            },
+            "Factor 1: 1 vs 2": {
+              "analytic": true,
+              "bootstrap": false
+            }
+          },
+          "outcome": "not_rejected",
+          "seed": 2834739545,
+          "selected_family": "beta",
+          "tests": [
+            {
+              "p_adjusted": 0.6373123363976501,
+              "resampling_p_adjusted": 0.66,
+              "term": "Factor 1"
+            }
+          ],
+          "warnings": [
+            "Inference assumes independent runs and is conditional on the observed experimental inputs.",
+            "Exploratory simulation count: confidence intervals need more draws for final reporting.",
+            "HC0 robust covariance was used. HC3 not implemented in this pipeline: this pipeline has no reviewed HC3 leverage construction for the separate mean and precision parts. Configured fallback: HC0."
+          ]
+        },
+        {
+          "interval_coverage": {
+            "Factor 1: 0 vs 1": {
+              "analytic": false,
+              "bootstrap": false
+            },
+            "Factor 1: 0 vs 2": {
+              "analytic": true,
+              "bootstrap": false
+            },
+            "Factor 1: 1 vs 2": {
+              "analytic": true,
+              "bootstrap": true
+            }
+          },
+          "outcome": "not_rejected",
+          "seed": 2923282001,
+          "selected_family": "beta",
+          "tests": [
+            {
+              "p_adjusted": 0.11370609302137952,
+              "resampling_p_adjusted": 0.32,
+              "term": "Factor 1"
+            }
+          ],
+          "warnings": [
+            "Inference assumes independent runs and is conditional on the observed experimental inputs.",
+            "Exploratory simulation count: confidence intervals need more draws for final reporting.",
+            "HC0 robust covariance was used. HC3 not implemented in this pipeline: this pipeline has no reviewed HC3 leverage construction for the separate mean and precision parts. Configured fallback: HC0."
+          ]
+        },
+        {
+          "interval_coverage": {
+            "Factor 1: 0 vs 1": {
+              "analytic": true,
+              "bootstrap": true
+            },
+            "Factor 1: 0 vs 2": {
+              "analytic": true,
+              "bootstrap": true
+            },
+            "Factor 1: 1 vs 2": {
+              "analytic": true,
+              "bootstrap": true
+            }
+          },
+          "outcome": "not_rejected",
+          "seed": 135247,
+          "selected_family": "beta",
+          "tests": [
+            {
+              "p_adjusted": 0.44517648773064045,
+              "resampling_p_adjusted": 0.52,
+              "term": "Factor 1"
+            }
+          ],
+          "warnings": [
+            "Inference assumes independent runs and is conditional on the observed experimental inputs.",
+            "Exploratory simulation count: confidence intervals need more draws for final reporting.",
+            "HC0 robust covariance was used. HC3 not implemented in this pipeline: this pipeline has no reviewed HC3 leverage construction for the separate mean and precision parts. Configured fallback: HC0."
+          ]
+        },
+        {
+          "interval_coverage": {
+            "Factor 1: 0 vs 1": {
+              "analytic": true,
+              "bootstrap": true
+            },
+            "Factor 1: 0 vs 2": {
+              "analytic": true,
+              "bootstrap": true
+            },
+            "Factor 1: 1 vs 2": {
+              "analytic": true,
+              "bootstrap": true
+            }
+          },
+          "outcome": "not_rejected",
+          "seed": 3156913854,
+          "selected_family": "beta",
+          "tests": [
+            {
+              "p_adjusted": 0.3869598452005485,
+              "resampling_p_adjusted": 0.42,
+              "term": "Factor 1"
+            }
+          ],
+          "warnings": [
+            "Inference assumes independent runs and is conditional on the observed experimental inputs.",
+            "Exploratory simulation count: confidence intervals need more draws for final reporting.",
+            "HC0 robust covariance was used. HC3 not implemented in this pipeline: this pipeline has no reviewed HC3 leverage construction for the separate mean and precision parts. Configured fallback: HC0."
+          ]
+        },
+        {
+          "interval_coverage": {
+            "Factor 1: 0 vs 1": {
+              "analytic": true,
+              "bootstrap": true
+            },
+            "Factor 1: 0 vs 2": {
+              "analytic": true,
+              "bootstrap": true
+            },
+            "Factor 1: 1 vs 2": {
+              "analytic": true,
+              "bootstrap": true
+            }
+          },
+          "outcome": "not_rejected",
+          "seed": 3401675906,
+          "selected_family": "beta",
+          "tests": [
+            {
+              "p_adjusted": 0.21399770419767153,
+              "resampling_p_adjusted": 0.32,
+              "term": "Factor 1"
+            }
+          ],
+          "warnings": [
+            "Inference assumes independent runs and is conditional on the observed experimental inputs.",
+            "Exploratory simulation count: confidence intervals need more draws for final reporting.",
+            "HC0 robust covariance was used. HC3 not implemented in this pipeline: this pipeline has no reviewed HC3 leverage construction for the separate mean and precision parts. Configured fallback: HC0."
+          ]
+        },
+        {
+          "interval_coverage": {
+            "Factor 1: 0 vs 1": {
+              "analytic": true,
+              "bootstrap": true
+            },
+            "Factor 1: 0 vs 2": {
+              "analytic": true,
+              "bootstrap": true
+            },
+            "Factor 1: 1 vs 2": {
+              "analytic": true,
+              "bootstrap": true
+            }
+          },
+          "outcome": "not_rejected",
+          "seed": 2589934666,
+          "selected_family": "beta",
+          "tests": [
+            {
+              "p_adjusted": 0.639258597968876,
+              "resampling_p_adjusted": 0.77,
+              "term": "Factor 1"
+            }
+          ],
+          "warnings": [
+            "Inference assumes independent runs and is conditional on the observed experimental inputs.",
+            "Exploratory simulation count: confidence intervals need more draws for final reporting.",
+            "HC0 robust covariance was used. HC3 not implemented in this pipeline: this pipeline has no reviewed HC3 leverage construction for the separate mean and precision parts. Configured fallback: HC0."
+          ]
+        }
+      ],
+      "summary": {
+        "all_simulations_bounds": [
+          0.0,
+          0.0
+        ],
+        "confidence": 0.95,
+        "denominator": "Reportable simulations only; withheld, failed and incomplete simulations excluded",
+        "failed": 0,
+        "incomplete": 0,
+        "interpretation": "Calibration applies only to the recorded model, design, data-generating process and analysis configuration. It is not validation of other reports or designs.",
+        "not_rejected": 6,
+        "rejected": 0,
+        "rejection_rate": 0.0,
+        "reportable": 6,
+        "simulations": 6,
+        "uncertainty_high": 0.4592581264399005,
+        "uncertainty_low": 0.0,
+        "uncertainty_method": "Two-sided Clopper\u2013Pearson exact binomial interval",
+        "withheld": 0
+      }
+    },
+    {
+      "data_generating_process": "Independent Beta(3, 5) observations; all factor effects zero; common precision 8; no blocks or repeated measures",
+      "design": "unbalanced-two-factor",
+      "execution_status": "completed",
+      "factor_levels": [
+        3,
+        2
+      ],
+      "pointwise_noncoverage": [
+        {
+          "comparison": "Factor 1 (0 vs 1) \u00d7 Factor 2 (0 vs 1)",
+          "event": "Pointwise 95% interval excludes known null difference zero",
+          "method": "analytic",
+          "summary": {
+            "all_simulations_bounds": [
+              0.16666666666666666,
+              0.16666666666666666
+            ],
+            "confidence": 0.95,
+            "denominator": "Reportable simulations only; withheld, failed and incomplete simulations excluded",
+            "failed": 0,
+            "incomplete": 0,
+            "interpretation": "Calibration applies only to the recorded model, design, data-generating process and analysis configuration. It is not validation of other reports or designs.",
+            "not_rejected": 5,
+            "rejected": 1,
+            "rejection_rate": 0.16666666666666666,
+            "reportable": 6,
+            "simulations": 6,
+            "uncertainty_high": 0.6412345789976748,
+            "uncertainty_low": 0.004210744514489473,
+            "uncertainty_method": "Two-sided Clopper\u2013Pearson exact binomial interval",
+            "withheld": 0
+          }
+        },
+        {
+          "comparison": "Factor 1 (0 vs 1) \u00d7 Factor 2 (0 vs 1)",
+          "event": "Pointwise 95% interval excludes known null difference zero",
+          "method": "bootstrap",
+          "summary": {
+            "all_simulations_bounds": [
+              0.16666666666666666,
+              0.16666666666666666
+            ],
+            "confidence": 0.95,
+            "denominator": "Reportable simulations only; withheld, failed and incomplete simulations excluded",
+            "failed": 0,
+            "incomplete": 0,
+            "interpretation": "Calibration applies only to the recorded model, design, data-generating process and analysis configuration. It is not validation of other reports or designs.",
+            "not_rejected": 5,
+            "rejected": 1,
+            "rejection_rate": 0.16666666666666666,
+            "reportable": 6,
+            "simulations": 6,
+            "uncertainty_high": 0.6412345789976748,
+            "uncertainty_low": 0.004210744514489473,
+            "uncertainty_method": "Two-sided Clopper\u2013Pearson exact binomial interval",
+            "withheld": 0
+          }
+        },
+        {
+          "comparison": "Factor 1 (0 vs 2) \u00d7 Factor 2 (0 vs 1)",
+          "event": "Pointwise 95% interval excludes known null difference zero",
+          "method": "analytic",
+          "summary": {
+            "all_simulations_bounds": [
+              0.16666666666666666,
+              0.16666666666666666
+            ],
+            "confidence": 0.95,
+            "denominator": "Reportable simulations only; withheld, failed and incomplete simulations excluded",
+            "failed": 0,
+            "incomplete": 0,
+            "interpretation": "Calibration applies only to the recorded model, design, data-generating process and analysis configuration. It is not validation of other reports or designs.",
+            "not_rejected": 5,
+            "rejected": 1,
+            "rejection_rate": 0.16666666666666666,
+            "reportable": 6,
+            "simulations": 6,
+            "uncertainty_high": 0.6412345789976748,
+            "uncertainty_low": 0.004210744514489473,
+            "uncertainty_method": "Two-sided Clopper\u2013Pearson exact binomial interval",
+            "withheld": 0
+          }
+        },
+        {
+          "comparison": "Factor 1 (0 vs 2) \u00d7 Factor 2 (0 vs 1)",
+          "event": "Pointwise 95% interval excludes known null difference zero",
+          "method": "bootstrap",
+          "summary": {
+            "all_simulations_bounds": [
+              0.3333333333333333,
+              0.3333333333333333
+            ],
+            "confidence": 0.95,
+            "denominator": "Reportable simulations only; withheld, failed and incomplete simulations excluded",
+            "failed": 0,
+            "incomplete": 0,
+            "interpretation": "Calibration applies only to the recorded model, design, data-generating process and analysis configuration. It is not validation of other reports or designs.",
+            "not_rejected": 4,
+            "rejected": 2,
+            "rejection_rate": 0.3333333333333333,
+            "reportable": 6,
+            "simulations": 6,
+            "uncertainty_high": 0.7772219044964879,
+            "uncertainty_low": 0.0432718682927417,
+            "uncertainty_method": "Two-sided Clopper\u2013Pearson exact binomial interval",
+            "withheld": 0
+          }
+        },
+        {
+          "comparison": "Factor 1 (1 vs 2) \u00d7 Factor 2 (0 vs 1)",
+          "event": "Pointwise 95% interval excludes known null difference zero",
+          "method": "analytic",
+          "summary": {
+            "all_simulations_bounds": [
+              0.0,
+              0.0
+            ],
+            "confidence": 0.95,
+            "denominator": "Reportable simulations only; withheld, failed and incomplete simulations excluded",
+            "failed": 0,
+            "incomplete": 0,
+            "interpretation": "Calibration applies only to the recorded model, design, data-generating process and analysis configuration. It is not validation of other reports or designs.",
+            "not_rejected": 6,
+            "rejected": 0,
+            "rejection_rate": 0.0,
+            "reportable": 6,
+            "simulations": 6,
+            "uncertainty_high": 0.4592581264399005,
+            "uncertainty_low": 0.0,
+            "uncertainty_method": "Two-sided Clopper\u2013Pearson exact binomial interval",
+            "withheld": 0
+          }
+        },
+        {
+          "comparison": "Factor 1 (1 vs 2) \u00d7 Factor 2 (0 vs 1)",
+          "event": "Pointwise 95% interval excludes known null difference zero",
+          "method": "bootstrap",
+          "summary": {
+            "all_simulations_bounds": [
+              0.0,
+              0.0
+            ],
+            "confidence": 0.95,
+            "denominator": "Reportable simulations only; withheld, failed and incomplete simulations excluded",
+            "failed": 0,
+            "incomplete": 0,
+            "interpretation": "Calibration applies only to the recorded model, design, data-generating process and analysis configuration. It is not validation of other reports or designs.",
+            "not_rejected": 6,
+            "rejected": 0,
+            "rejection_rate": 0.0,
+            "reportable": 6,
+            "simulations": 6,
+            "uncertainty_high": 0.4592581264399005,
+            "uncertainty_low": 0.0,
+            "uncertainty_method": "Two-sided Clopper\u2013Pearson exact binomial interval",
+            "withheld": 0
+          }
+        },
+        {
+          "comparison": "Factor 1: 0 vs 1",
+          "event": "Pointwise 95% interval excludes known null difference zero",
+          "method": "analytic",
+          "summary": {
+            "all_simulations_bounds": [
+              0.0,
+              0.0
+            ],
+            "confidence": 0.95,
+            "denominator": "Reportable simulations only; withheld, failed and incomplete simulations excluded",
+            "failed": 0,
+            "incomplete": 0,
+            "interpretation": "Calibration applies only to the recorded model, design, data-generating process and analysis configuration. It is not validation of other reports or designs.",
+            "not_rejected": 6,
+            "rejected": 0,
+            "rejection_rate": 0.0,
+            "reportable": 6,
+            "simulations": 6,
+            "uncertainty_high": 0.4592581264399005,
+            "uncertainty_low": 0.0,
+            "uncertainty_method": "Two-sided Clopper\u2013Pearson exact binomial interval",
+            "withheld": 0
+          }
+        },
+        {
+          "comparison": "Factor 1: 0 vs 1",
+          "event": "Pointwise 95% interval excludes known null difference zero",
+          "method": "bootstrap",
+          "summary": {
+            "all_simulations_bounds": [
+              0.0,
+              0.0
+            ],
+            "confidence": 0.95,
+            "denominator": "Reportable simulations only; withheld, failed and incomplete simulations excluded",
+            "failed": 0,
+            "incomplete": 0,
+            "interpretation": "Calibration applies only to the recorded model, design, data-generating process and analysis configuration. It is not validation of other reports or designs.",
+            "not_rejected": 6,
+            "rejected": 0,
+            "rejection_rate": 0.0,
+            "reportable": 6,
+            "simulations": 6,
+            "uncertainty_high": 0.4592581264399005,
+            "uncertainty_low": 0.0,
+            "uncertainty_method": "Two-sided Clopper\u2013Pearson exact binomial interval",
+            "withheld": 0
+          }
+        },
+        {
+          "comparison": "Factor 1: 0 vs 2",
+          "event": "Pointwise 95% interval excludes known null difference zero",
+          "method": "analytic",
+          "summary": {
+            "all_simulations_bounds": [
+              0.0,
+              0.0
+            ],
+            "confidence": 0.95,
+            "denominator": "Reportable simulations only; withheld, failed and incomplete simulations excluded",
+            "failed": 0,
+            "incomplete": 0,
+            "interpretation": "Calibration applies only to the recorded model, design, data-generating process and analysis configuration. It is not validation of other reports or designs.",
+            "not_rejected": 6,
+            "rejected": 0,
+            "rejection_rate": 0.0,
+            "reportable": 6,
+            "simulations": 6,
+            "uncertainty_high": 0.4592581264399005,
+            "uncertainty_low": 0.0,
+            "uncertainty_method": "Two-sided Clopper\u2013Pearson exact binomial interval",
+            "withheld": 0
+          }
+        },
+        {
+          "comparison": "Factor 1: 0 vs 2",
+          "event": "Pointwise 95% interval excludes known null difference zero",
+          "method": "bootstrap",
+          "summary": {
+            "all_simulations_bounds": [
+              0.0,
+              0.0
+            ],
+            "confidence": 0.95,
+            "denominator": "Reportable simulations only; withheld, failed and incomplete simulations excluded",
+            "failed": 0,
+            "incomplete": 0,
+            "interpretation": "Calibration applies only to the recorded model, design, data-generating process and analysis configuration. It is not validation of other reports or designs.",
+            "not_rejected": 6,
+            "rejected": 0,
+            "rejection_rate": 0.0,
+            "reportable": 6,
+            "simulations": 6,
+            "uncertainty_high": 0.4592581264399005,
+            "uncertainty_low": 0.0,
+            "uncertainty_method": "Two-sided Clopper\u2013Pearson exact binomial interval",
+            "withheld": 0
+          }
+        },
+        {
+          "comparison": "Factor 1: 1 vs 2",
+          "event": "Pointwise 95% interval excludes known null difference zero",
+          "method": "analytic",
+          "summary": {
+            "all_simulations_bounds": [
+              0.16666666666666666,
+              0.16666666666666666
+            ],
+            "confidence": 0.95,
+            "denominator": "Reportable simulations only; withheld, failed and incomplete simulations excluded",
+            "failed": 0,
+            "incomplete": 0,
+            "interpretation": "Calibration applies only to the recorded model, design, data-generating process and analysis configuration. It is not validation of other reports or designs.",
+            "not_rejected": 5,
+            "rejected": 1,
+            "rejection_rate": 0.16666666666666666,
+            "reportable": 6,
+            "simulations": 6,
+            "uncertainty_high": 0.6412345789976748,
+            "uncertainty_low": 0.004210744514489473,
+            "uncertainty_method": "Two-sided Clopper\u2013Pearson exact binomial interval",
+            "withheld": 0
+          }
+        },
+        {
+          "comparison": "Factor 1: 1 vs 2",
+          "event": "Pointwise 95% interval excludes known null difference zero",
+          "method": "bootstrap",
+          "summary": {
+            "all_simulations_bounds": [
+              0.16666666666666666,
+              0.16666666666666666
+            ],
+            "confidence": 0.95,
+            "denominator": "Reportable simulations only; withheld, failed and incomplete simulations excluded",
+            "failed": 0,
+            "incomplete": 0,
+            "interpretation": "Calibration applies only to the recorded model, design, data-generating process and analysis configuration. It is not validation of other reports or designs.",
+            "not_rejected": 5,
+            "rejected": 1,
+            "rejection_rate": 0.16666666666666666,
+            "reportable": 6,
+            "simulations": 6,
+            "uncertainty_high": 0.6412345789976748,
+            "uncertainty_low": 0.004210744514489473,
+            "uncertainty_method": "Two-sided Clopper\u2013Pearson exact binomial interval",
+            "withheld": 0
+          }
+        },
+        {
+          "comparison": "Factor 2: 0 vs 1",
+          "event": "Pointwise 95% interval excludes known null difference zero",
+          "method": "analytic",
+          "summary": {
+            "all_simulations_bounds": [
+              0.0,
+              0.0
+            ],
+            "confidence": 0.95,
+            "denominator": "Reportable simulations only; withheld, failed and incomplete simulations excluded",
+            "failed": 0,
+            "incomplete": 0,
+            "interpretation": "Calibration applies only to the recorded model, design, data-generating process and analysis configuration. It is not validation of other reports or designs.",
+            "not_rejected": 6,
+            "rejected": 0,
+            "rejection_rate": 0.0,
+            "reportable": 6,
+            "simulations": 6,
+            "uncertainty_high": 0.4592581264399005,
+            "uncertainty_low": 0.0,
+            "uncertainty_method": "Two-sided Clopper\u2013Pearson exact binomial interval",
+            "withheld": 0
+          }
+        },
+        {
+          "comparison": "Factor 2: 0 vs 1",
+          "event": "Pointwise 95% interval excludes known null difference zero",
+          "method": "bootstrap",
+          "summary": {
+            "all_simulations_bounds": [
+              0.16666666666666666,
+              0.16666666666666666
+            ],
+            "confidence": 0.95,
+            "denominator": "Reportable simulations only; withheld, failed and incomplete simulations excluded",
+            "failed": 0,
+            "incomplete": 0,
+            "interpretation": "Calibration applies only to the recorded model, design, data-generating process and analysis configuration. It is not validation of other reports or designs.",
+            "not_rejected": 5,
+            "rejected": 1,
+            "rejection_rate": 0.16666666666666666,
+            "reportable": 6,
+            "simulations": 6,
+            "uncertainty_high": 0.6412345789976748,
+            "uncertainty_low": 0.004210744514489473,
+            "uncertainty_method": "Two-sided Clopper\u2013Pearson exact binomial interval",
+            "withheld": 0
+          }
+        }
+      ],
+      "rejection_event": "Any analytic Holm-adjusted factor-test p < configured alpha",
+      "requested_simulations": 6,
+      "runs_per_condition": "20, 25, 30 cyclically",
+      "simulations": [
+        {
+          "interval_coverage": {
+            "Factor 1 (0 vs 1) \u00d7 Factor 2 (0 vs 1)": {
+              "analytic": true,
+              "bootstrap": true
+            },
+            "Factor 1 (0 vs 2) \u00d7 Factor 2 (0 vs 1)": {
+              "analytic": true,
+              "bootstrap": true
+            },
+            "Factor 1 (1 vs 2) \u00d7 Factor 2 (0 vs 1)": {
+              "analytic": true,
+              "bootstrap": true
+            },
+            "Factor 1: 0 vs 1": {
+              "analytic": true,
+              "bootstrap": true
+            },
+            "Factor 1: 0 vs 2": {
+              "analytic": true,
+              "bootstrap": true
+            },
+            "Factor 1: 1 vs 2": {
+              "analytic": true,
+              "bootstrap": true
+            },
+            "Factor 2: 0 vs 1": {
+              "analytic": true,
+              "bootstrap": true
+            }
+          },
+          "outcome": "not_rejected",
+          "seed": 2610747632,
+          "selected_family": "beta",
+          "tests": [
+            {
+              "p_adjusted": 0.6918278204552968,
+              "resampling_p_adjusted": 0.72,
+              "term": "Factor 1"
+            },
+            {
+              "p_adjusted": 0.6918278204552968,
+              "resampling_p_adjusted": 0.72,
+              "term": "Factor 2"
+            },
+            {
+              "p_adjusted": 0.971307037443798,
+              "resampling_p_adjusted": null,
+              "term": "Factor 1:Factor 2"
+            }
+          ],
+          "warnings": [
+            "Inference assumes independent runs and is conditional on the observed experimental inputs.",
+            "Exploratory simulation count: confidence intervals need more draws for final reporting.",
+            "Run counts differ across conditions; comparisons weight conditions equally.",
+            "HC0 robust covariance was used. HC3 not implemented in this pipeline: this pipeline has no reviewed HC3 leverage construction for the separate mean and precision parts. Configured fallback: HC0."
+          ]
+        },
+        {
+          "interval_coverage": {
+            "Factor 1 (0 vs 1) \u00d7 Factor 2 (0 vs 1)": {
+              "analytic": true,
+              "bootstrap": true
+            },
+            "Factor 1 (0 vs 2) \u00d7 Factor 2 (0 vs 1)": {
+              "analytic": true,
+              "bootstrap": false
+            },
+            "Factor 1 (1 vs 2) \u00d7 Factor 2 (0 vs 1)": {
+              "analytic": true,
+              "bootstrap": true
+            },
+            "Factor 1: 0 vs 1": {
+              "analytic": true,
+              "bootstrap": true
+            },
+            "Factor 1: 0 vs 2": {
+              "analytic": true,
+              "bootstrap": true
+            },
+            "Factor 1: 1 vs 2": {
+              "analytic": true,
+              "bootstrap": true
+            },
+            "Factor 2: 0 vs 1": {
+              "analytic": true,
+              "bootstrap": true
+            }
+          },
+          "outcome": "not_rejected",
+          "seed": 346547410,
+          "selected_family": "beta",
+          "tests": [
+            {
+              "p_adjusted": 0.6285534158713403,
+              "resampling_p_adjusted": 0.58,
+              "term": "Factor 1"
+            },
+            {
+              "p_adjusted": 0.6285534158713403,
+              "resampling_p_adjusted": 0.58,
+              "term": "Factor 2"
+            },
+            {
+              "p_adjusted": 0.6285534158713403,
+              "resampling_p_adjusted": null,
+              "term": "Factor 1:Factor 2"
+            }
+          ],
+          "warnings": [
+            "Inference assumes independent runs and is conditional on the observed experimental inputs.",
+            "Exploratory simulation count: confidence intervals need more draws for final reporting.",
+            "Run counts differ across conditions; comparisons weight conditions equally.",
+            "HC0 robust covariance was used. HC3 not implemented in this pipeline: this pipeline has no reviewed HC3 leverage construction for the separate mean and precision parts. Configured fallback: HC0."
+          ]
+        },
+        {
+          "interval_coverage": {
+            "Factor 1 (0 vs 1) \u00d7 Factor 2 (0 vs 1)": {
+              "analytic": true,
+              "bootstrap": true
+            },
+            "Factor 1 (0 vs 2) \u00d7 Factor 2 (0 vs 1)": {
+              "analytic": true,
+              "bootstrap": true
+            },
+            "Factor 1 (1 vs 2) \u00d7 Factor 2 (0 vs 1)": {
+              "analytic": true,
+              "bootstrap": true
+            },
+            "Factor 1: 0 vs 1": {
+              "analytic": true,
+              "bootstrap": true
+            },
+            "Factor 1: 0 vs 2": {
+              "analytic": true,
+              "bootstrap": true
+            },
+            "Factor 1: 1 vs 2": {
+              "analytic": true,
+              "bootstrap": true
+            },
+            "Factor 2: 0 vs 1": {
+              "analytic": true,
+              "bootstrap": true
+            }
+          },
+          "outcome": "not_rejected",
+          "seed": 2950150899,
+          "selected_family": "beta",
+          "tests": [
+            {
+              "p_adjusted": 1.0,
+              "resampling_p_adjusted": 1.0,
+              "term": "Factor 1"
+            },
+            {
+              "p_adjusted": 1.0,
+              "resampling_p_adjusted": 1.0,
+              "term": "Factor 2"
+            },
+            {
+              "p_adjusted": 1.0,
+              "resampling_p_adjusted": null,
+              "term": "Factor 1:Factor 2"
+            }
+          ],
+          "warnings": [
+            "Inference assumes independent runs and is conditional on the observed experimental inputs.",
+            "Exploratory simulation count: confidence intervals need more draws for final reporting.",
+            "Run counts differ across conditions; comparisons weight conditions equally.",
+            "HC0 robust covariance was used. HC3 not implemented in this pipeline: this pipeline has no reviewed HC3 leverage construction for the separate mean and precision parts. Configured fallback: HC0."
+          ]
+        },
+        {
+          "interval_coverage": {
+            "Factor 1 (0 vs 1) \u00d7 Factor 2 (0 vs 1)": {
+              "analytic": true,
+              "bootstrap": true
+            },
+            "Factor 1 (0 vs 2) \u00d7 Factor 2 (0 vs 1)": {
+              "analytic": false,
+              "bootstrap": false
+            },
+            "Factor 1 (1 vs 2) \u00d7 Factor 2 (0 vs 1)": {
+              "analytic": true,
+              "bootstrap": true
+            },
+            "Factor 1: 0 vs 1": {
+              "analytic": true,
+              "bootstrap": true
+            },
+            "Factor 1: 0 vs 2": {
+              "analytic": true,
+              "bootstrap": true
+            },
+            "Factor 1: 1 vs 2": {
+              "analytic": true,
+              "bootstrap": true
+            },
+            "Factor 2: 0 vs 1": {
+              "analytic": true,
+              "bootstrap": true
+            }
+          },
+          "outcome": "not_rejected",
+          "seed": 2612507500,
+          "selected_family": "beta",
+          "tests": [
+            {
+              "p_adjusted": 0.5290885824885729,
+              "resampling_p_adjusted": 0.63,
+              "term": "Factor 1"
+            },
+            {
+              "p_adjusted": 0.23294715440742936,
+              "resampling_p_adjusted": 0.24,
+              "term": "Factor 2"
+            },
+            {
+              "p_adjusted": 0.18423288485140535,
+              "resampling_p_adjusted": null,
+              "term": "Factor 1:Factor 2"
+            }
+          ],
+          "warnings": [
+            "Inference assumes independent runs and is conditional on the observed experimental inputs.",
+            "Exploratory simulation count: confidence intervals need more draws for final reporting.",
+            "Run counts differ across conditions; comparisons weight conditions equally.",
+            "HC0 robust covariance was used. HC3 not implemented in this pipeline: this pipeline has no reviewed HC3 leverage construction for the separate mean and precision parts. Configured fallback: HC0."
+          ]
+        },
+        {
+          "interval_coverage": {
+            "Factor 1 (0 vs 1) \u00d7 Factor 2 (0 vs 1)": {
+              "analytic": false,
+              "bootstrap": false
+            },
+            "Factor 1 (0 vs 2) \u00d7 Factor 2 (0 vs 1)": {
+              "analytic": true,
+              "bootstrap": true
+            },
+            "Factor 1 (1 vs 2) \u00d7 Factor 2 (0 vs 1)": {
+              "analytic": true,
+              "bootstrap": true
+            },
+            "Factor 1: 0 vs 1": {
+              "analytic": true,
+              "bootstrap": true
+            },
+            "Factor 1: 0 vs 2": {
+              "analytic": true,
+              "bootstrap": true
+            },
+            "Factor 1: 1 vs 2": {
+              "analytic": false,
+              "bootstrap": false
+            },
+            "Factor 2: 0 vs 1": {
+              "analytic": true,
+              "bootstrap": false
+            }
+          },
+          "outcome": "not_rejected",
+          "seed": 3390768222,
+          "selected_family": "beta",
+          "tests": [
+            {
+              "p_adjusted": 0.22550102857021823,
+              "resampling_p_adjusted": 0.14,
+              "term": "Factor 1"
+            },
+            {
+              "p_adjusted": 0.22550102857021823,
+              "resampling_p_adjusted": 0.14,
+              "term": "Factor 2"
+            },
+            {
+              "p_adjusted": 0.22550102857021823,
+              "resampling_p_adjusted": null,
+              "term": "Factor 1:Factor 2"
+            }
+          ],
+          "warnings": [
+            "Inference assumes independent runs and is conditional on the observed experimental inputs.",
+            "Exploratory simulation count: confidence intervals need more draws for final reporting.",
+            "Run counts differ across conditions; comparisons weight conditions equally.",
+            "HC0 robust covariance was used. HC3 not implemented in this pipeline: this pipeline has no reviewed HC3 leverage construction for the separate mean and precision parts. Configured fallback: HC0."
+          ]
+        },
+        {
+          "interval_coverage": {
+            "Factor 1 (0 vs 1) \u00d7 Factor 2 (0 vs 1)": {
+              "analytic": true,
+              "bootstrap": true
+            },
+            "Factor 1 (0 vs 2) \u00d7 Factor 2 (0 vs 1)": {
+              "analytic": true,
+              "bootstrap": true
+            },
+            "Factor 1 (1 vs 2) \u00d7 Factor 2 (0 vs 1)": {
+              "analytic": true,
+              "bootstrap": true
+            },
+            "Factor 1: 0 vs 1": {
+              "analytic": true,
+              "bootstrap": true
+            },
+            "Factor 1: 0 vs 2": {
+              "analytic": true,
+              "bootstrap": true
+            },
+            "Factor 1: 1 vs 2": {
+              "analytic": true,
+              "bootstrap": true
+            },
+            "Factor 2: 0 vs 1": {
+              "analytic": true,
+              "bootstrap": true
+            }
+          },
+          "outcome": "not_rejected",
+          "seed": 191972084,
+          "selected_family": "beta",
+          "tests": [
+            {
+              "p_adjusted": 1.0,
+              "resampling_p_adjusted": 0.38,
+              "term": "Factor 1"
+            },
+            {
+              "p_adjusted": 1.0,
+              "resampling_p_adjusted": 0.74,
+              "term": "Factor 2"
+            },
+            {
+              "p_adjusted": 1.0,
+              "resampling_p_adjusted": null,
+              "term": "Factor 1:Factor 2"
+            }
+          ],
+          "warnings": [
+            "Inference assumes independent runs and is conditional on the observed experimental inputs.",
+            "Exploratory simulation count: confidence intervals need more draws for final reporting.",
+            "Run counts differ across conditions; comparisons weight conditions equally.",
+            "HC0 robust covariance was used. HC3 not implemented in this pipeline: this pipeline has no reviewed HC3 leverage construction for the separate mean and precision parts. Configured fallback: HC0."
+          ]
+        }
+      ],
+      "summary": {
+        "all_simulations_bounds": [
+          0.0,
+          0.0
+        ],
+        "confidence": 0.95,
+        "denominator": "Reportable simulations only; withheld, failed and incomplete simulations excluded",
+        "failed": 0,
+        "incomplete": 0,
+        "interpretation": "Calibration applies only to the recorded model, design, data-generating process and analysis configuration. It is not validation of other reports or designs.",
+        "not_rejected": 6,
+        "rejected": 0,
+        "rejection_rate": 0.0,
+        "reportable": 6,
+        "simulations": 6,
+        "uncertainty_high": 0.4592581264399005,
+        "uncertainty_low": 0.0,
+        "uncertainty_method": "Two-sided Clopper\u2013Pearson exact binomial interval",
+        "withheld": 0
+      }
+    },
+    {
+      "data_generating_process": "Independent Beta(3, 5) observations; all factor effects zero; common precision 8; no blocks or repeated measures",
+      "design": "three-factor",
+      "execution_status": "completed",
+      "factor_levels": [
+        2,
+        2,
+        2
+      ],
+      "pointwise_noncoverage": [
+        {
+          "comparison": "Factor 1 (0 vs 1) \u00d7 Factor 2 (0 vs 1)",
+          "event": "Pointwise 95% interval excludes known null difference zero",
+          "method": "analytic",
+          "summary": {
+            "all_simulations_bounds": [
+              0.0,
+              0.0
+            ],
+            "confidence": 0.95,
+            "denominator": "Reportable simulations only; withheld, failed and incomplete simulations excluded",
+            "failed": 0,
+            "incomplete": 0,
+            "interpretation": "Calibration applies only to the recorded model, design, data-generating process and analysis configuration. It is not validation of other reports or designs.",
+            "not_rejected": 6,
+            "rejected": 0,
+            "rejection_rate": 0.0,
+            "reportable": 6,
+            "simulations": 6,
+            "uncertainty_high": 0.4592581264399005,
+            "uncertainty_low": 0.0,
+            "uncertainty_method": "Two-sided Clopper\u2013Pearson exact binomial interval",
+            "withheld": 0
+          }
+        },
+        {
+          "comparison": "Factor 1 (0 vs 1) \u00d7 Factor 2 (0 vs 1)",
+          "event": "Pointwise 95% interval excludes known null difference zero",
+          "method": "bootstrap",
+          "summary": {
+            "all_simulations_bounds": [
+              0.0,
+              0.0
+            ],
+            "confidence": 0.95,
+            "denominator": "Reportable simulations only; withheld, failed and incomplete simulations excluded",
+            "failed": 0,
+            "incomplete": 0,
+            "interpretation": "Calibration applies only to the recorded model, design, data-generating process and analysis configuration. It is not validation of other reports or designs.",
+            "not_rejected": 6,
+            "rejected": 0,
+            "rejection_rate": 0.0,
+            "reportable": 6,
+            "simulations": 6,
+            "uncertainty_high": 0.4592581264399005,
+            "uncertainty_low": 0.0,
+            "uncertainty_method": "Two-sided Clopper\u2013Pearson exact binomial interval",
+            "withheld": 0
+          }
+        },
+        {
+          "comparison": "Factor 1 (0 vs 1) \u00d7 Factor 3 (0 vs 1)",
+          "event": "Pointwise 95% interval excludes known null difference zero",
+          "method": "analytic",
+          "summary": {
+            "all_simulations_bounds": [
+              0.3333333333333333,
+              0.3333333333333333
+            ],
+            "confidence": 0.95,
+            "denominator": "Reportable simulations only; withheld, failed and incomplete simulations excluded",
+            "failed": 0,
+            "incomplete": 0,
+            "interpretation": "Calibration applies only to the recorded model, design, data-generating process and analysis configuration. It is not validation of other reports or designs.",
+            "not_rejected": 4,
+            "rejected": 2,
+            "rejection_rate": 0.3333333333333333,
+            "reportable": 6,
+            "simulations": 6,
+            "uncertainty_high": 0.7772219044964879,
+            "uncertainty_low": 0.0432718682927417,
+            "uncertainty_method": "Two-sided Clopper\u2013Pearson exact binomial interval",
+            "withheld": 0
+          }
+        },
+        {
+          "comparison": "Factor 1 (0 vs 1) \u00d7 Factor 3 (0 vs 1)",
+          "event": "Pointwise 95% interval excludes known null difference zero",
+          "method": "bootstrap",
+          "summary": {
+            "all_simulations_bounds": [
+              0.5,
+              0.5
+            ],
+            "confidence": 0.95,
+            "denominator": "Reportable simulations only; withheld, failed and incomplete simulations excluded",
+            "failed": 0,
+            "incomplete": 0,
+            "interpretation": "Calibration applies only to the recorded model, design, data-generating process and analysis configuration. It is not validation of other reports or designs.",
+            "not_rejected": 3,
+            "rejected": 3,
+            "rejection_rate": 0.5,
+            "reportable": 6,
+            "simulations": 6,
+            "uncertainty_high": 0.8818827512429748,
+            "uncertainty_low": 0.11811724875702526,
+            "uncertainty_method": "Two-sided Clopper\u2013Pearson exact binomial interval",
+            "withheld": 0
+          }
+        },
+        {
+          "comparison": "Factor 1: 0 vs 1",
+          "event": "Pointwise 95% interval excludes known null difference zero",
+          "method": "analytic",
+          "summary": {
+            "all_simulations_bounds": [
+              0.16666666666666666,
+              0.16666666666666666
+            ],
+            "confidence": 0.95,
+            "denominator": "Reportable simulations only; withheld, failed and incomplete simulations excluded",
+            "failed": 0,
+            "incomplete": 0,
+            "interpretation": "Calibration applies only to the recorded model, design, data-generating process and analysis configuration. It is not validation of other reports or designs.",
+            "not_rejected": 5,
+            "rejected": 1,
+            "rejection_rate": 0.16666666666666666,
+            "reportable": 6,
+            "simulations": 6,
+            "uncertainty_high": 0.6412345789976748,
+            "uncertainty_low": 0.004210744514489473,
+            "uncertainty_method": "Two-sided Clopper\u2013Pearson exact binomial interval",
+            "withheld": 0
+          }
+        },
+        {
+          "comparison": "Factor 1: 0 vs 1",
+          "event": "Pointwise 95% interval excludes known null difference zero",
+          "method": "bootstrap",
+          "summary": {
+            "all_simulations_bounds": [
+              0.3333333333333333,
+              0.3333333333333333
+            ],
+            "confidence": 0.95,
+            "denominator": "Reportable simulations only; withheld, failed and incomplete simulations excluded",
+            "failed": 0,
+            "incomplete": 0,
+            "interpretation": "Calibration applies only to the recorded model, design, data-generating process and analysis configuration. It is not validation of other reports or designs.",
+            "not_rejected": 4,
+            "rejected": 2,
+            "rejection_rate": 0.3333333333333333,
+            "reportable": 6,
+            "simulations": 6,
+            "uncertainty_high": 0.7772219044964879,
+            "uncertainty_low": 0.0432718682927417,
+            "uncertainty_method": "Two-sided Clopper\u2013Pearson exact binomial interval",
+            "withheld": 0
+          }
+        },
+        {
+          "comparison": "Factor 2 (0 vs 1) \u00d7 Factor 3 (0 vs 1)",
+          "event": "Pointwise 95% interval excludes known null difference zero",
+          "method": "analytic",
+          "summary": {
+            "all_simulations_bounds": [
+              0.0,
+              0.0
+            ],
+            "confidence": 0.95,
+            "denominator": "Reportable simulations only; withheld, failed and incomplete simulations excluded",
+            "failed": 0,
+            "incomplete": 0,
+            "interpretation": "Calibration applies only to the recorded model, design, data-generating process and analysis configuration. It is not validation of other reports or designs.",
+            "not_rejected": 6,
+            "rejected": 0,
+            "rejection_rate": 0.0,
+            "reportable": 6,
+            "simulations": 6,
+            "uncertainty_high": 0.4592581264399005,
+            "uncertainty_low": 0.0,
+            "uncertainty_method": "Two-sided Clopper\u2013Pearson exact binomial interval",
+            "withheld": 0
+          }
+        },
+        {
+          "comparison": "Factor 2 (0 vs 1) \u00d7 Factor 3 (0 vs 1)",
+          "event": "Pointwise 95% interval excludes known null difference zero",
+          "method": "bootstrap",
+          "summary": {
+            "all_simulations_bounds": [
+              0.0,
+              0.0
+            ],
+            "confidence": 0.95,
+            "denominator": "Reportable simulations only; withheld, failed and incomplete simulations excluded",
+            "failed": 0,
+            "incomplete": 0,
+            "interpretation": "Calibration applies only to the recorded model, design, data-generating process and analysis configuration. It is not validation of other reports or designs.",
+            "not_rejected": 6,
+            "rejected": 0,
+            "rejection_rate": 0.0,
+            "reportable": 6,
+            "simulations": 6,
+            "uncertainty_high": 0.4592581264399005,
+            "uncertainty_low": 0.0,
+            "uncertainty_method": "Two-sided Clopper\u2013Pearson exact binomial interval",
+            "withheld": 0
+          }
+        },
+        {
+          "comparison": "Factor 2: 0 vs 1",
+          "event": "Pointwise 95% interval excludes known null difference zero",
+          "method": "analytic",
+          "summary": {
+            "all_simulations_bounds": [
+              0.0,
+              0.0
+            ],
+            "confidence": 0.95,
+            "denominator": "Reportable simulations only; withheld, failed and incomplete simulations excluded",
+            "failed": 0,
+            "incomplete": 0,
+            "interpretation": "Calibration applies only to the recorded model, design, data-generating process and analysis configuration. It is not validation of other reports or designs.",
+            "not_rejected": 6,
+            "rejected": 0,
+            "rejection_rate": 0.0,
+            "reportable": 6,
+            "simulations": 6,
+            "uncertainty_high": 0.4592581264399005,
+            "uncertainty_low": 0.0,
+            "uncertainty_method": "Two-sided Clopper\u2013Pearson exact binomial interval",
+            "withheld": 0
+          }
+        },
+        {
+          "comparison": "Factor 2: 0 vs 1",
+          "event": "Pointwise 95% interval excludes known null difference zero",
+          "method": "bootstrap",
+          "summary": {
+            "all_simulations_bounds": [
+              0.0,
+              0.0
+            ],
+            "confidence": 0.95,
+            "denominator": "Reportable simulations only; withheld, failed and incomplete simulations excluded",
+            "failed": 0,
+            "incomplete": 0,
+            "interpretation": "Calibration applies only to the recorded model, design, data-generating process and analysis configuration. It is not validation of other reports or designs.",
+            "not_rejected": 6,
+            "rejected": 0,
+            "rejection_rate": 0.0,
+            "reportable": 6,
+            "simulations": 6,
+            "uncertainty_high": 0.4592581264399005,
+            "uncertainty_low": 0.0,
+            "uncertainty_method": "Two-sided Clopper\u2013Pearson exact binomial interval",
+            "withheld": 0
+          }
+        },
+        {
+          "comparison": "Factor 3: 0 vs 1",
+          "event": "Pointwise 95% interval excludes known null difference zero",
+          "method": "analytic",
+          "summary": {
+            "all_simulations_bounds": [
+              0.5,
+              0.5
+            ],
+            "confidence": 0.95,
+            "denominator": "Reportable simulations only; withheld, failed and incomplete simulations excluded",
+            "failed": 0,
+            "incomplete": 0,
+            "interpretation": "Calibration applies only to the recorded model, design, data-generating process and analysis configuration. It is not validation of other reports or designs.",
+            "not_rejected": 3,
+            "rejected": 3,
+            "rejection_rate": 0.5,
+            "reportable": 6,
+            "simulations": 6,
+            "uncertainty_high": 0.8818827512429748,
+            "uncertainty_low": 0.11811724875702526,
+            "uncertainty_method": "Two-sided Clopper\u2013Pearson exact binomial interval",
+            "withheld": 0
+          }
+        },
+        {
+          "comparison": "Factor 3: 0 vs 1",
+          "event": "Pointwise 95% interval excludes known null difference zero",
+          "method": "bootstrap",
+          "summary": {
+            "all_simulations_bounds": [
+              0.5,
+              0.5
+            ],
+            "confidence": 0.95,
+            "denominator": "Reportable simulations only; withheld, failed and incomplete simulations excluded",
+            "failed": 0,
+            "incomplete": 0,
+            "interpretation": "Calibration applies only to the recorded model, design, data-generating process and analysis configuration. It is not validation of other reports or designs.",
+            "not_rejected": 3,
+            "rejected": 3,
+            "rejection_rate": 0.5,
+            "reportable": 6,
+            "simulations": 6,
+            "uncertainty_high": 0.8818827512429748,
+            "uncertainty_low": 0.11811724875702526,
+            "uncertainty_method": "Two-sided Clopper\u2013Pearson exact binomial interval",
+            "withheld": 0
+          }
+        }
+      ],
+      "rejection_event": "Any analytic Holm-adjusted factor-test p < configured alpha",
+      "requested_simulations": 6,
+      "runs_per_condition": 20,
+      "simulations": [
+        {
+          "interval_coverage": {
+            "Factor 1 (0 vs 1) \u00d7 Factor 2 (0 vs 1)": {
+              "analytic": true,
+              "bootstrap": true
+            },
+            "Factor 1 (0 vs 1) \u00d7 Factor 3 (0 vs 1)": {
+              "analytic": true,
+              "bootstrap": false
+            },
+            "Factor 1: 0 vs 1": {
+              "analytic": true,
+              "bootstrap": true
+            },
+            "Factor 2 (0 vs 1) \u00d7 Factor 3 (0 vs 1)": {
+              "analytic": true,
+              "bootstrap": true
+            },
+            "Factor 2: 0 vs 1": {
+              "analytic": true,
+              "bootstrap": true
+            },
+            "Factor 3: 0 vs 1": {
+              "analytic": false,
+              "bootstrap": false
+            }
+          },
+          "outcome": "not_rejected",
+          "seed": 3702796487,
+          "selected_family": "beta",
+          "tests": [
+            {
+              "p_adjusted": 1.0,
+              "resampling_p_adjusted": 0.32,
+              "term": "Factor 1"
+            },
+            {
+              "p_adjusted": 0.4486462295838674,
+              "resampling_p_adjusted": 0.12,
+              "term": "Factor 2"
+            },
+            {
+              "p_adjusted": 0.0779145710674789,
+              "resampling_p_adjusted": 0.03,
+              "term": "Factor 3"
+            },
+            {
+              "p_adjusted": 0.41526361958134317,
+              "resampling_p_adjusted": null,
+              "term": "Factor 1:Factor 2"
+            },
+            {
+              "p_adjusted": 0.4486462295838674,
+              "resampling_p_adjusted": null,
+              "term": "Factor 1:Factor 3"
+            },
+            {
+              "p_adjusted": 1.0,
+              "resampling_p_adjusted": null,
+              "term": "Factor 2:Factor 3"
+            }
+          ],
+          "warnings": [
+            "Inference assumes independent runs and is conditional on the observed experimental inputs.",
+            "Exploratory simulation count: confidence intervals need more draws for final reporting.",
+            "HC0 robust covariance was used. HC3 not implemented in this pipeline: this pipeline has no reviewed HC3 leverage construction for the separate mean and precision parts. Configured fallback: HC0."
+          ]
+        },
+        {
+          "interval_coverage": {
+            "Factor 1 (0 vs 1) \u00d7 Factor 2 (0 vs 1)": {
+              "analytic": true,
+              "bootstrap": true
+            },
+            "Factor 1 (0 vs 1) \u00d7 Factor 3 (0 vs 1)": {
+              "analytic": true,
+              "bootstrap": true
+            },
+            "Factor 1: 0 vs 1": {
+              "analytic": true,
+              "bootstrap": true
+            },
+            "Factor 2 (0 vs 1) \u00d7 Factor 3 (0 vs 1)": {
+              "analytic": true,
+              "bootstrap": true
+            },
+            "Factor 2: 0 vs 1": {
+              "analytic": true,
+              "bootstrap": true
+            },
+            "Factor 3: 0 vs 1": {
+              "analytic": false,
+              "bootstrap": false
+            }
+          },
+          "outcome": "rejected",
+          "seed": 1088394100,
+          "selected_family": "beta",
+          "tests": [
+            {
+              "p_adjusted": 1.0,
+              "resampling_p_adjusted": 0.78,
+              "term": "Factor 1"
+            },
+            {
+              "p_adjusted": 1.0,
+              "resampling_p_adjusted": 0.78,
+              "term": "Factor 2"
+            },
+            {
+              "p_adjusted": 0.030033317742383568,
+              "resampling_p_adjusted": 0.06,
+              "term": "Factor 3"
+            },
+            {
+              "p_adjusted": 1.0,
+              "resampling_p_adjusted": null,
+              "term": "Factor 1:Factor 2"
+            },
+            {
+              "p_adjusted": 1.0,
+              "resampling_p_adjusted": null,
+              "term": "Factor 1:Factor 3"
+            },
+            {
+              "p_adjusted": 1.0,
+              "resampling_p_adjusted": null,
+              "term": "Factor 2:Factor 3"
+            }
+          ],
+          "warnings": [
+            "Inference assumes independent runs and is conditional on the observed experimental inputs.",
+            "Exploratory simulation count: confidence intervals need more draws for final reporting.",
+            "HC0 robust covariance was used. HC3 not implemented in this pipeline: this pipeline has no reviewed HC3 leverage construction for the separate mean and precision parts. Configured fallback: HC0."
+          ]
+        },
+        {
+          "interval_coverage": {
+            "Factor 1 (0 vs 1) \u00d7 Factor 2 (0 vs 1)": {
+              "analytic": true,
+              "bootstrap": true
+            },
+            "Factor 1 (0 vs 1) \u00d7 Factor 3 (0 vs 1)": {
+              "analytic": false,
+              "bootstrap": false
+            },
+            "Factor 1: 0 vs 1": {
+              "analytic": true,
+              "bootstrap": true
+            },
+            "Factor 2 (0 vs 1) \u00d7 Factor 3 (0 vs 1)": {
+              "analytic": true,
+              "bootstrap": true
+            },
+            "Factor 2: 0 vs 1": {
+              "analytic": true,
+              "bootstrap": true
+            },
+            "Factor 3: 0 vs 1": {
+              "analytic": true,
+              "bootstrap": true
+            }
+          },
+          "outcome": "rejected",
+          "seed": 3775232779,
+          "selected_family": "beta",
+          "tests": [
+            {
+              "p_adjusted": 1.0,
+              "resampling_p_adjusted": 1.0,
+              "term": "Factor 1"
+            },
+            {
+              "p_adjusted": 1.0,
+              "resampling_p_adjusted": 1.0,
+              "term": "Factor 2"
+            },
+            {
+              "p_adjusted": 1.0,
+              "resampling_p_adjusted": 1.0,
+              "term": "Factor 3"
+            },
+            {
+              "p_adjusted": 1.0,
+              "resampling_p_adjusted": null,
+              "term": "Factor 1:Factor 2"
+            },
+            {
+              "p_adjusted": 0.04830874275913337,
+              "resampling_p_adjusted": null,
+              "term": "Factor 1:Factor 3"
+            },
+            {
+              "p_adjusted": 1.0,
+              "resampling_p_adjusted": null,
+              "term": "Factor 2:Factor 3"
+            }
+          ],
+          "warnings": [
+            "Inference assumes independent runs and is conditional on the observed experimental inputs.",
+            "Exploratory simulation count: confidence intervals need more draws for final reporting.",
+            "HC0 robust covariance was used. HC3 not implemented in this pipeline: this pipeline has no reviewed HC3 leverage construction for the separate mean and precision parts. Configured fallback: HC0."
+          ]
+        },
+        {
+          "interval_coverage": {
+            "Factor 1 (0 vs 1) \u00d7 Factor 2 (0 vs 1)": {
+              "analytic": true,
+              "bootstrap": true
+            },
+            "Factor 1 (0 vs 1) \u00d7 Factor 3 (0 vs 1)": {
+              "analytic": false,
+              "bootstrap": false
+            },
+            "Factor 1: 0 vs 1": {
+              "analytic": true,
+              "bootstrap": true
+            },
+            "Factor 2 (0 vs 1) \u00d7 Factor 3 (0 vs 1)": {
+              "analytic": true,
+              "bootstrap": true
+            },
+            "Factor 2: 0 vs 1": {
+              "analytic": true,
+              "bootstrap": true
+            },
+            "Factor 3: 0 vs 1": {
+              "analytic": false,
+              "bootstrap": false
+            }
+          },
+          "outcome": "not_rejected",
+          "seed": 1313934455,
+          "selected_family": "beta",
+          "tests": [
+            {
+              "p_adjusted": 1.0,
+              "resampling_p_adjusted": 1.0,
+              "term": "Factor 1"
+            },
+            {
+              "p_adjusted": 1.0,
+              "resampling_p_adjusted": 1.0,
+              "term": "Factor 2"
+            },
+            {
+              "p_adjusted": 0.10904186826929205,
+              "resampling_p_adjusted": 0.09,
+              "term": "Factor 3"
+            },
+            {
+              "p_adjusted": 0.23353725655342486,
+              "resampling_p_adjusted": null,
+              "term": "Factor 1:Factor 2"
+            },
+            {
+              "p_adjusted": 0.14944130546093254,
+              "resampling_p_adjusted": null,
+              "term": "Factor 1:Factor 3"
+            },
+            {
+              "p_adjusted": 0.857677573022542,
+              "resampling_p_adjusted": null,
+              "term": "Factor 2:Factor 3"
+            }
+          ],
+          "warnings": [
+            "Inference assumes independent runs and is conditional on the observed experimental inputs.",
+            "Exploratory simulation count: confidence intervals need more draws for final reporting.",
+            "HC0 robust covariance was used. HC3 not implemented in this pipeline: this pipeline has no reviewed HC3 leverage construction for the separate mean and precision parts. Configured fallback: HC0."
+          ]
+        },
+        {
+          "interval_coverage": {
+            "Factor 1 (0 vs 1) \u00d7 Factor 2 (0 vs 1)": {
+              "analytic": true,
+              "bootstrap": true
+            },
+            "Factor 1 (0 vs 1) \u00d7 Factor 3 (0 vs 1)": {
+              "analytic": true,
+              "bootstrap": true
+            },
+            "Factor 1: 0 vs 1": {
+              "analytic": false,
+              "bootstrap": false
+            },
+            "Factor 2 (0 vs 1) \u00d7 Factor 3 (0 vs 1)": {
+              "analytic": true,
+              "bootstrap": true
+            },
+            "Factor 2: 0 vs 1": {
+              "analytic": true,
+              "bootstrap": true
+            },
+            "Factor 3: 0 vs 1": {
+              "analytic": true,
+              "bootstrap": true
+            }
+          },
+          "outcome": "not_rejected",
+          "seed": 2164313146,
+          "selected_family": "beta",
+          "tests": [
+            {
+              "p_adjusted": 0.16906186935975098,
+              "resampling_p_adjusted": 0.09,
+              "term": "Factor 1"
+            },
+            {
+              "p_adjusted": 1.0,
+              "resampling_p_adjusted": 1.0,
+              "term": "Factor 2"
+            },
+            {
+              "p_adjusted": 1.0,
+              "resampling_p_adjusted": 1.0,
+              "term": "Factor 3"
+            },
+            {
+              "p_adjusted": 1.0,
+              "resampling_p_adjusted": null,
+              "term": "Factor 1:Factor 2"
+            },
+            {
+              "p_adjusted": 1.0,
+              "resampling_p_adjusted": null,
+              "term": "Factor 1:Factor 3"
+            },
+            {
+              "p_adjusted": 1.0,
+              "resampling_p_adjusted": null,
+              "term": "Factor 2:Factor 3"
+            }
+          ],
+          "warnings": [
+            "Inference assumes independent runs and is conditional on the observed experimental inputs.",
+            "Exploratory simulation count: confidence intervals need more draws for final reporting.",
+            "HC0 robust covariance was used. HC3 not implemented in this pipeline: this pipeline has no reviewed HC3 leverage construction for the separate mean and precision parts. Configured fallback: HC0."
+          ]
+        },
+        {
+          "interval_coverage": {
+            "Factor 1 (0 vs 1) \u00d7 Factor 2 (0 vs 1)": {
+              "analytic": true,
+              "bootstrap": true
+            },
+            "Factor 1 (0 vs 1) \u00d7 Factor 3 (0 vs 1)": {
+              "analytic": true,
+              "bootstrap": true
+            },
+            "Factor 1: 0 vs 1": {
+              "analytic": true,
+              "bootstrap": false
+            },
+            "Factor 2 (0 vs 1) \u00d7 Factor 3 (0 vs 1)": {
+              "analytic": true,
+              "bootstrap": true
+            },
+            "Factor 2: 0 vs 1": {
+              "analytic": true,
+              "bootstrap": true
+            },
+            "Factor 3: 0 vs 1": {
+              "analytic": true,
+              "bootstrap": true
+            }
+          },
+          "outcome": "not_rejected",
+          "seed": 1464326654,
+          "selected_family": "beta",
+          "tests": [
+            {
+              "p_adjusted": 1.0,
+              "resampling_p_adjusted": 0.42,
+              "term": "Factor 1"
+            },
+            {
+              "p_adjusted": 1.0,
+              "resampling_p_adjusted": 0.64,
+              "term": "Factor 2"
+            },
+            {
+              "p_adjusted": 0.8480316206391265,
+              "resampling_p_adjusted": 0.33,
+              "term": "Factor 3"
+            },
+            {
+              "p_adjusted": 1.0,
+              "resampling_p_adjusted": null,
+              "term": "Factor 1:Factor 2"
+            },
+            {
+              "p_adjusted": 1.0,
+              "resampling_p_adjusted": null,
+              "term": "Factor 1:Factor 3"
+            },
+            {
+              "p_adjusted": 1.0,
+              "resampling_p_adjusted": null,
+              "term": "Factor 2:Factor 3"
+            }
+          ],
+          "warnings": [
+            "Inference assumes independent runs and is conditional on the observed experimental inputs.",
+            "Exploratory simulation count: confidence intervals need more draws for final reporting.",
+            "HC0 robust covariance was used. HC3 not implemented in this pipeline: this pipeline has no reviewed HC3 leverage construction for the separate mean and precision parts. Configured fallback: HC0."
+          ]
+        }
+      ],
+      "summary": {
+        "all_simulations_bounds": [
+          0.3333333333333333,
+          0.3333333333333333
+        ],
+        "confidence": 0.95,
+        "denominator": "Reportable simulations only; withheld, failed and incomplete simulations excluded",
+        "failed": 0,
+        "incomplete": 0,
+        "interpretation": "Calibration applies only to the recorded model, design, data-generating process and analysis configuration. It is not validation of other reports or designs.",
+        "not_rejected": 4,
+        "rejected": 2,
+        "rejection_rate": 0.3333333333333333,
+        "reportable": 6,
+        "simulations": 6,
+        "uncertainty_high": 0.7772219044964879,
+        "uncertainty_low": 0.0432718682927417,
+        "uncertainty_method": "Two-sided Clopper\u2013Pearson exact binomial interval",
+        "withheld": 0
+      }
+    }
+  ]
+}

@@ -17,6 +17,7 @@ from .design import DesignBuilder, DesignSpec, cell_index, full_factorial_terms,
 from .diagnostics import diagnose
 from .engine import Model
 from .families import make_family
+from .fit_checks import custom_fit_checks
 from .inference import (
     Predictor,
     constraint_matrix,
@@ -78,7 +79,8 @@ def analyze_custom(frame: pd.DataFrame, config: dict) -> dict:
     model_family.configure(y, aux)
     model = Model.from_base(model_family, y, x, aux)
     fit = model.fit()
-    if not fit.converged or not fit.hessian_pd:
+    fit_checks = custom_fit_checks(fit, config)
+    if not fit_checks["accepted"]:
         raise ValueError("the requested model did not converge with usable information")
     diagnostic = diagnose(model, fit, cell_idx, labels, N_SIM_DIAGNOSTICS, rng_diagnostics)
     diagnostics = {k: v for k, v in diagnostic.items() if not k.startswith("_") and k not in ("ppc", "flags")}
@@ -91,10 +93,17 @@ def analyze_custom(frame: pd.DataFrame, config: dict) -> dict:
     )
     predictor = Predictor(model, builder)
     estimates = quantity_set.evaluate(*predictor.cells(fit.theta))
-    draws, failures = parametric_bootstrap(model, fit, predictor, quantity_set, config["n_boot"], boot_seed, 1, True)
+    refit_checks = []
+    draws, failures = parametric_bootstrap(
+        model, fit, predictor, quantity_set, config["n_boot"], boot_seed, 1, True, fit_config=config, audit=refit_checks
+    )
     quantities = quantity_set.meta.copy()
     quantities["estimate"] = estimates
-    quantities["ci_low"], quantities["ci_high"] = percentile_ci(draws, 0.95)
+    success = int(np.sum(np.isfinite(draws).all(axis=1)))
+    if success >= config.get("minimum_success_fraction", 0.9) * config["n_boot"]:
+        quantities["ci_low"], quantities["ci_high"] = percentile_ci(draws, 0.95)
+    else:
+        quantities["ci_low"], quantities["ci_high"] = np.nan, np.nan
     quantities["n_boot_ok"] = int(np.sum(~np.isnan(draws).any(axis=1)))
     quantities["n_boot_failed"] = failures
 
@@ -146,7 +155,14 @@ def analyze_custom(frame: pd.DataFrame, config: dict) -> dict:
     # Main effects only: interaction permutations are not justified for these multipart models.
     working = y / aux["trials"] if "trials" in aux else y
     working, scale_note = permutation_scale(working, model.family.effect_scale)
-    permutations = permutation_tests(working, frame, builder, config["n_perm"], rng_permutation)
+    permutations = permutation_tests(
+        working,
+        frame,
+        builder,
+        config["n_perm"],
+        rng_permutation,
+        minimum_success_fraction=config.get("minimum_success_fraction", 0.9),
+    )
     permutations["p_holm"] = holm(permutations.p_perm.to_numpy())
     withheld = [
         dict(term=term_name(term), statistic="Type III F (OLS, working scale)", n_perm=0, method="Permutation withheld")
@@ -155,9 +171,50 @@ def analyze_custom(frame: pd.DataFrame, config: dict) -> dict:
     ]
     permutations = pd.concat([permutations, pd.DataFrame(withheld)], ignore_index=True)
     permutations["working_scale"] = scale_note
+    permutations["procedure"] = np.where(permutations.n_perm > 0, "label_permutation", None)
+    permutations["kind"] = np.where(permutations.n_perm > 0, "permutation", None)
+    permutations.loc[permutations.n_perm == 0, "status"] = "not_run"
+    permutations["requested"] = config["n_perm"]
+    permutations["seed"] = config["seed"]
+    permutations["seed_stream"] = "SeedSequence(seed).spawn(1)[0].spawn(5)[4]"
     return dict(
         family=family,
+        model_specification=dict(
+            description=model.family.description,
+            mean_link=model.family.link,
+            blocks=[
+                dict(name=spec.name, kind=spec.kind, parameters=design.shape[1])
+                for spec, design in zip(model.specs, model.designs, strict=True)
+            ],
+            dispersion=model.family.dispersion,
+            aux_design=model.family.aux_design,
+            observations=len(y),
+            design_parameters=x.shape[1],
+            residual_design_df=len(y) - x.shape[1],
+        ),
+        covariance=dict(
+            requested="HC3",
+            computed="HC3",
+            implementation="Custom likelihood observed-information sandwich; per-observation scores divided by "
+            "1 − generalized leverage (clipped to [0, 0.999]); regression-block leverage",
+        ),
         tables=dict(
+            custom_bootstrap_checks=pd.DataFrame(refit_checks),
+            fit_execution=pd.DataFrame(
+                [
+                    dict(
+                        checks=fit_checks,
+                        attempts=[
+                            dict(
+                                method="Damped Newton with up to 30 damping attempts and step halving",
+                                checks=fit_checks,
+                            )
+                        ],
+                        maxiter=200,
+                        reportability_reason="Custom-engine numerical checks passed",
+                    )
+                ]
+            ),
             diagnostics=pd.DataFrame([diagnostics]),
             quantities=quantities,
             tests=tests,

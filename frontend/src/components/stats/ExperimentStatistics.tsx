@@ -33,8 +33,8 @@ export function ExperimentStatistics({ experiment, version }: { experiment: stri
   }
   const analyses = [...latest.values()]
   const pending = run.isPending || analyses.some(a => a.status === 'pending' || a.status === 'running')
-  const reports = analyses.filter(a => a.status === 'completed' && a.report_status === 'valid')
-  const failed = analyses.filter(a => a.status === 'failed')
+  const reports = analyses.filter(a => (a.status === 'completed' || a.status === 'incomplete') && a.report_status === 'valid')
+  const failed = analyses.filter(a => a.status === 'failed' || a.status === 'incomplete')
   const error = source.error || history.error || run.error
   const ready = !!version && !source.isError && (source.data?.n_measured_replicates ?? 0) > 0
 
@@ -48,7 +48,7 @@ export function ExperimentStatistics({ experiment, version }: { experiment: stri
     {error && <p role="alert" className="text-xs text-destructive">{error.message}</p>}
     {history.isLoading && <p role="status" className="text-xs text-muted-foreground">Loading statistics…</p>}
     {pending && <p role="status" className="text-xs text-muted-foreground">Metrics are being analyzed. You can leave this tab and return later.</p>}
-    {failed.map(a => <p key={a.id} role="alert" className="break-words text-xs text-destructive">{a.config.metric}: {a.error || 'Analysis failed. Please rerun the analysis.'}</p>)}
+    {failed.map(a => <p key={a.id} role="alert" className="break-words text-xs text-destructive">{a.config.metric}: {a.error || (a.status === 'incomplete' ? 'Analysis incomplete. Rerun to finish the requested procedures.' : 'Analysis failed. Please rerun the analysis.')}</p>)}
     {version && !history.isLoading && !history.error && !pending && reports.length === 0 && <p className="text-xs text-muted-foreground">No statistical reports are available for this experiment version. Analyze all metrics after collecting sufficient experiment results.</p>}
     <div className="space-y-2">
       {reports.map(analysis => <ReportRow key={analysis.id} experiment={experiment} analysis={analysis} />)}

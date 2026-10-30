@@ -56,13 +56,22 @@ def native_permutations(frame, config):
             if len(term) == 1
         ], None
     rng = np.random.default_rng(np.random.SeedSequence([config["seed"], 2202]))
-    result = permutation_tests(values, frame, builder, config["n_perm"], rng, batch=250)
+    result = permutation_tests(
+        values,
+        frame,
+        builder,
+        config["n_perm"],
+        rng,
+        batch=250,
+        minimum_success_fraction=config.get("minimum_success_fraction", 0.9),
+    )
     # F >= 0 by construction; a negative or non-finite value is cancellation error, not evidence.
     valid = np.isfinite(result.F_obs) & (result.F_obs >= 0) & (result.df1 > 0) & (result.df2 > 0)
     result.loc[~valid, "p_perm"] = np.nan
-    result["reason"] = np.where(valid, "", "Permutation check unavailable: the observed F statistic is invalid.")
+    result.loc[~valid, "reason"] = "Permutation check unavailable: the observed F statistic is invalid."
     result["working_scale"] = scale
     result["kind"] = "permutation"
     result["seed"] = config["seed"]
     result["seed_stream"] = 2202
+    result["procedure"] = "label_permutation"
     return result.to_dict(orient="records"), None

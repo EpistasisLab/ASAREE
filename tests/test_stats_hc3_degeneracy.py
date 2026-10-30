@@ -154,7 +154,7 @@ def test_multipart_models_record_hc0_instead_of_claiming_hc3():
 
     covariance, record = robust_covariance(BetaModel(y, x).fit(disp=0), "beta")
     assert record["computed"] == "HC0"
-    assert "HC3 unsupported" in record["reason"]
+    assert "HC3 not implemented" in record["reason"]
     assert np.isfinite(covariance).all()
 
 
@@ -336,7 +336,11 @@ def test_report_columns_carry_methods_and_model_fit_panel():
     assert [t["label"] for t in summary["tests"]] == ["Effort", "Feature budget", "Effort × Feature budget"]
     titles = [section["title"] for section in summary["details"]]
     assert titles == [
+        "Experimental design and analysis specification",
         "Model selection",
+        "Numerical fitting and acceptance",
+        "Covariance and dispersion",
+        "Diagnostic rules and validation scope",
         "Factor tests",
         "Comparisons",
         "Permutation and null-resampling checks",

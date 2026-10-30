@@ -10,7 +10,7 @@ import numpy as np
 import pytest
 import statsmodels.api as sm
 
-from asaree.services.stats_automatic import coerce_values, metric_information, plan_metric
+from asaree.services.stats_automatic import automatic_inputs, coerce_values, metric_information, plan_metric
 from asaree.services.stats_distribution import distribution_plot, saved_distribution_plot
 from asaree.services.stats_findings import describe_findings
 from asaree.services.stats_html import render_html
@@ -394,9 +394,17 @@ def test_missing_measurement_report_retains_the_producers_explanation():
 
 def test_numeric_string_ratings_keep_the_inferred_category_mapping():
     values = np.random.default_rng(2).choice(["1", "2", "3", "4", "5"], 200).tolist()
+    source = source_for(values, "Rating")
+    plan = plan_metric(source, "Rating")
+    converted, config, _ = automatic_inputs(source, StatsRequest(metric="Rating").model_dump(), plan)
+    assert plan["measurement_type"] == "ordinal"
+    assert plan["ordinal_levels"] == ["1.0", "2.0", "3.0", "4.0", "5.0"]
+    assert prepare_frame(converted, config)["outcome_raw"].tolist() == [str(float(v)) for v in values]
     result = analyze(values, "Rating")
-    assert result["validity"] == "valid"
-    assert result["family"] == "ordinal_logit"
+    assert result["validity"] == "unavailable"
+    assert "leverage/influence" in " ".join(result["summary"]["warnings"])
+    assert result["summary"]["tests"] == result["summary"]["effects"] == []
+    assert result["summary"]["provenance"]["candidates"][0]["family"] == "ordinal_logit"
 
 
 def test_declared_order_takes_precedence_over_numeric_coercion():
@@ -430,9 +438,18 @@ def test_two_unordered_category_labels_use_binary_probability_coding():
 
 def test_ordered_labels_are_normalized_without_losing_their_order():
     values = np.random.default_rng(15).choice(["Low", "low", " Medium ", "HIGH"], 200).tolist()
+    source = source_for(values)
+    plan = plan_metric(source, "measurement")
+    converted, config, _ = automatic_inputs(source, StatsRequest(metric="measurement").model_dump(), plan)
+    assert plan["category_labels"] == ["low", "medium", "high"]
+    assert plan["ordinal_levels"] == ["0", "1", "2"]
+    codes = {"Low": "0", "low": "0", " Medium ": "1", "HIGH": "2"}
+    assert prepare_frame(converted, config)["outcome_raw"].tolist() == [codes[v] for v in values]
     output = analyze(values)
-    assert output["family"] == "ordinal_logit"
-    assert output["validity"] == "valid"
+    assert output["validity"] == "unavailable"
+    assert "leverage/influence" in " ".join(output["summary"]["warnings"])
+    assert output["summary"]["tests"] == output["summary"]["effects"] == []
+    assert output["summary"]["provenance"]["candidates"][0]["family"] == "ordinal_logit"
 
 
 @pytest.mark.parametrize("kind", ["gaussian", "binary"])

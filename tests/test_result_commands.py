@@ -8,7 +8,53 @@ from pydantic import ValidationError
 
 from asaree.api.result_jobs import Command
 from asaree.services import result_exports
+from asaree.services.protocol_execution import ProtocolValidationError
 from asaree.services.result_jobs import eligible
+
+
+@pytest.mark.parametrize(
+    ("error", "expected"),
+    [
+        (
+            ProtocolValidationError("Publish the generated draft design before running this experiment."),
+            "Publish the generated draft design before running this experiment.",
+        ),
+        (ProtocolValidationError("x" * 600), "x" * 512),
+        (ValueError("Publication changed."), "Publication changed."),
+        (RuntimeError("private internal details"), "Command failed; retry preparation."),
+    ],
+)
+async def test_preparation_failure_preserves_validation_messages(monkeypatch, caplog, error, expected):
+    from contextlib import asynccontextmanager
+    from unittest.mock import AsyncMock
+
+    from asaree.services import result_jobs
+
+    job = SimpleNamespace(id=uuid.uuid4(), kind="plan", status="pending")
+    db = SimpleNamespace(
+        scalar=AsyncMock(return_value=True),
+        get=AsyncMock(return_value=job),
+        execute=AsyncMock(),
+    )
+
+    @asynccontextmanager
+    async def session():
+        yield db
+
+    monkeypatch.setattr(result_jobs, "get_session", session)
+    monkeypatch.setattr(result_jobs, "job_scope", AsyncMock(return_value=SimpleNamespace(row_plan=None)))
+    prepare = AsyncMock(side_effect=error)
+    monkeypatch.setattr(result_jobs, "prepare_step", prepare)
+
+    assert await result_jobs._advance_command(job.id) is False
+
+    prepare.assert_awaited_once()
+    db.execute.assert_awaited_once()
+    values = db.execute.call_args.args[0].compile().params
+    assert values["status"] == "failed"
+    assert values["error"] == expected
+    record = next(record for record in caplog.records if record.message == "result_command_failed")
+    assert record.exc_info[1] is error
 
 
 def test_pending_and_failed_work_never_implicitly_reruns_finished_or_active_slots():

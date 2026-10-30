@@ -285,7 +285,8 @@ export interface AgentModelConfigData {
   temperature?: number | null
   effort?: string | null
   resolved_capabilities?: ModelCapabilities | null
-  // Unset sampling values use the provider default or Motoro's fallback.
+  resolved_capabilities_origin?: 'override' | null
+  // Unset sampling values use advertised defaults or are omitted.
   // Nullable so ModelNodeInspector's Input can be backspaced to empty without
   // snapping to a forced value -- null is a real, persisted "not set yet"
   // state flagged by ModelNode's warning triangle and nodeConfigIssues.ts's

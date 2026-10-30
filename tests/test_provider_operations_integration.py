@@ -28,8 +28,7 @@ from asaree.services.llm_model_discovery import discover_models
 from asaree.services.provider_config import make_provider_config, provider_config
 from asaree.services.user_llm_settings import encrypt
 
-RELEASE_TAG = "v0.14.0"
-RELEASE_COMMIT = "bdb1dd9d62dbcfb9b6e131baedda7787f71c5eb8"
+INTEGRATION_COMMIT = "52dfd0720d9d10850c1e3099f4149b3c392192b9"
 PROVIDERS = ["anthropic", "openai", "azure_foundry", "openrouter", "local"]
 OWNER = uuid.UUID("11111111-1111-1111-1111-111111111111")
 SECRET = "provider-secret-for-tests"
@@ -151,7 +150,8 @@ async def test_defaults_and_provenance_survive_cache_and_execution(monkeypatch):
         {"provider": "openrouter", "model": entry["id"], "temperature": 0.7}, owner_id=OWNER
     )
     assert config.temperature == 0.7
-    assert config.resolved_capabilities.default_temperature == 0
+    assert config.resolved_capabilities is None
+    assert config.model_metadata == metadata
 
 
 @pytest.mark.parametrize("provider", ["openrouter", "anthropic"])
@@ -205,12 +205,15 @@ async def test_defaults_without_support_survive_application_cache_without_changi
     if preference is not None:
         data["temperature"] = preference
     original = ModelConfig(**data)
-    expected_sampling = _sampling_kwargs(original, f"{provider}/{model}")
     resolved = await model_config.build_model_config(data, owner_id=OWNER)
     assert resolved.temperature == original.temperature
     assert resolved.effort == original.effort
-    assert resolved.resolved_capabilities == metadata.capabilities
-    assert _sampling_kwargs(resolved, f"{provider}/{model}") == expected_sampling == {}
+    assert resolved.resolved_capabilities is None
+    assert resolved.model_metadata == metadata
+    assert _sampling_kwargs(resolved, f"{provider}/{model}") == {
+        "extra_body": {"temperature": 0 if preference is None else preference},
+        "drop_params": False,
+    }
     assert providers.get_model_defaults(model=model, listing=cached) == metadata.defaults
 
 
@@ -288,7 +291,7 @@ async def endpoint(monkeypatch):
         yield app, client
 
 
-async def test_endpoints_keep_missing_credentials_public_catalog_and_limits(endpoint, monkeypatch):
+async def test_endpoints_keep_missing_credentials_unknown_metadata_and_limits(endpoint, monkeypatch):
     _, client = endpoint
     missing = await client.get("/llm-settings/openai/connection")
     assert missing.status_code == 404
@@ -297,8 +300,8 @@ async def test_endpoints_keep_missing_credentials_public_catalog_and_limits(endp
     catalog = await client.get("/llm-settings/openai/models")
     assert catalog.status_code == 200
     assert set(catalog.json()) == {"models", "source", "note"}
-    assert catalog.json()["source"] == "static"
-    assert catalog.json()["models"]
+    assert catalog.json()["source"] == "error"
+    assert catalog.json()["models"] == []
     for action in ("connection", "models"):
         monkeypatch.setattr(api, "check_rate_limit", AsyncMock(return_value=(False, 23)))
         response = await client.get(f"/llm-settings/openai/{action}")
@@ -505,7 +508,7 @@ async def test_real_azure_check_seeds_identical_endpoint_model_listing(endpoint,
     assert checked.json()["status"] == "ok"
     assert checked.json()["models"] == menu.json()["models"]
     assert menu.json()["models"][0]["id"] == "prod-chat"
-    assert menu.json()["models"][0]["supports_temperature"] is True
+    assert menu.json()["models"][0]["supports_temperature"] is None
     assert len(requests) == 1
 
 
@@ -596,9 +599,8 @@ async def test_anthropic_outage_preserves_cached_live_metadata_and_error(endpoin
 def test_exact_installed_release_and_standalone_consumer(tmp_path):
     distribution = importlib.metadata.distribution("motoro")
     origin = json.loads(distribution.read_text("direct_url.json"))
-    assert distribution.version == RELEASE_TAG.removeprefix("v")
-    assert origin["vcs_info"]["commit_id"] == RELEASE_COMMIT
-    assert origin["vcs_info"]["requested_revision"] == RELEASE_TAG
+    assert origin["vcs_info"]["commit_id"] == INTEGRATION_COMMIT
+    assert origin["vcs_info"]["requested_revision"] == INTEGRATION_COMMIT
     assert "dir_info" not in origin
     assert Path(distribution.locate_file("motoro/services/providers.py")).is_file()
     consumer = """

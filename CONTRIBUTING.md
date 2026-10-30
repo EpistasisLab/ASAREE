@@ -53,7 +53,9 @@ not a production release dependency policy.
 The provider-operations integration was first tested against Motoro commit
 `227311f683e6be629ac4e7b2cc93a1ed1323d084`
 ([EpistasisLab/motoro#15](https://github.com/EpistasisLab/motoro/pull/15)). Motoro
-subsequently released those changes in `v0.14.0`, now pinned by ASAREE. For future
+subsequently released those changes in `v0.14.0`. The current provider-driven
+sampling integration pins Motoro develop commit
+`52dfd0720d9d10850c1e3099f4149b3c392192b9` pending a tested release tag. For future
 integrations, **release Motoro first** and complete this sequence before ASAREE's
 production release:
 
@@ -72,6 +74,34 @@ production release:
 For a hotfix, branch from current `main`, validate and merge its PR into `main`,
 then open `main` → `develop` and merge with a merge commit. Keep any release tag
 or deployment a deliberate operation.
+
+## Provider-driven sampling migration
+
+Discovered `model_metadata` retains provider provenance. `resolved_capabilities`
+is reserved for deliberate caller overrides. The model-list and custom-capability
+responses keep their flat capability fields for compatibility and add the full
+`model_metadata`; previews send that full metadata instead of treating discovery
+as an override. Unknown support permits explicit input; unset, unadvertised
+defaults remain omitted.
+
+Redis model-list namespaces use v6, invalidating old fresh, retained, and recent
+results. Frontend model-list, capability, and sampling query keys are versioned
+too. No cache deletion or database backfill is needed.
+
+Saved draft capability rules with no recorded origin require an explicit choice
+in the Model inspector before publication: refresh Automatic metadata or keep
+them as a deliberate override. This also applies to whole-model factor levels.
+Provider discovery copies refresh when a draft executes or publishes.
+
+New sampling snapshots use schema version 2 and record explicit input, discovered
+facts, overrides, sources, omission reasons, provider request sampling fields,
+connection identity, discovery time (unknown when unavailable), and resolver and
+Motoro versions. Published execution never rediscovers metadata. Unadvertised,
+omitted defaults remain provider-controlled and cannot promise exact replay.
+
+Existing publications are immutable. Snapshots from the older resolver require
+their original Motoro runtime for replay; this integration refuses to silently
+reinterpret them. Republish the editable draft to opt into the new policy.
 
 ## CI and release safety
 

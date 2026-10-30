@@ -264,6 +264,35 @@ async def test_corrupt_or_legacy_cache_is_rediscovered(redis, monkeypatch):
     assert await lookup() == listing()
 
 
+async def test_catalog_enriched_cache_layers_are_not_reused(redis, monkeypatch):
+    import time
+
+    previous = cache._key(OWNER, "azure_foundry").replace(":v6:", ":v5:")
+    old_listing = listing("catalog-enriched")
+    encoded = cache._dump(old_listing, now=time.time())
+    redis.values[previous] = encoded
+    redis.values[f"{previous}:recent"] = encoded
+    cache._recent[previous] = (time.monotonic() + 30, old_listing)
+    fresh = listing("provider-facts")
+    discover = AsyncMock(return_value=fresh)
+    monkeypatch.setattr(cache, "discover_models", discover)
+    assert await lookup() == fresh
+    discover.assert_awaited_once()
+
+
+async def test_discovery_audit_retains_observation_time_without_credentials(redis):
+    saved = credential()
+    await seed(redis, listing(), setting=saved, age=60)
+    context = await cache.discovery_context(user_id=OWNER, provider="azure_foundry", setting=saved)
+    assert context["api_base"] == saved.api_base
+    assert context["discovered_at"] < cache.time.time() - 59
+    assert context["credential_revision"] != saved.api_key_encrypted
+    assert saved.api_key_encrypted not in str(context)
+    other = await cache.discovery_context(user_id=OWNER, provider="azure_foundry", setting=credential("changed"))
+    assert other["discovered_at"] is None
+    assert other["credential_revision"] != context["credential_revision"]
+
+
 async def test_user_and_provider_scoping(redis, monkeypatch):
     await seed(redis, listing("private"))
     monkeypatch.setattr(cache, "discover_models", AsyncMock(return_value=listing("other")))

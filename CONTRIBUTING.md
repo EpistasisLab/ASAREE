@@ -108,9 +108,34 @@ reinterpret them. Republish the editable draft to opt into the new policy.
 
 ## CI and release safety
 
-CI runs on pushes to `develop` and `main`, and on PRs targeting either branch.
+CI runs on pushes to `develop` and `main`, and when a PR targeting either branch
+opens, reopens, or receives commits. Title, description, label, and review edits
+do not trigger runs. A small dispatcher selects the relevant jobs from the full
+Git diff; the rules live in `.github/ci/scope.py`.
+
+| Changed files | Suites |
+| --- | --- |
+| Documentation, standard README/agent instructions, license, PR/issue templates, CODEOWNERS | Neither |
+| `frontend/` code, assets, configuration, dependencies | Frontend |
+| `src/`, `tests/`, `sdk/`, `workspace-core/`, `mcp-servers/`, `scripts/`, `personas/`, Python manifests/locks | Backend |
+| Workflow/dispatcher code, shared build/container configuration, or unrecognized paths | Both |
+
+Documentation exceptions apply before directory rules. Empty diffs skip both
+suites. Mixed changes select every affected suite; deletions and both sides of
+renames count. PRs use the full diff from their merge base; pushes include every
+commit since the previous branch tip. Unknown comparison commits run both suites.
+
+The dispatcher runs dependency-free tests even for docs-only changes. Skipped
+jobs still complete the existing required checks, without installing dependencies
+or starting PostgreSQL. Do not add workflow-level path filters or commit-message
+skip directives: missing required checks can block a docs-only PR. A failed
+dispatcher blocks merging through the required backend check. The feature/fix PR
+target guard runs even for docs-only changes.
+
 Backend CI checks the lockfile, lints, migrates disposable PostgreSQL databases,
 and runs the full test suite. Frontend CI type-checks, runs unit tests, and lints.
+Integration checks on `develop` and `main` remain enabled and use the same scope
+rules; release PRs retain checks against their target branch.
 
 The full backend mypy step is currently warn-only while its existing backlog is
 resolved; oxlint warnings also do not fail frontend CI. Report warnings separately

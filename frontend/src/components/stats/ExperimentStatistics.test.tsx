@@ -99,6 +99,31 @@ it('shows concise statistics and a report download', async () => {
   expect(screen.getByText(/checks whether the factor contributes to the fitted model/)).toBeInTheDocument()
 })
 
+it('renders the primary interval result even when a stored analytic result is significant', async () => {
+  const primary: StatsAnalysis = { ...saved, output: { ...saved.output!, summary: { ...saved.output!.summary!,
+    primary_analysis: 'parametric_bootstrap_intervals', confidence_level: .95,
+    effects: [{ ...saved.output!.summary!.effects[0], primary_status: 'completed', primary_ci_low: .6, primary_ci_high: 1.001 }],
+  } } }
+  vi.spyOn(statsApi, 'history').mockResolvedValue([primary])
+  vi.spyOn(statsApi, 'get').mockResolvedValue(primary)
+  mount()
+  fireEvent.click(await screen.findByRole('button', { name: /Duration/ }))
+  expect(await screen.findByText('Primary interval result')).toBeInTheDocument()
+  expect(screen.getByText('No clear evidence of a difference')).toBeInTheDocument()
+  expect(screen.getByText(/primary parametric-bootstrap interval found no clear evidence/)).toBeInTheDocument()
+})
+
+it('shows descriptive-only reports without suggesting a regression model was fitted', async () => {
+  const descriptive: StatsAnalysis = { ...saved, report_status: 'descriptive', output: { ...saved.output!, family: 'descriptive',
+    summary: { ...saved.output!.summary!, status: 'descriptive', tests: [], effects: [] } } }
+  vi.spyOn(statsApi, 'history').mockResolvedValue([descriptive])
+  vi.spyOn(statsApi, 'get').mockResolvedValue(descriptive)
+  mount()
+  fireEvent.click(await screen.findByRole('button', { name: /Duration/ }))
+  expect(await screen.findByText('Descriptive only. No uncertainty or statistical conclusions are estimated.')).toBeInTheDocument()
+  expect(screen.queryByText(/Selected regression model distribution/)).not.toBeInTheDocument()
+})
+
 it('keeps completed analytic results visible while marking interrupted resampling incomplete', async () => {
   const incomplete: StatsAnalysis = { ...saved, status: 'incomplete', output: { ...saved.output!, summary: {
     ...saved.output!.summary!, execution_status: 'incomplete',

@@ -11,6 +11,7 @@ export interface StatsConfig {
   n_perm: number
   seed: number
   alpha?: number
+  confidence_level?: number
   minimum_success_fraction?: number
 }
 export interface StatsSource {
@@ -41,12 +42,14 @@ export interface StatsAnalysis {
     tables: Record<string, StatsRow[]>
     notes: string[]
     report?: string
-    validity?: 'valid' | 'unreliable' | 'unavailable'
+    validity?: 'valid' | 'unreliable' | 'unavailable' | 'descriptive'
     summary?: StatsSummary
   }
 }
 
 export interface StatsSummary {
+  primary_analysis?: 'parametric_bootstrap_intervals'
+  confidence_level?: number
   distribution?: {
     n: number
     minimum: number
@@ -63,7 +66,7 @@ export interface StatsSummary {
   alpha?: number
   execution_status?: 'completed' | 'incomplete'
   metric: string
-  status: 'valid' | 'unreliable' | 'unavailable'
+  status: 'valid' | 'unreliable' | 'unavailable' | 'descriptive'
   description: string
   findings: string[]
   tests: { effect: string; p_adjusted: number | null; result: string; method?: string; purpose?: string
@@ -78,6 +81,8 @@ export interface StatsSummary {
     interval_method?: string | null
     bootstrap_ci_low?: number | null; bootstrap_ci_high?: number | null
     bootstrap_status?: string; interval_agreement?: string
+    primary_ci_low?: number | null; primary_ci_high?: number | null
+    primary_status?: string; primary_method?: string; analytic_result?: string
     ci_low: number | null; ci_high: number | null; p_adjusted: number | null; result: string
   }[]
   warnings: string[]

@@ -17,6 +17,7 @@ from pathlib import Path
 
 import numpy as np
 
+from asaree.services.stats_automatic import REPORT_VERSION
 from asaree.services.stats_source import StatsRequest, compute
 from asaree.stats.validation import rejection_summary
 
@@ -40,7 +41,9 @@ def main():
     studies = []
     result = dict(
         execution_status="incomplete",
-        scope="Native beta regression only; separate from any earlier six-report validation",
+        scope="Native beta with joint mean/precision expected-information HC3, primary fitted-model parametric "
+        "intervals and fitted-null quantile-residual permutation. Separate from earlier report validation.",
+        policy_version=REPORT_VERSION,
         configuration=config,
         seed=args.seed,
         python=platform.python_version(),
@@ -64,7 +67,8 @@ def main():
             runs_per_condition="20, 25, 30 cyclically" if unbalanced else 20,
             data_generating_process="Independent Beta(3, 5) observations; all factor effects zero; "
             "common precision 8; no blocks or repeated measures",
-            rejection_event="Any analytic Holm-adjusted factor-test p < configured alpha",
+            rejection_event="Secondary omnibus family: any analytic Holm-adjusted factor-test p < configured alpha. "
+            "Primary interval noncoverage is reported separately per comparison, not pooled as independent trials.",
             requested_simulations=args.simulations,
             execution_status="incomplete",
             simulations=records,
@@ -109,6 +113,8 @@ def main():
                         seed=seed,
                         outcome=outcome,
                         selected_family=output["family"],
+                        covariance=summary.get("covariance"),
+                        primary_analysis=summary.get("primary_analysis"),
                         tests=[
                             dict(
                                 term=t["effect"],

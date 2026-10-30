@@ -1,5 +1,28 @@
 import type { StatsSummary } from '@/types/stats'
 
+export function primaryComparisonResult(effect: StatsSummary['effects'][number]): string {
+  const low = effect.primary_ci_low
+  const high = effect.primary_ci_high
+  if (effect.primary_status !== 'completed' || low == null || high == null
+    || !Number.isFinite(low) || !Number.isFinite(high) || low > high) return 'Primary inference unavailable'
+  const nullValue = effect.scale.startsWith('ratio') ? 1 : 0
+  return low > nullValue || high < nullValue ? 'Evidence of a difference' : 'No clear evidence of a difference'
+}
+
+export function describeStatsReportFindings(report: StatsSummary): string[] {
+  const secondary = describeStatsFindings(report.tests, report.alpha)
+  if (report.primary_analysis !== 'parametric_bootstrap_intervals') return secondary
+  const primary = report.effects.map(effect => {
+    const result = primaryComparisonResult(effect)
+    if (result === 'Primary inference unavailable') {
+      return `Primary parametric-bootstrap inference for ${effect.comparison} was unavailable. Sensitivity results do not replace it.`
+    }
+    const evidence = result === 'Evidence of a difference' ? 'evidence' : 'no clear evidence'
+    return `The primary parametric-bootstrap interval found ${evidence} of a difference for ${effect.comparison} (pointwise; not multiplicity-adjusted).`
+  })
+  return [...primary, ...secondary.map(finding => `Secondary factor test: ${finding}`)]
+}
+
 // Summarize numeric tests using fixed rules. Never display stored narrative.
 export function describeStatsFindings(tests: StatsSummary['tests'], alpha = .05): string[] {
   function evidence(p: number | null | undefined) {

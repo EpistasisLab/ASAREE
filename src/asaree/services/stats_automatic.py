@@ -19,7 +19,7 @@ from statsmodels.stats.multitest import multipletests
 from asaree.services.stats_specification import design_specification, specification_section
 from asaree.stats.analysis import analyze
 
-REPORT_VERSION = 4
+REPORT_VERSION = 5
 ORDERED_LABELS = (
     ("very low", "low", "medium", "high", "very high"),
     ("strongly disagree", "disagree", "neutral", "agree", "strongly agree"),
@@ -517,8 +517,11 @@ def analyze_automatic(source: dict, config: dict) -> dict:
             )
         if len(source.get("protocol_revision_ids", [])) > 1:
             raise ValueError("Runs span different published protocols; statistical pooling was withheld.")
+        constant = constant_outcome_report(source, config, plan)
+        if constant is not None:
+            return constant
         dependence = source.get("dependence", {})
-        if any(dependence.values()) or source.get("design_structure"):
+        if any(dependence.values()) or source.get("design_structure") or config.get("exchangeability_blocks"):
             raise ValueError(
                 "Paired, blocked, clustered, covariate-adjusted or repeated observations require a specified "
                 "design/dependence model; this automatic path has not implemented it. Independent-run tests withheld."
@@ -568,6 +571,7 @@ def analyze_automatic(source: dict, config: dict) -> dict:
                         n_parameters=fit.get("n_parameters"),
                         likelihood_basis=fit.get("likelihood_basis"),
                         fit_execution=output["tables"].get("fit_execution", []),
+                        diagnostics=output["tables"].get("diagnostics", []),
                         **({} if valid else {"reason": fit.get("exclusion_reason") or "fit failed reliability checks"}),
                     )
                 )
@@ -580,6 +584,10 @@ def analyze_automatic(source: dict, config: dict) -> dict:
                     dict(family=family, name=DISTRIBUTION_NAMES.get(family, family), usable=False, reason=str(exc))
                 )
         if not fitted:
+            descriptive = constant_outcome_report(source, resolved, plan, within_conditions=True)
+            if descriptive is not None:
+                descriptive["summary"]["provenance"]["candidates"] = candidates
+                return descriptive
             reason = "; ".join(f"{r['family']}: {r.get('reason', 'fit failed reliability checks')}" for r in candidates)
             result = unavailable(source, config, f"No usable model. {reason}")
             result["summary"]["provenance"]["candidates"] = candidates
@@ -635,8 +643,8 @@ def analyze_automatic(source: dict, config: dict) -> dict:
                         status="not_run",
                         availability="not_implemented",
                         reason=(
-                            "Interaction permutation withheld: the custom multipart model has no exchangeable "
-                            "residual, and null-model simulation is not implemented for it."
+                            "Fitted-null quantile-residual permutation for this custom multipart family is not "
+                            "implemented. No parametric-bootstrap p-value is substituted."
                         ),
                     )
         else:
@@ -681,9 +689,10 @@ def analyze_automatic(source: dict, config: dict) -> dict:
         constant = int((frame.groupby(cell_columns).outcome.nunique() == 1).sum())
         if constant and not output.get("inference_reason"):
             warnings.append(
-                f"In {constant} of {len(counts)} conditions every replicate had the same value. The robust "
-                "covariance treats those condition means as having no sampling variability, so tests and intervals "
-                "that rely on them may be too narrow."
+                f"In {constant} of {len(counts)} conditions every replicate had the same value. Analytic robust "
+                "sensitivity uncertainty for these conditions may collapse. Primary parametric intervals model "
+                "variation instead and depend on the fitted distribution's assumptions. Isolated constant "
+                "conditions are warnings, not an automatic exclusion criterion."
             )
         output["tables"]["automatic_candidates"] = candidates
         levels = {name: sorted(frame[f"factor_{i}"].unique()) for i, name in enumerate(factors)}
@@ -691,6 +700,8 @@ def analyze_automatic(source: dict, config: dict) -> dict:
         output["summary"] = build_summary(
             output, source, resolved, plan, family, warnings, model_selection=model_selection, levels=levels
         )
+        if str(output.get("inference_reason", "")).startswith("Exact fit:"):
+            output["validity"] = output["summary"]["status"] = "descriptive"
         if source.get("demo"):
             output["summary"]["description"] = "SYNTHETIC DEMONSTRATION. " + output["summary"]["description"]
         output["summary"]["provenance"]["treatment_labels"] = {
@@ -712,6 +723,95 @@ def analyze_automatic(source: dict, config: dict) -> dict:
         return json_safe(output)
     except (ValueError, KeyError) as exc:
         return unavailable(source, config, str(exc))
+
+
+def constant_outcome_report(source, config, plan, within_conditions=False):
+    """Describe identical observed values without pretending to estimate uncertainty."""
+    from asaree.services.stats_distribution import observed_distribution
+
+    values, samples = [], []
+    for row in source["rows"]:
+        raw = row.get("metrics", {}).get(config["metric"])
+        value = plan["conversion"].get(str(raw), raw)
+        if not number(value):
+            continue
+        if plan.get("denominator"):
+            trials = row["metrics"].get(plan["denominator"])
+            if trials is None:
+                continue
+            if (
+                not number(trials)
+                or trials <= 0
+                or trials != round(trials)
+                or value < 0
+                or value > trials
+                or value != round(value)
+            ):
+                raise ValueError("Binomial counts require integer successes and positive integer trials.")
+            value = value / trials
+        values.append(float(value))
+        samples.append((row.get("factors", {}), float(value)))
+    if not values:
+        return None
+    condition_rows = []
+    if np.ptp(values) != 0:
+        if not within_conditions:
+            return None
+        factors = config["factors"]
+        groups = {}
+        for settings, value in samples:
+            if any(settings.get(name) is None for name in factors):
+                return None
+            key = tuple(json.dumps(settings[name], sort_keys=True, default=str) for name in factors)
+            groups.setdefault(key, []).append(value)
+        if not groups or any(len(group) < 2 or np.ptp(group) != 0 for group in groups.values()):
+            return None
+        mappings = factor_labels(source, factors)
+        condition_rows = [
+            dict(
+                condition=", ".join(
+                    f"{name}={mappings[name].get(value, value)}" for name, value in zip(factors, key, strict=True)
+                ),
+                n=len(group),
+                value=group[0],
+            )
+            for key, group in sorted(groups.items())
+        ]
+    reason = (
+        "All measured outcomes are identical. Only observed descriptive summaries are reported; "
+        "tests, fitted uncertainty and resampling are not run. Identical observations do not prove "
+        "that the population outcome is deterministic."
+    )
+    if condition_rows:
+        reason = (
+            "All repeated measurements within each selected observed condition are identical, and no "
+            "inferential candidate passed its acceptance checks. Descriptive condition summaries are shown. "
+            "This observation pattern does not prove a deterministic population process."
+        )
+    output = unavailable(source, config, reason)
+    output.update(
+        family="descriptive",
+        validity="descriptive",
+        n_observations=len(values),
+        n_excluded=len(source["rows"]) - len(values),
+    )
+    output["summary"].update(
+        status="descriptive",
+        description=reason,
+        distribution=observed_distribution(values),
+        metric_info=metric_information(source, config["metric"], plan),
+    )
+    if condition_rows:
+        output["tables"]["observed_conditions"] = condition_rows
+        output["summary"]["details"] = [
+            dict(
+                title="Observed condition summaries",
+                items=[reason],
+                columns=[("condition", "Condition"), ("n", "Observed replicates"), ("value", "Observed value")],
+                rows=condition_rows,
+            )
+        ]
+    return output
 
 
 def selection_summary(output, family, candidates, rule, constant_cells, n_cells):
@@ -811,6 +911,9 @@ def build_summary(output, source, config, plan, family, warnings, model_selectio
             return raw.replace("HC3 Wald", "HC3 Wald chi-square test", 1)
         return raw
 
+    def interval_bound(value):
+        return repr(float(value)) if value != 1 and abs(value - 1) < 0.001 else f"{value:.6g}"
+
     specialized = family in {"zoib", "gamma_hurdle", "betabinomial"}
     covariance = output.get("covariance") or (
         dict(requested="HC3", computed="HC3", implementation="custom likelihood engine (generalized HC3)")
@@ -844,11 +947,19 @@ def build_summary(output, source, config, plan, family, warnings, model_selectio
             dict(requested=config["n_boot"], attempted=0, successful=0, failed=0, status="Unavailable"),
         )
     bootstrap = compact_refits(bootstrap)
+    if bootstrap.get("procedure") != "fitted_model_parametric_bootstrap":
+        warnings.append(
+            "Primary parametric-bootstrap intervals were not requested. "
+            "Case-bootstrap and analytic sensitivity results do not replace them."
+        )
     permutation_rows = {
         label(row["term"]): compact_refits(row) for row in output["tables"].get("permutation_tests", [])
     }
     if bootstrap["status"] != "completed" and not inference_reason:
-        warnings.append(f"Bootstrap intervals unavailable: {bootstrap['status']}. Analytic inference is retained.")
+        warnings.append(
+            f"Primary bootstrap intervals unavailable: {bootstrap['status']}. "
+            "Analytic results are sensitivity analyses and do not replace primary inference."
+        )
     if output.get("permutation_reason"):
         warnings.append(output["permutation_reason"])
     if inference_reason:
@@ -950,6 +1061,29 @@ def build_summary(output, source, config, plan, family, warnings, model_selectio
             )
         )
     family_sizes = {}
+    from asaree.services.stats_findings import primary_comparison_result
+
+    for effect in effects:
+        effect["analytic_result"] = effect["result"]
+        primary = (
+            bootstrap.get("procedure") == "fitted_model_parametric_bootstrap"
+            and effect["bootstrap_status"] == "completed"
+        )
+        effect.update(
+            primary_ci_low=effect["bootstrap_ci_low"] if primary else None,
+            primary_ci_high=effect["bootstrap_ci_high"] if primary else None,
+            primary_status="completed" if primary else "unavailable",
+            primary_method=bootstrap.get("method")
+            if primary
+            else "Not run: "
+            + (
+                effect["bootstrap_status"]
+                if bootstrap.get("procedure") == "fitted_model_parametric_bootstrap"
+                else "the request selected a case-bootstrap sensitivity analysis"
+            ),
+            primary_confidence_level=config.get("confidence_level", 0.95),
+        )
+        effect["result"] = primary_comparison_result(effect)
     for effect in effects:
         if effect["p_adjusted"] is not None:
             key = INTERACTION_SIGN.join(effect["factors"] or [effect["holm_family"] or "other"])
@@ -1158,7 +1292,9 @@ def build_summary(output, source, config, plan, family, warnings, model_selectio
                     "gamma": "A common Gamma shape is estimated by ML for AIC; the GLM fit uses Pearson dispersion. "
                     "Dispersion cancels from the explicitly constructed robust sandwich.",
                     "beta": "A single intercept-only precision is estimated jointly with the logit mean model; "
-                    "A computed sandwich includes mean and precision scores with observed-information bread.",
+                    "The joint mean/precision sandwich uses expected-information bread, including cross-information. "
+                    "Generalized leverage is trace(H^-1 I_i); both mean and precision parameters contribute. "
+                    "The HC3 meat sums s_i s_i^T / (1-h_i)^2; leverage is not clipped.",
                     "negbin": "NB2 dispersion alpha is estimated jointly; its score and observed information "
                     "enter the sandwich.",
                     "poisson": "Poisson variance equals its mean; no free dispersion parameter is estimated.",
@@ -1180,7 +1316,11 @@ def build_summary(output, source, config, plan, family, warnings, model_selectio
                 "0.001 and absolute skewness exceeds 1 (at least 20 observations).",
                 f"Discrete/beta/ordinal absolute parameters above {config.get('maximum_absolute_parameter', 30):g} are "
                 "flagged as boundary fits. Mean probabilities outside [1e-8, 1 − 1e-8] flag separation; NB2 alpha "
-                "below 1e-6 is treated as a boundary fit. These are inherited rules pending statistical review.",
+                "below 1e-6 is treated as a boundary fit. Thresholds are recorded in the saved request.",
+                f"Information condition numbers above {config.get('maximum_information_condition', 1e10):g}, "
+                "leverage at least 1 − 1e-8, fitted-support violations, and generalized Cook distance above "
+                f"{config.get('maximum_cooks_distance', 1):g} are critical failures. The same configured checks "
+                "apply to initial fits and refits. Missing diagnostics are explicitly recorded, not marked as passed.",
                 "Finite estimates, usable information and reproducible numerical calculations are numerical checks. "
                 "They do not establish the calibration of p-values or confidence-interval coverage.",
                 "No experiment-specific simulation validation is attached to this report. Earlier validation of other "
@@ -1243,12 +1383,16 @@ def build_summary(output, source, config, plan, family, warnings, model_selectio
                 "Each comparison uses the model's predicted mean for every condition, averaged with equal weight "
                 "over the settings named below. Ratios divide the first-listed setting by the second; differences "
                 "subtract the second from the first. Ratio tests and intervals use the log ratio and delta method; "
-                "intervals are back-transformed to stay positive."
+                "intervals are back-transformed to stay positive. These are analytic sensitivity intervals. "
+                "Primary inference uses fitted-model parametric-bootstrap percentile intervals."
             ],
             columns=[
                 ("target", "Target"),
                 ("averaged", "Averaged over"),
-                ("method", "Method"),
+                ("primary_interval", "Primary parametric-bootstrap interval"),
+                ("primary_method", "Primary method"),
+                ("method", "Sensitivity method"),
+                ("analytic_result", "Sensitivity analytic result"),
                 ("covariance", "Covariance"),
                 ("null", "Null"),
                 ("interpretation", "Interpretation"),
@@ -1257,12 +1401,15 @@ def build_summary(output, source, config, plan, family, warnings, model_selectio
                 dict(
                     target=f"{e['comparison']}: {e['target'] or ''}",
                     averaged=e["averaged_over"] or "—",
+                    primary_interval=f"{interval_bound(e['primary_ci_low'])} to {interval_bound(e['primary_ci_high'])}"
+                    if e["primary_status"] == "completed"
+                    else "Primary inference unavailable",
+                    primary_method=e["primary_method"],
+                    analytic_result=e["analytic_result"],
                     method=f"{e['method']}; {e['interval_method']}" if e["interval_method"] else e["method"],
                     covariance=e["covariance"] or "—",
                     null=e["null_hypothesis"] or "—",
-                    interpretation=e["result"] + ". " + (e["interpretation"] or "")
-                    if e["p_adjusted"] is not None
-                    else f"Descriptive only. Unavailable: {e['unavailable_reason']}",
+                    interpretation=e["result"] + ". " + (e["interpretation"] or ""),
                 )
                 for e in effects
             ],
@@ -1346,6 +1493,8 @@ def build_summary(output, source, config, plan, family, warnings, model_selectio
         )
     )
     bootstrap_items = [
+        f"Bootstrap confidence level: {config.get('confidence_level', 0.95):.0%}; percentile cutoffs "
+        f"{(1 - config.get('confidence_level', 0.95)) / 2:g} and {(1 + config.get('confidence_level', 0.95)) / 2:g}.",
         f"{bootstrap.get('method', 'Bootstrap')}: {bootstrap['requested']} requested, {bootstrap['attempted']} "
         f"attempted, {bootstrap['successful']} successful, {bootstrap['failed']} failed. Status: "
         f"{bootstrap['status']}. Seed {bootstrap.get('seed', config['seed'])}"
@@ -1359,12 +1508,21 @@ def build_summary(output, source, config, plan, family, warnings, model_selectio
         + ". "
         + (bootstrap.get("reason") or ""),
     ]
-    if not specialized and bootstrap["status"] == "completed":
+    if not specialized and bootstrap["status"] == "completed" and bootstrap.get("procedure") == "case_bootstrap":
         bootstrap_items.append(
             "Whole runs are resampled with replacement within each observed condition and the selected model is "
             "refitted; factor values and trial totals stay attached to their runs. Intervals are the 2.5th and "
-            "97.5th percentiles of the refitted comparison. This assumes independent, identically distributed "
+            "97.5th percentiles at the default confidence level; other configured cutoffs are stated above. "
+            "This assumes independent, identically distributed "
             "runs within each condition."
+        )
+    elif not specialized and bootstrap["status"] == "completed":
+        bootstrap_items.append(
+            "Independent outcomes are simulated from the fitted full-model distribution on the original fixed "
+            "design, then the selected family is refitted. Factor settings and trial totals stay fixed. "
+            "Intervals are percentile intervals of refitted comparisons. Distribution: "
+            + (bootstrap.get("distribution") or "Not recorded")
+            + "."
         )
     if specialized:
         bootstrap_items.append(
@@ -1387,12 +1545,18 @@ def build_summary(output, source, config, plan, family, warnings, model_selectio
     for title, count in family_sizes.items():
         holm_items.append(f"Comparisons for {title}: " + holm_note(count, "comparisons") + ".")
     holm_items += [
+        "Primary comparison conclusions use the configured pointwise parametric-bootstrap percentile interval: "
+        "it must exclude zero for a difference or one for a ratio. These intervals are not multiplicity-adjusted. "
+        "No adjusted bootstrap p-value is inferred from an interval. Omnibus factor tests and analytic adjusted "
+        "p-values are secondary sensitivity results; disagreements never change the designated primary method.",
         "Multiplicity families are formed by model term (analytic factor tests together; resampling checks "
         "together) and by each factor or factor-pair comparison family. Unavailable p-values are omitted "
         "from Holm adjustment and receive no conclusion; this missing-test policy requires statistical review.",
         f"“Analytic result” means the analytic Holm-adjusted p-value is below {alpha:g}; it does not use the "
         "resampling or bootstrap results.",
-        "Confidence intervals (analytic and bootstrap) are pointwise 95% intervals, not multiplicity-adjusted. "
+        "Analytic intervals are pointwise 95%; bootstrap intervals are pointwise "
+        f"{config.get('confidence_level', 0.95):.0%}. "
+        "Neither is multiplicity-adjusted. "
         "Interval agreement compares whether both exclude the null value.",
         "Separate metrics are not corrected together; cross-metric findings are exploratory. A result without "
         "clear evidence does not show that an effect is zero, and statistical evidence is not practical importance.",
@@ -1439,13 +1603,17 @@ def build_summary(output, source, config, plan, family, warnings, model_selectio
             + "). statsmodels' cov_type='HC3' is HC0 for GLM and discrete models, so the sandwich is computed "
             "explicitly and the installed matrix is verified."
         )
-    from asaree.services.stats_findings import describe_findings
+    from asaree.services.stats_findings import describe_report_findings
 
-    findings = describe_findings(tests, alpha)
+    findings = describe_report_findings(
+        dict(tests=tests, effects=effects, alpha=alpha, primary_analysis="parametric_bootstrap_intervals")
+    )
     versions = {name: importlib.metadata.version(name) for name in ("numpy", "scipy", "statsmodels", "pandas", "patsy")}
     return dict(
         version=REPORT_VERSION,
         alpha=alpha,
+        primary_analysis="parametric_bootstrap_intervals",
+        confidence_level=config.get("confidence_level", 0.95),
         metric=metric,
         status="valid",
         metric_info=metric_information(source, metric, plan),

@@ -76,6 +76,7 @@ export function AnalysisMethods({ analysis, report, modelName }: {
       </MethodStep>
       <MethodStep number="04" title="How to interpret it" icon={<ShieldCheck className="size-3.5" />}>
         <ul className="list-disc space-y-2 pl-3.5 text-xs leading-relaxed text-muted-foreground">
+          {report.primary_analysis === 'parametric_bootstrap_intervals' && <li>Primary comparison conclusions use pointwise parametric-bootstrap intervals. Analytic intervals and p-values are sensitivity results; omnibus factor tests are secondary.</li>}
           <li>Adjusted p-values account for multiple tests within each metric.</li>
           <li>Confidence intervals show a range of plausible effect sizes; they are not adjusted for multiple comparisons.</li>
           <li>A result without clear evidence does not mean the effect is zero.</li>

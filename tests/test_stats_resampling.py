@@ -4,6 +4,7 @@ import numpy as np
 import pandas as pd
 import pytest
 import statsmodels.api as sm
+from scipy import stats
 
 from asaree.services.stats_resampling import native_permutations
 from asaree.services.stats_source import StatsRequest, compute
@@ -16,6 +17,7 @@ def bootstrap_input():
     y = np.random.default_rng(4).normal(size=len(group)) + (group == "B")
     frame = pd.DataFrame(dict(factor_0=group, outcome=y))
     config = StatsRequest(metric="value", factors=["Treatment"], n_boot=20, n_perm=99).model_dump()
+    config["bootstrap_method"] = "case"
     grid = np.array([[1, 1], [1, -1]])
     weights = [[np.array([1, 0]), np.array([0, 1])]]
     return frame, x, y, grid, weights, config
@@ -30,12 +32,18 @@ def test_bootstrap_matches_independent_native_refits_and_preserves_cell_counts()
         a = rng.choice(np.arange(24), size=24, replace=True)
         b = rng.choice(np.arange(24, 60), size=36, replace=True)
         indices = np.concatenate((a, b))
-        means = sm.OLS(y[indices], x[indices]).fit().predict(grid)
+        fitted = sm.OLS(y[indices], x[indices]).fit()
+        if stats.normaltest(fitted.resid).pvalue < 0.001 and abs(stats.skew(fitted.resid)) > 1:
+            continue
+        if fitted.get_influence().cooks_distance[0].max() > 1:
+            continue
+        means = fitted.predict(grid)
         reference.append(means[0] - means[1])
     np.testing.assert_allclose(bounds.iloc[0], np.quantile(reference, [0.025, 0.975]))
     assert metadata["status"] == "completed"
-    assert metadata["successful"] == metadata["attempted"] == 20
-    assert metadata["failed"] == 0
+    assert metadata["attempted"] == 20
+    assert metadata["successful"] == len(reference)
+    assert metadata["failed"] == 20 - len(reference)
 
 
 @pytest.mark.parametrize("failure", ["fit", "budget"])

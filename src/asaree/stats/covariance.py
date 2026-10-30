@@ -21,19 +21,18 @@ score by 1 / (1 - h_i), where h_i is its leverage:
   block with the NB2 working weights mu / (1 + alpha mu). This is the
   generalized-leverage HC3 used by the custom likelihood engine.
 
-Zero-inflated, beta, and ordinal models have several linear predictors (or
-thresholds) and no established leverage; they keep HC0 and say so.
+Beta uses joint mean/precision expected information and trace(H^-1 I_i)
+leverage. Zero-inflated and ordinal models retain the recorded HC0 fallback.
 """
 
 from __future__ import annotations
 
 import numpy as np
 
-HC3_FAMILIES = ("gaussian", "lognormal", "gamma", "poisson", "binomial", "negbin")
+HC3_FAMILIES = ("gaussian", "lognormal", "gamma", "poisson", "binomial", "negbin", "beta")
 HC0_ONLY = {
     "zip": "this pipeline has no reviewed HC3 leverage construction for its two linear predictors",
     "zinb": "this pipeline has no reviewed HC3 leverage construction for its two linear predictors",
-    "beta": "this pipeline has no reviewed HC3 leverage construction for the separate mean and precision parts",
     "ordinal_logit": "this pipeline has no reviewed HC3 leverage construction for ordinal thresholds",
 }
 # A leverage this close to 1 makes 1 / (1 - h) unbounded: HC3 is undefined.
@@ -45,8 +44,10 @@ class CovarianceUnavailableError(ValueError):
 
 
 def _hc3_from_parts(scores, bread, leverage):
-    if np.any(leverage >= MAX_LEVERAGE):
-        raise CovarianceUnavailableError("an observation has leverage 1, so HC3 is undefined")
+    if not np.isfinite(leverage).all() or np.any(leverage < 0) or np.any(leverage >= MAX_LEVERAGE):
+        raise CovarianceUnavailableError(
+            "leverage is non-finite, negative, or at least 1 - 1e-8; the HC3 diagnostic gate failed"
+        )
     adjusted = scores / (1 - leverage)[:, None]
     return bread @ (adjusted.T @ adjusted) @ bread
 
@@ -83,7 +84,7 @@ def negbin_parts(result):
     return scores, bread, leverage
 
 
-def robust_covariance(result, family, fallback="hc0"):
+def robust_covariance(result, family, fallback="hc0", maximum_information_condition=1e10):
     """Return (covariance, record) with the estimator actually computed."""
     if family in ("gaussian", "lognormal"):
         scores, bread, leverage = ols_parts(result)
@@ -96,6 +97,18 @@ def robust_covariance(result, family, fallback="hc0"):
         implementation = (
             "NB2 scores for (coefficients, alpha), observed-information bread, "
             "leverage from the regression block with weights mu / (1 + alpha mu)"
+        )
+    elif family == "beta":
+        from asaree.stats.beta_covariance import beta_parts
+
+        try:
+            scores, bread, leverage, _ = beta_parts(result, maximum_condition=maximum_information_condition)
+        except (ValueError, np.linalg.LinAlgError) as exc:
+            raise CovarianceUnavailableError(f"Joint beta expected information unavailable: {exc}") from exc
+        implementation = (
+            "Joint mean/precision beta scores; expected-information bread H^-1; "
+            "generalized leverage h_i = trace(H^-1 I_i), including cross-information; "
+            "score weights 1/(1-h_i), without clipping"
         )
     elif family in HC0_ONLY:
         if fallback == "withhold":
@@ -118,6 +131,7 @@ def robust_covariance(result, family, fallback="hc0"):
         computed="HC3",
         implementation=implementation,
         max_leverage=float(leverage.max()),
+        leverage_sum=float(leverage.sum()),
     )
 
 

@@ -96,7 +96,7 @@ def test_explicit_factor_exclusions_and_dependence_are_explained():
     assert result["summary"]["design_specification"]["structure"] == {"blocks": ["subject"]}
 
 
-def test_beta_uses_actual_covariance_and_never_labels_an_unrun_interaction_freedman_lane():
+def test_beta_uses_joint_hc3_and_records_quantile_residual_permutation():
     source = source_for_design({"A": ["a", "b"], "B": ["x", "y"]}, beta=True)
     result = run(source)
     repeated = run(source)
@@ -105,24 +105,23 @@ def test_beta_uses_actual_covariance_and_never_labels_an_unrun_interaction_freed
     }
     assert result["family"] == "beta"
     summary = result["summary"]
-    assert summary["covariance"]["computed"] == "HC0"
-    assert "not implemented" in summary["covariance"]["reason"]
+    assert summary["covariance"]["computed"] == "HC3"
+    assert "mean/precision" in summary["covariance"]["implementation"]
     test = next(row for row in summary["tests"] if ":" in row["effect"])
-    assert test["permutation_p_adjusted"] is None
-    assert test["resampling_label"].startswith("Not run:")
-    assert test["resampling_procedure"] is None
+    assert test["permutation_p_adjusted"] is not None
+    assert "quantile-residual permutation" in test["resampling_label"]
+    assert test["resampling_procedure"] == "quantile_residual_permutation"
     html = render_html(dict(id="beta", created_at="fixed", output=result))
-    assert "Freedman–Lane" not in html
-    assert "HC3 Wald statistic" not in html
+    assert "Freedman–Lane analogue" in html
+    assert "primary" in html.lower()
     assert "precision" in html
 
 
-def test_covariance_fallback_can_be_withheld_explicitly():
+def test_beta_does_not_need_the_hc0_fallback():
     result = run(source_for_design({"A": ["a", "b"]}, beta=True), hc3_fallback="withhold")
     assert result["family"] == "beta"
-    assert result["summary"]["covariance"]["computed"] is None
-    assert all(row["p_adjusted"] is None for row in result["summary"]["tests"])
-    assert "configured fallback is withhold" in result["inference_reason"]
+    assert result["summary"]["covariance"]["computed"] == "HC3"
+    assert all(row["p_adjusted"] is not None for row in result["summary"]["tests"])
 
 
 def test_configured_threshold_and_reproducible_output():
@@ -142,7 +141,11 @@ def test_configured_threshold_and_reproducible_output():
     assert any("found evidence" in finding for finding in summary["findings"])
 
 
-def test_optimizer_retry_records_failed_attempt_and_independent_score_gate():
+def test_optimizer_retry_records_failed_attempt_and_independent_score_gate(monkeypatch):
+    monkeypatch.setattr(
+        "asaree.stats.fit_checks.native_diagnostics", lambda result, config: dict(critical_failures=[], unavailable=[])
+    )
+
     class FakeModel:
         def score(self, params):
             return np.array([1e-9])

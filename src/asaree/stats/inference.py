@@ -1,4 +1,4 @@
-"""Cell predictions, parametric bootstrap, HC3 Wald tests, bootstrap LR tests, Holm."""
+"""Cell predictions, parametric intervals, HC3 Wald tests and Holm adjustment."""
 
 from __future__ import annotations
 
@@ -68,6 +68,7 @@ class Predictor:
 def _boot_chunk(
     model: Model, theta_hat, predictor: Predictor, qset: QuantitySet, seed, n, info0=None, correct=True, fit_config=None
 ):
+    from .diagnostics import diagnose
     from .fit_checks import custom_fit_checks
 
     rng = np.random.default_rng(seed)
@@ -79,9 +80,30 @@ def _boot_chunk(
     for i in range(n):
         try:
             y = model.family.simulate(etas, model.aux, rng)
-            r = model.with_response(y).fit(theta0=theta_hat, compute_cov=True, max_iter=100, info0=info0)
-            record = custom_fit_checks(r, fit_config or {})
+            refit_model = model.with_response(y)
+            r = refit_model.fit(theta0=theta_hat, compute_cov=True, max_iter=100, info0=info0)
+            record = custom_fit_checks(r, fit_config or {}, refit_model)
             checks.append(dict(draw=i + 1, **record))
+            if not record["accepted"]:
+                fails += 1
+                continue
+            _, cell_idx = np.unique(refit_model.x_base, axis=0, return_inverse=True)
+            diagnostic_seed = np.random.SeedSequence(seed.entropy, spawn_key=(*seed.spawn_key, i, 4404))
+            diagnostics = diagnose(
+                refit_model,
+                r,
+                cell_idx,
+                [str(j) for j in range(int(cell_idx.max()) + 1)],
+                (fit_config or {}).get("n_diagnostic_simulations", 250),
+                np.random.default_rng(diagnostic_seed),
+            )
+            record["residual_diagnostics"] = {
+                key: value for key, value in diagnostics.items() if not key.startswith("_") and key != "ppc"
+            }
+            if diagnostics["severe"]:
+                record["accepted"] = False
+                record["critical_diagnostics_gate"] = False
+            checks[-1].update(record)
             if not record["accepted"]:
                 fails += 1
                 continue

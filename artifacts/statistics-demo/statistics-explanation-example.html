@@ -49,7 +49,7 @@ background:repeating-linear-gradient(to top,transparent 0,transparent calc(25% -
 
 <p>A result without clear evidence does not establish that the effect is zero.
 Statistical evidence does not establish practical importance.</p>
-<section class="methodology" aria-label="What ran and why"><header><p class="eyebrow">Analysis approach</p><h2>What ran and why</h2><p>Statistical calculations · no AI</p></header><div class="method-grid"><section class="method-step"><p class="eyebrow">01</p><h3>Regression Model Selection</h3><h4>unavailable</h4><p>Inspected the declared metric, producer context, observed values, and experimental design. No inferential result is reported.</p></section><section class="method-step"><p class="eyebrow">02</p><h3>Tests and comparisons</h3><h4>Factor tests</h4><ul></ul><h4>Comparisons</h4><p>Model-predicted averages, each condition weighted equally.</p><ul></ul></section><section class="method-step"><p class="eyebrow">03</p><h3>Uncertainty checks</h3><p>No resampling results were recorded.</p></section><section class="method-step"><p class="eyebrow">04</p><h3>How to interpret it</h3><ul><li>Analytic adjusted p-values are Holm-adjusted across the factor tests, and within each comparison family; resampling p-values are Holm-adjusted separately.</li><li>“Analytic result” means the analytic adjusted p-value is below 0.05.</li><li>Confidence intervals are not adjusted for multiple comparisons.</li><li>A result without clear evidence does not mean the effect is zero.</li><li>Results across separate metrics are exploratory.</li></ul></section></div><details><summary>Full technical details</summary><p>Calculated with statistical libraries. Explanations use fixed templates; no AI is used to generate this report.</p><section class="detail"><h3>Experimental design and analysis specification</h3><p>One whole-dataset run; replicate numbers alone do not identify matched subjects</p><p>Requires human confirmation against the intended experiment.</p><p>Included terms: Approach; Setting; Approach × Setting.</p><p>Excluded interaction terms (configured maximum order): None.</p><p>Dependence declarations: {}. Blocking/repeated-measures structure: {}. An empty declaration does not establish independence.</p><table><thead><tr><th scope='col'>Factor</th><th scope='col'>Use</th><th scope='col'>Observed / declared levels</th><th scope='col'>Reason</th></tr></thead><tbody><tr><td>Approach</td><td>Included</td><td>[&quot;Revised&quot;, &quot;Standard&quot;] / []</td><td>All observed varying factors</td></tr><tr><td>Setting</td><td>Included</td><td>[&quot;Basic&quot;, &quot;Extended&quot;] / []</td><td>All observed varying factors</td></tr></tbody></table></section><section class="detail"><h3>Analysis availability</h3><p>Values are nonnumeric and their statistical ordering cannot be established.</p><p>Fitting, comparisons and resampling: Not run or withheld for the reasons above.</p></section></details></section>
+<section class="methodology" aria-label="What ran and why"><header><p class="eyebrow">Analysis approach</p><h2>What ran and why</h2><p>Statistical calculations · no AI</p></header><div class="method-grid"><section class="method-step"><p class="eyebrow">01</p><h3>Regression Model Selection</h3><h4>unavailable</h4><p>Inspected the declared metric, producer context, observed values, and experimental design. No inferential result is reported.</p></section><section class="method-step"><p class="eyebrow">02</p><h3>Tests and comparisons</h3><h4>Factor tests</h4><ul></ul><h4>Comparisons</h4><p>Model-predicted averages, each condition weighted equally.</p><ul></ul></section><section class="method-step"><p class="eyebrow">03</p><h3>Uncertainty checks</h3><p>No resampling results were recorded.</p></section><section class="method-step"><p class="eyebrow">04</p><h3>How to interpret it</h3><ul><li>Analytic adjusted p-values are Holm-adjusted across the factor tests, and within each comparison family; resampling p-values are Holm-adjusted separately.</li><li>“Analytic result” uses the adjusted p-value threshold 0.05.</li><li>Confidence intervals are not adjusted for multiple comparisons.</li><li>A result without clear evidence does not mean the effect is zero.</li><li>Results across separate metrics are exploratory.</li></ul></section></div><details><summary>Full technical details</summary><p>Calculated with statistical libraries. Explanations use fixed templates; no AI is used to generate this report.</p><section class="detail"><h3>Experimental design and analysis specification</h3><p>One whole-dataset run; replicate numbers alone do not identify matched subjects</p><p>Requires human confirmation against the intended experiment.</p><p>Included terms: Approach; Setting; Approach × Setting.</p><p>Excluded interaction terms (configured maximum order): None.</p><p>Dependence declarations: {}. Blocking/repeated-measures structure: {}. An empty declaration does not establish independence.</p><table><thead><tr><th scope='col'>Factor</th><th scope='col'>Use</th><th scope='col'>Observed / declared levels</th><th scope='col'>Reason</th></tr></thead><tbody><tr><td>Approach</td><td>Included</td><td>[&quot;Revised&quot;, &quot;Standard&quot;] / []</td><td>All observed varying factors</td></tr><tr><td>Setting</td><td>Included</td><td>[&quot;Basic&quot;, &quot;Extended&quot;] / []</td><td>All observed varying factors</td></tr></tbody></table></section><section class="detail"><h3>Analysis availability</h3><p>Values are nonnumeric and their statistical ordering cannot be established.</p><p>Fitting, comparisons and resampling: Not run or withheld for the reasons above.</p></section></details></section>
 <h2>Limitations and exclusions</h2><ul><li>Values are nonnumeric and their statistical ordering cannot be established.</li></ul>
 <details><summary>Reproducibility</summary>
 <p>Analysis: synthetic-demo-4 · Created: 2026-10-30T00:00:00+00:00</p>
@@ -57,7 +57,43 @@ Statistical evidence does not establish practical importance.</p>
   &quot;fingerprint&quot;: &quot;215ec4f381cc5753a7f0bea33fbfe00ca17a410f9fcb0b608ab5ca12a7cef13e&quot;,
   &quot;design_revision&quot;: 1,
   &quot;observed&quot;: 240,
-  &quot;policy_version&quot;: 4,
+  &quot;policy_version&quot;: 5,
+  &quot;requested_config&quot;: {
+    &quot;metric&quot;: &quot;Explanation&quot;,
+    &quot;factors&quot;: [],
+    &quot;family&quot;: &quot;auto&quot;,
+    &quot;measurement_type&quot;: &quot;auto&quot;,
+    &quot;denominator&quot;: null,
+    &quot;ordinal_levels&quot;: [],
+    &quot;max_order&quot;: 2,
+    &quot;n_boot&quot;: 20,
+    &quot;n_perm&quot;: 99,
+    &quot;seed&quot;: 20261016,
+    &quot;alpha&quot;: 0.05,
+    &quot;minimum_success_fraction&quot;: 0.9,
+    &quot;excluded_factor_reasons&quot;: {},
+    &quot;optimizer_maxiter&quot;: 500,
+    &quot;maximum_scaled_score&quot;: null,
+    &quot;minimum_runs_per_condition&quot;: 3,
+    &quot;maximum_pearson_dispersion&quot;: 3.0,
+    &quot;maximum_absolute_parameter&quot;: 30.0,
+    &quot;exchangeability_alpha&quot;: 0.01,
+    &quot;hc3_fallback&quot;: &quot;hc0&quot;,
+    &quot;bootstrap_method&quot;: &quot;parametric&quot;,
+    &quot;confidence_level&quot;: 0.95,
+    &quot;maximum_information_condition&quot;: 10000000000.0,
+    &quot;maximum_cooks_distance&quot;: 1.0,
+    &quot;exchangeability_blocks&quot;: [],
+    &quot;n_diagnostic_simulations&quot;: 250
+  },
+  &quot;libraries&quot;: {
+    &quot;numpy&quot;: &quot;2.5.1&quot;,
+    &quot;scipy&quot;: &quot;1.18.0&quot;,
+    &quot;statsmodels&quot;: &quot;0.14.6&quot;,
+    &quot;pandas&quot;: &quot;3.0.5&quot;,
+    &quot;patsy&quot;: &quot;1.0.2&quot;
+  },
+  &quot;python&quot;: &quot;3.14.4&quot;,
   &quot;resampling&quot;: null
 }</pre>
 </details>

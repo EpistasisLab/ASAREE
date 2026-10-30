@@ -124,21 +124,31 @@ def test_native_gaussian_effect_and_interval_match_reference(monkeypatch):
 
 
 def test_html_handles_saved_reports_without_distribution_summaries():
-    summary = dict(metric="Legacy", status="valid", description="Saved report",
-                   findings=[], effects=[], tests=[], methods=[], warnings=[])
+    summary = dict(
+        metric="Legacy",
+        status="valid",
+        description="Saved report",
+        findings=[],
+        effects=[],
+        tests=[],
+        methods=[],
+        warnings=[],
+    )
     html = render_html(dict(output=dict(family="gamma", summary=summary)))
     assert "Selected regression model distribution: Gamma" in html
     assert "Observed distribution" not in html
 
 
 def test_plain_language_findings_describe_agreement_interactions_and_disagreement():
-    findings = describe_findings([
-        dict(effect="Effort", p_adjusted=.3, permutation_p_adjusted=.4),
-        dict(effect="Feature budget", p_adjusted=.01, permutation_p_adjusted=.02),
-        dict(effect="Effort:Feature budget", p_adjusted=.4, permutation_p_adjusted=None),
-        dict(effect="Other", p_adjusted=.01, permutation_p_adjusted=.4),
-        dict(effect="Missing", p_adjusted=None, permutation_p_adjusted=None),
-    ])
+    findings = describe_findings(
+        [
+            dict(effect="Effort", p_adjusted=0.3, permutation_p_adjusted=0.4),
+            dict(effect="Feature budget", p_adjusted=0.01, permutation_p_adjusted=0.02),
+            dict(effect="Effort:Feature budget", p_adjusted=0.4, permutation_p_adjusted=None),
+            dict(effect="Other", p_adjusted=0.01, permutation_p_adjusted=0.4),
+            dict(effect="Missing", p_adjusted=None, permutation_p_adjusted=None),
+        ]
+    )
     assert findings[0] == (
         "Neither the main test nor the permutation check found clear evidence that Effort has an effect on this metric."
     )
@@ -197,8 +207,11 @@ def test_frequencies_preserve_category_labels_and_counts():
 
 
 def test_older_reports_plot_only_saved_observations_matching_the_summary_scale():
-    output = dict(family="gaussian", summary=dict(distribution=dict(n=3, minimum=1, maximum=3)),
-                  tables=dict(residuals=[dict(observed=value) for value in (1, 2, 3)]))
+    output = dict(
+        family="gaussian",
+        summary=dict(distribution=dict(n=3, minimum=1, maximum=3)),
+        tables=dict(residuals=[dict(observed=value) for value in (1, 2, 3)]),
+    )
     assert saved_distribution_plot(output)["bins"][-1]["count"] == 1
     output["tables"]["residuals"][-1]["observed"] = 30
     assert saved_distribution_plot(output) is None
@@ -238,6 +251,10 @@ def test_nongaussian_comparisons_have_response_scale_uncertainty(kind):
     else:
         values = rng.choice(["low", "medium", "high"], 240).tolist()
     result = analyze(values)
+    if kind == "ordinal":
+        assert result["validity"] == "unavailable"
+        assert "leverage/influence" in " ".join(result["summary"]["warnings"])
+        return
     assert result["validity"] == "valid", result["summary"]["warnings"]
     effect = result["summary"]["effects"][0]
     assert effect["ci_low"] < effect["ci_high"]
@@ -250,8 +267,8 @@ def test_nongaussian_comparisons_have_response_scale_uncertainty(kind):
     html = render_html(dict(output=result))
     assert effect["method"] in html
     assert "<h3>Bootstrap intervals</h3>" in html
-    assert "Analytic 95% interval" in html
-    assert "Bootstrap 95% interval" in html
+    assert "Sensitivity: analytic 95% interval" in html
+    assert "Primary parametric-bootstrap 95% interval" in html
     assert "Resampling adjusted p" in html
     json.dumps(result, allow_nan=False)
 
@@ -283,8 +300,10 @@ def test_unsupported_dependence_and_mixed_protocols_withhold_tests(change, reaso
 
 def test_separated_binary_data_does_not_produce_conclusions():
     result = analyze([0, 1] * 50)
-    assert result["validity"] == "unavailable"
+    assert result["validity"] == "descriptive"
     assert not result["summary"]["effects"]
+    assert result["summary"]["distribution"]["mean"] == 0.5
+    assert len(result["tables"]["observed_conditions"]) == 2
 
 
 def test_declared_opaque_and_unmeasured_metrics_are_visible_in_catalog():
@@ -357,10 +376,13 @@ def test_structured_treatments_use_declared_short_labels_without_merging_conditi
     assert "{'model'" not in comparison
 
 
-def test_constant_metric_reports_unavailable_instead_of_zero_effect():
+def test_constant_metric_reports_descriptive_values_without_inference():
     result = analyze([4] * 40)
-    assert result["validity"] == "unavailable"
-    assert "constant" in result["summary"]["warnings"][0]
+    assert result["validity"] == "descriptive"
+    assert result["summary"]["status"] == "descriptive"
+    assert result["summary"]["distribution"]["mean"] == 4
+    assert result["summary"]["tests"] == result["summary"]["effects"] == []
+    assert "identical" in result["summary"]["warnings"][0]
 
 
 def test_missing_measurement_report_retains_the_producers_explanation():

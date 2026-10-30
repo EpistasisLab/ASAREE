@@ -1,7 +1,15 @@
 import { describe, expect, it } from 'vitest'
-import { describeStatsFindings } from './statsFindings'
+import { describeStatsFindings, primaryComparisonResult } from './statsFindings'
 
 describe('statistical findings use the recorded threshold and procedure', () => {
+  it('keeps primary conclusions fixed when an adjusted analytic p is significant', () => {
+    const effect = { comparison: 'A vs B', estimate: .95, scale: 'ratio', ci_low: .8, ci_high: .99,
+      p_adjusted: .001, result: 'Evidence of a difference', primary_status: 'completed',
+      primary_ci_low: .81, primary_ci_high: 1.001 }
+    expect(primaryComparisonResult(effect)).toBe('No clear evidence of a difference')
+    expect(primaryComparisonResult({ ...effect, primary_status: 'unavailable' })).toBe('Primary inference unavailable')
+    expect(primaryComparisonResult({ ...effect, primary_ci_high: 1 })).toBe('No clear evidence of a difference')
+  })
   it('applies the configured threshold to both procedures', () => {
     const tests = [{ effect: 'Treatment', p_adjusted: .02, permutation_p_adjusted: .03, result: '' }]
     expect(describeStatsFindings(tests, .01)[0]).toContain('Neither')

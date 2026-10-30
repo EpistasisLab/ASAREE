@@ -7,7 +7,7 @@ import math
 from html import escape
 
 from asaree.services.stats_distribution import saved_distribution_plot
-from asaree.services.stats_findings import describe_findings
+from asaree.services.stats_findings import describe_report_findings, primary_comparison_result
 
 DISTRIBUTION_NAMES = {
     "gaussian": "Gaussian (normal)",
@@ -120,6 +120,10 @@ def render_html(analysis: dict) -> str:
     def text(value):
         return escape(display(value), quote=True)
 
+    def endpoint(value):
+        # Preserve the side of a ratio's null instead of rounding 0.99999/1.00001 to 1.
+        return repr(float(value)) if value != 1 and abs(value - 1) < 0.001 else display(value)
+
     def listing(items):
         return "<ul>" + "".join(f"<li>{text(item)}</li>" for item in items) + "</ul>"
 
@@ -156,7 +160,7 @@ def render_html(analysis: dict) -> str:
                     content = "Unavailable"
                 elif row.get("ci_low") is not None and not subtitles.get(key):
                     content += small(row.get("interval_method"))
-            if key == "bootstrap_interval":
+            if key in {"bootstrap_interval", "primary_interval"}:
                 detail = (
                     row.get("interval_agreement")
                     if row.get("bootstrap_ci_low") is not None
@@ -187,13 +191,19 @@ def render_html(analysis: dict) -> str:
     effects = [
         {
             **row,
+            "result": primary_comparison_result(row)
+            if summary.get("primary_analysis") == "parametric_bootstrap_intervals"
+            else row.get("result"),
             "comparison": row.get("comparison"),
             "scale": str(row["scale"]).replace("_", " ") + (f" ({row['unit']})" if row.get("unit") else ""),
-            "interval": f"{display(row['ci_low'])} to {display(row['ci_high'])}"
+            "interval": f"{endpoint(row['ci_low'])} to {endpoint(row['ci_high'])}"
             if row.get("ci_low") is not None and row.get("ci_high") is not None
             else "Unavailable",
-            "bootstrap_interval": f"{display(row['bootstrap_ci_low'])} to {display(row['bootstrap_ci_high'])}"
+            "bootstrap_interval": f"{endpoint(row['bootstrap_ci_low'])} to {endpoint(row['bootstrap_ci_high'])}"
             if row.get("bootstrap_ci_low") is not None and row.get("bootstrap_ci_high") is not None
+            else "Unavailable",
+            "primary_interval": f"{endpoint(row['primary_ci_low'])} to {endpoint(row['primary_ci_high'])}"
+            if row.get("primary_ci_low") is not None and row.get("primary_ci_high") is not None
             else "Unavailable",
         }
         for row in summary["effects"]
@@ -252,9 +262,10 @@ def render_html(analysis: dict) -> str:
                 f"{axis}"
                 f'<p class="x-title">Metric value{unit}</p></div></div></figure>'
             )
-        distribution_section += (
-            "<p>Observed values pool the analyzed replicates across conditions. "
-            "The selected model describes outcomes after accounting for the experimental factors.</p>"
+        distribution_section += "<p>Observed values pool the analyzed replicates across conditions. " + (
+            "Descriptive only; no statistical inference is provided.</p>"
+            if summary.get("status") == "descriptive"
+            else "The selected model describes outcomes after accounting for the experimental factors.</p>"
         )
         if info.get("coding"):
             distribution_section += (
@@ -278,6 +289,7 @@ def render_html(analysis: dict) -> str:
         )
     distribution_section += model_fit_panel(summary, family, text)
     resampled = bool(summary.get("resampling"))
+    primary = summary.get("primary_analysis") == "parametric_bootstrap_intervals"
     resampling_note = ""
     if resampled:
         bootstrap = summary["resampling"]["bootstrap"]
@@ -336,7 +348,12 @@ def render_html(analysis: dict) -> str:
                 [
                     "Analytic adjusted p-values are Holm-adjusted across the factor tests, and within each comparison "
                     "family; resampling p-values are Holm-adjusted separately.",
-                    f"“Analytic result” means the analytic adjusted p-value is below {summary.get('alpha', 0.05):g}.",
+                    (
+                        "Primary comparison conclusions use pointwise parametric-bootstrap intervals; "
+                        "analytic p-values and intervals are sensitivity results. Omnibus factor tests are secondary."
+                        if primary
+                        else f"“Analytic result” uses the adjusted p-value threshold {summary.get('alpha', 0.05):g}."
+                    ),
                     "Confidence intervals are not adjusted for multiple comparisons.",
                     "A result without clear evidence does not mean the effect is zero.",
                     "Results across separate metrics are exploratory.",
@@ -410,7 +427,7 @@ background:repeating-linear-gradient(to top,transparent 0,transparent calc(25% -
 {metric_context}
 <p>Status: {text(summary["status"])} · Execution: {text(summary.get("execution_status", "completed"))}</p>
 <p>{text(summary["description"])}</p>
-{listing(describe_findings(summary["tests"], summary.get("alpha", 0.05)))}
+{listing(describe_report_findings(summary))}
 {distribution_section}
 {
         f'<p role="alert" class="notice"><strong>Inference unavailable.</strong> {text(inference_reason)} '
@@ -418,7 +435,7 @@ background:repeating-linear-gradient(to top,transparent 0,transparent calc(25% -
         if inference_reason
         else ""
     }
-<h2>Statistical tests</h2>{
+<h2>{"Secondary statistical tests" if primary else "Statistical tests"}</h2>{
         table(
             [dict(row, effect=row.get("label") or row["effect"]) for row in summary["tests"]],
             [("effect", "Effect"), ("p_adjusted", "Analytic adjusted p" if resampled else "Adjusted p-value")]
@@ -434,16 +451,32 @@ background:repeating-linear-gradient(to top,transparent 0,transparent calc(25% -
                 ("comparison", "Comparison"),
                 ("estimate", "Estimate"),
                 ("scale", "Scale"),
-                ("interval", "Analytic 95% interval" if resampled else "95% interval"),
             ]
-            + ([("bootstrap_interval", "Bootstrap 95% interval")] if resampled else [])
+            + (
+                [
+                    (
+                        "primary_interval",
+                        f"Primary parametric-bootstrap {summary.get('confidence_level', 0.95):.0%} interval",
+                    ),
+                    ("interval", "Sensitivity: analytic 95% interval"),
+                ]
+                if primary
+                else [("interval", "Analytic 95% interval" if resampled else "95% interval")]
+                + ([("bootstrap_interval", "Bootstrap 95% interval")] if resampled else [])
+            )
             + [
                 ("p_adjusted", "Analytic adjusted p" if resampled else "Adjusted p-value"),
-                ("result", f"Analytic result (adjusted p < {summary.get('alpha', 0.05):g})"),
+                (
+                    "result",
+                    "Primary interval result"
+                    if primary
+                    else f"Analytic result (adjusted p < {summary.get('alpha', 0.05):g})",
+                ),
             ],
             dict(
                 interval=effect_methods.get("interval"),
                 bootstrap_interval=effect_methods.get("bootstrap"),
+                primary_interval=effect_methods.get("bootstrap"),
                 p_adjusted=effect_methods.get("p_adjusted"),
             ),
         )

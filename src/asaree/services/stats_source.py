@@ -51,6 +51,12 @@ class StatsRequest(BaseModel):
     maximum_absolute_parameter: float = Field(default=30, gt=0)
     exchangeability_alpha: float = Field(default=0.01, gt=0, lt=1)
     hc3_fallback: str = Field(default="hc0", pattern="^(hc0|withhold)$")
+    bootstrap_method: str = Field(default="parametric", pattern="^(parametric|case)$")
+    confidence_level: float = Field(default=0.95, gt=0, lt=1)
+    maximum_information_condition: float = Field(default=1e10, gt=1)
+    maximum_cooks_distance: float = Field(default=1, gt=0)
+    exchangeability_blocks: list[str] = Field(default_factory=list)
+    n_diagnostic_simulations: int = Field(default=250, ge=20, le=5000)
 
 
 def finite_number(value: Any) -> float | None:
@@ -390,6 +396,16 @@ def compute(source: dict, config: dict) -> dict:
     from asaree.services.stats_specification import design_specification, specification_section
 
     summary = output["summary"]
+    provenance = summary.setdefault("provenance", {})
+    provenance.setdefault("requested_config", config)
+    if "libraries" not in provenance:
+        import importlib.metadata
+        import platform
+
+        provenance["libraries"] = {
+            name: importlib.metadata.version(name) for name in ("numpy", "scipy", "statsmodels", "pandas", "patsy")
+        }
+        provenance["python"] = platform.python_version()
     if "design_specification" not in summary:
         spec = design_specification(source, config)
         summary["design_specification"] = spec
@@ -416,7 +432,7 @@ def compute(source: dict, config: dict) -> dict:
     if incomplete:
         summary["warnings"].append(
             "Analysis incomplete: at least one requested resampling procedure was interrupted. "
-            "Its inference is withheld; completed analytic results are reported separately."
+            "Its inference is withheld; completed procedures are reported separately."
         )
     output["runtime_s"] = time.perf_counter() - started
     return output

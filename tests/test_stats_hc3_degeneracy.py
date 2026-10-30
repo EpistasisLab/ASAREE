@@ -146,15 +146,15 @@ def test_installed_covariance_drives_every_statsmodels_inference_call():
     assert result.get_prediction(x[:1]).se_mean[0] == pytest.approx(np.sqrt(gradient @ covariance @ gradient))
 
 
-def test_multipart_models_record_hc0_instead_of_claiming_hc3():
+def test_beta_records_joint_expected_information_hc3():
     rng = np.random.default_rng(8)
     x = design()
     y = rng.beta(2 + x[:, 1], 5)
     from statsmodels.othermod.betareg import BetaModel
 
     covariance, record = robust_covariance(BetaModel(y, x).fit(disp=0), "beta")
-    assert record["computed"] == "HC0"
-    assert "HC3 not implemented" in record["reason"]
+    assert record["computed"] == "HC3"
+    assert "trace(H^-1 I_i)" in record["implementation"]
     assert np.isfinite(covariance).all()
 
 
@@ -211,14 +211,14 @@ def interaction(output):
     return output["tables"]["interaction_resampling"].iloc[0].to_dict()
 
 
-def test_gamma_interaction_is_a_freedman_lane_permutation_of_the_models_wald_statistic():
+def test_gamma_interaction_is_a_quantile_residual_permutation_of_the_models_wald_statistic():
     frame = gamma_frame()
     first = analyze(frame, dict(config("gamma"), _resample=True))
     second = analyze(frame, dict(config("gamma"), _resample=True))
     row = interaction(first)
     assert row == interaction(second)
     assert row["kind"] == "permutation"
-    assert "Freedman–Lane" in row["method"] and "log response" in row["method"]
+    assert "Freedman–Lane analogue" in row["method"] and row["procedure"] == "quantile_residual_permutation"
     assert row["observed_statistic"] == pytest.approx(first["tables"]["tests"].statistic.iloc[-1])
     assert row["completed"] == row["requested"] == 99
     assert 1 / 100 <= row["p_perm"] <= 1
@@ -226,20 +226,22 @@ def test_gamma_interaction_is_a_freedman_lane_permutation_of_the_models_wald_sta
 
 
 @pytest.mark.parametrize("family", ["poisson", "negbin"])
-def test_count_interaction_is_labelled_a_parametric_bootstrap(family):
+def test_count_interaction_uses_permutation_not_a_bootstrap_substitute(family):
     row = interaction(analyze(count_frame(family), dict(config(family), _resample=True)))
-    assert row["kind"] == "parametric bootstrap"
-    assert "not a permutation test" in row["assumptions"]
+    assert row["kind"] == "permutation"
+    assert row["procedure"] == "quantile_residual_permutation"
+    assert "approximate" in row["assumptions"]
     assert row["completed"] + row["failed"] == row["attempted"] == 99
     assert row["p_perm"] is not None
 
 
-def test_zero_inflated_interaction_resampling_is_withheld_with_its_reason():
+def test_zero_inflated_inference_is_withheld_until_required_diagnostics_exist():
     frame = gamma_frame()
     frame["outcome"] = np.round(frame.outcome * 2) * (np.arange(len(frame)) % 3 > 0)
-    row = interaction(analyze(frame, dict(config("zip"), _resample=True)))
-    assert row["p_perm"] is None
-    assert "zero-inflated" in row["reason"]
+    output = analyze(frame, dict(config("zip"), _resample=True))
+    assert output["validity"] == "unreliable"
+    assert "leverage/influence" in output["tables"]["model_fit"].iloc[0].exclusion_reason
+    assert output["tables"]["tests"].p.isna().all()
 
 
 def exact_count_source():
@@ -270,7 +272,7 @@ def test_exact_fit_keeps_descriptive_estimates_and_withholds_all_inference():
     output = automatic(exact_count_source(), "n_features_used")
     json.dumps(output, allow_nan=False)
     summary = output["summary"]
-    assert summary["status"] == "valid"
+    assert summary["status"] == "descriptive"
     assert "Exact fit" in summary["inference_reason"]
     for test in summary["tests"]:
         assert test["p_adjusted"] is None and test["permutation_p_adjusted"] is None
@@ -304,7 +306,7 @@ def test_exact_continuous_fit_reports_why_aic_cannot_rank_candidates():
         row["metrics"] = {"Duration": 1.5 if row["factors"]["Feature budget"] == "2 features" else 3.25}
     source["metric_metadata"] = {"Duration": {"unit": "seconds"}}
     summary = automatic(source, "Duration")["summary"]
-    assert summary["status"] == "valid"
+    assert summary["status"] == "descriptive"
     assert "AIC is undefined" in summary["model_fit"]["rule"]
     assert all(test["p_adjusted"] is None for test in summary["tests"])
 

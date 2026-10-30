@@ -372,8 +372,12 @@ class Model:
                 for j, c in enumerate(R):
                     Kcb = K[offs[j] : offs[j + 1], offs[i] : offs[i + 1]]
                     h += -d2[:, b, c] * np.einsum("ij,jk,ik->i", self.designs[c], Kcb, self.designs[b])
-        h = np.clip(h, 0.0, 0.999)
         res.leverage = h
+        if not np.isfinite(h).all() or np.any(h >= 1 - 1e-8):
+            # Preserve the failed diagnostic instead of hiding it by clipping.
+            res.cov_hc3 = None
+            res.cooks = None
+            return
         Sw = S / (1.0 - h)[:, None]
         meat = Sw.T @ Sw
         res.cov_hc3 = Jinv @ meat @ Jinv

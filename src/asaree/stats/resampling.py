@@ -20,6 +20,17 @@ def bootstrap_intervals(frame, x, y, grid, weights, family, config, ratio, trial
     draws, failures, attempted = [], 0, 0
     failure_reasons = Counter()
     refit_checks = []
+    parametric = config.get("bootstrap_method", "parametric") == "parametric"
+    distribution = None
+    if parametric:
+        from asaree.stats.fitted_distributions import fitted_distribution
+
+        with warnings.catch_warnings(record=True) as generating_warnings:
+            warnings.simplefilter("always")
+            original = fit_model(y, x, family, config, trials)
+        if not converged_fit(original):
+            raise ValueError("The original parametric-bootstrap fit failed acceptance checks")
+        distribution = fitted_distribution(original, family, config, trials)
     start = time.monotonic()
     # A bounded worker task must never silently present an incomplete simulation as complete.
     # Production draws are count-bounded, never silently machine-speed dependent.
@@ -29,15 +40,20 @@ def bootstrap_intervals(frame, x, y, grid, weights, family, config, ratio, trial
         if budget is not None and time.monotonic() - start >= budget:
             break
         attempted += 1
-        indices = np.concatenate([rng.choice(group, size=len(group), replace=True) for group in groups])
+        indices = (
+            np.arange(len(y))
+            if parametric
+            else np.concatenate([rng.choice(group, size=len(group), replace=True) for group in groups])
+        )
         try:
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
-                result = fit_model(y[indices], x[indices], family, config, None if trials is None else trials[indices])
+                simulated = distribution.draw(rng, len(y)) if parametric else y[indices]
+                result = fit_model(simulated, x[indices], family, config, None if trials is None else trials[indices])
                 refit_checks.append(dict(draw=attempted, **result._stats_fit_execution))
                 # fit_model already lets other native optimizers finish a stalled fit.
                 if not converged_fit(result) or not np.isfinite(result.params).all():
-                    raise ValueError("Nonconverged bootstrap refit.")
+                    raise ValueError("Bootstrap refit failed configured acceptance checks.")
                 covariance = np.asarray(result.cov_params())
                 if not np.isfinite(covariance).all() or np.linalg.eigvalsh((covariance + covariance.T) / 2).min() <= 0:
                     raise ValueError("Unidentified bootstrap refit.")
@@ -68,12 +84,21 @@ def bootstrap_intervals(frame, x, y, grid, weights, family, config, ratio, trial
             failure_reasons[str(exc)] += 1
     minimum = config.get("minimum_success_fraction", 0.9)
     usable = attempted == requested and len(draws) >= minimum * requested
-    bounds = np.quantile(draws, [0.025, 0.975], axis=0) if usable else np.full((2, len(weights)), np.nan)
+    tail = (1 - config.get("confidence_level", 0.95)) / 2
+    bounds = np.quantile(draws, [tail, 1 - tail], axis=0) if usable else np.full((2, len(weights)), np.nan)
     status = "completed" if usable else "incomplete" if attempted < requested else "unavailable"
     metadata = dict(
         kind="bootstrap",
-        procedure="case_bootstrap",
-        method="Cell-stratified case bootstrap; fixed selected model; percentile intervals",
+        procedure="fitted_model_parametric_bootstrap" if parametric else "case_bootstrap",
+        method=(
+            "Fitted-model parametric bootstrap; fixed design and selected family; percentile intervals"
+            if parametric
+            else "Cell-stratified case bootstrap; fixed selected model; percentile intervals"
+        ),
+        distribution=distribution.construction if parametric else None,
+        generating_fit=original._stats_fit_execution if parametric else None,
+        generating_fit_warnings=[str(w.message) for w in generating_warnings] if parametric else [],
+        confidence_level=config.get("confidence_level", 0.95),
         requested=requested,
         attempted=attempted,
         successful=len(draws),
@@ -96,37 +121,14 @@ FREEDMAN_LANE = {
         "no interaction in the expected value on the response scale (difference of differences = 0)",
     ),
     "lognormal": ("log response", "no interaction on the log scale, i.e. the ratio of ratios of expected values = 1"),
-    "gamma": ("log response", "no interaction on the log-mean scale, i.e. the ratio of ratios of expected values = 1"),
 }
-NULL_BOOTSTRAP = {
-    "poisson": "no interaction on the log-mean scale, i.e. the ratio of ratios of expected counts = 1",
-    "negbin": "no interaction on the log-mean scale, i.e. the ratio of ratios of expected counts = 1",
-    "binomial": "no interaction on the logit scale, i.e. the ratio of odds ratios = 1",
-}
-WITHHELD = {
-    "zip": "residual-permutation and null-model simulation for zero-inflated models are not implemented here",
-    "zinb": "residual-permutation and null-model simulation for zero-inflated models are not implemented here",
-    "beta": "residual-permutation and null-model simulation for beta regression are not implemented here",
-    "ordinal_logit": "residual-permutation and null-model simulation for ordered categories are not implemented here",
-}
+QUANTILE_PERMUTATION = {"gamma", "poisson", "negbin", "binomial", "beta", "zip", "zinb", "ordinal_logit"}
 ASSUMPTIONS = {
     "gaussian": "Independent runs whose additive errors are exchangeable across all conditions (equal variance); "
     "normality is not required. Nuisance terms are estimated; this is an approximate permutation procedure, "
     "not a guarantee of finite-sample exactness.",
     "lognormal": "Independent runs whose log-scale errors are exchangeable across all conditions (constant log-scale "
     "variance). Estimated nuisance terms make finite-sample permutation inference approximate.",
-    "gamma": "Independent runs and a constant Gamma shape: then y = mean × e with e independent and identically "
-    "distributed, so log(y) has additive exchangeable errors and no interaction in log(mean) is the same null as no "
-    "interaction in E[log y]. Estimated nuisance terms make finite-sample permutation inference approximate.",
-    "poisson": "The fitted term-reduced Poisson model is the correct data-generating distribution. Count errors "
-    "are not generally exchangeable (their variance follows the mean); this procedure uses a parametric "
-    "bootstrap, not a permutation test.",
-    "negbin": "The fitted term-reduced NB2 model (with estimated dispersion) is the correct data-generating "
-    "distribution. Count errors are not generally exchangeable (variance follows the mean); "
-    "this procedure uses a parametric bootstrap, not a permutation test.",
-    "binomial": "The fitted term-reduced binomial model is the correct data-generating distribution. Binary/"
-    "binomial errors are not generally exchangeable (variance follows probability); "
-    "this procedure uses a parametric bootstrap, not a permutation test.",
 }
 
 
@@ -138,33 +140,36 @@ def freedman_lane_sampler(rng, null_fitted, residual, exponentiate):
     return draw
 
 
-def null_model_sampler(rng, family, linear, params, trials):
+def quantile_residual_sampler(rng, distribution, values, frame, blocks):
+    """Permute fitted-null PIT residuals; reconstruct on each original run's support."""
+    missing = [column for column in blocks if column not in frame]
+    if missing:
+        raise ValueError("Exchangeability block columns are missing: " + ", ".join(missing))
+    if blocks and frame[blocks].isna().any().any():
+        raise ValueError("Exchangeability block labels are missing for some observations")
+    uniforms = distribution.pit(values, rng)
+    groups = (
+        list(frame.groupby(blocks, sort=True, dropna=False).indices.values()) if blocks else [np.arange(len(values))]
+    )
+    if not any(len(group) > 1 for group in groups):
+        raise ValueError("No exchangeability block contains more than one observation")
+
     def draw():
-        if family == "poisson":
-            return rng.poisson(np.exp(linear)).astype(float)
-        if family == "negbin":
-            alpha = params[-1]
-            return rng.negative_binomial(1 / alpha, 1 / (1 + alpha * np.exp(linear))).astype(float)
-        probability = 1 / (1 + np.exp(-linear))
-        return rng.binomial(1 if trials is None else trials.astype(int), probability).astype(float)
+        permuted = uniforms.copy()
+        for group in groups:
+            permuted[group] = uniforms[rng.permutation(group)]
+        return distribution.ppf(permuted)
 
     return draw
 
 
 def interaction_null_tests(frame, x, y, design, family, config, trials, result, covariance_record, inference_reason):
-    """Resample the fitted model's own HC3 Wald statistic for each interaction term.
+    """Interaction permutations using the same fitted-model Wald statistic.
 
-    Nuisance main effects are kept by resampling around the fitted reduced
-    (no-interaction) model:
-
-    * Gaussian / log-normal / Gamma: Freedman–Lane permutation of reduced-model
-      residuals on the scale where the errors are additive and exchangeable.
-    * Poisson / NB2 / binomial: their errors are not exchangeable, so the null
-      distribution is simulated from the fitted reduced model (parametric
-      bootstrap) and labelled as such.
-
-    Each draw refits the selected family and recomputes its HC3 Wald statistic,
-    so the resampled statistic is the analytic one, not a working-scale OLS F.
+    Gaussian/log-normal models use additive residual Freedman–Lane. Other
+    supported native families use the approved PIT/quantile analogue. Estimated
+    null distributions make this approximate, not an exact randomization test.
+    No null-model parametric bootstrap is substituted for a permutation p-value.
     """
     from asaree.stats.analysis import converged_fit, fit_model, wald_for_term
     from asaree.stats.covariance import CovarianceUnavailableError, robust_covariance
@@ -173,19 +178,17 @@ def interaction_null_tests(frame, x, y, design, family, config, trials, result, 
     requested = config["n_perm"]
     budget = config.get("_interaction_budget_s")
     covariance = np.asarray(result.cov_params())
+    estimator = (covariance_record or {}).get("computed")
     for term, column_slice in design.design_info.term_name_slices.items():
         if ":" not in term:
             continue
-        idx = np.arange(x.shape[1])[column_slice]
-        reduced_x = np.delete(x, idx, axis=1)
+        design_idx = np.arange(x.shape[1])[column_slice]
+        idx = design_idx + (1 if family in {"zip", "zinb"} else -1 if family == "ordinal_logit" else 0)
+        reduced_x = np.delete(x, design_idx, axis=1)
         row = dict(
             term=term,
-            kind="permutation"
-            if family in FREEDMAN_LANE
-            else "parametric bootstrap"
-            if family in NULL_BOOTSTRAP
-            else None,
-            statistic=f"HC3 Wald chi-square of the fitted {family} model",
+            kind="permutation" if family in FREEDMAN_LANE or family in QUANTILE_PERMUTATION else None,
+            statistic=f"{estimator or 'Unavailable covariance'} Wald chi-square of the fitted {family} model",
             df=len(idx),
             observed_statistic=None,
             requested=requested,
@@ -193,7 +196,6 @@ def interaction_null_tests(frame, x, y, design, family, config, trials, result, 
             completed=0,
             failed=0,
             p_perm=None,
-            null_hypothesis=FREEDMAN_LANE.get(family, (None, NULL_BOOTSTRAP.get(family)))[1],
             assumptions=ASSUMPTIONS.get(family),
             seed=config["seed"],
             seed_stream=INTERACTION_SEED_STREAM,
@@ -201,8 +203,9 @@ def interaction_null_tests(frame, x, y, design, family, config, trials, result, 
             status="not_run",
             procedure=None,
             minimum_success_fraction=config.get("minimum_success_fraction", 0.9),
-            removed_columns=[str(design.columns[i]) for i in idx],
-            retained_columns=[str(column) for i, column in enumerate(design.columns) if i not in idx],
+            removed_columns=[str(design.columns[i]) for i in design_idx],
+            retained_columns=[str(column) for i, column in enumerate(design.columns) if i not in design_idx],
+            exchangeability_blocks=config.get("exchangeability_blocks", []),
         )
         row["null_hypothesis"] = (
             f"All sum-coded coefficients for {term} are zero on the fitted model's scale; "
@@ -216,18 +219,21 @@ def interaction_null_tests(frame, x, y, design, family, config, trials, result, 
                 working_scale=scale,
                 procedure="freedman_lane",
             )
-        elif family in NULL_BOOTSTRAP:
+        elif family in QUANTILE_PERMUTATION:
             row.update(
-                method=f"Parametric bootstrap from the fitted term-reduced {family} model (null simulation)",
-                working_scale="model",
-                procedure="null_parametric_bootstrap",
+                method=f"Approximate GLM Freedman–Lane analogue: fitted-null quantile-residual permutation ({family})",
+                working_scale="Randomized PIT for discrete outcomes; fitted CDF for continuous outcomes",
+                procedure="quantile_residual_permutation",
+                assumptions="Independent observations or explicitly exchangeable observations within the named blocks; "
+                "correct fitted null distribution and adequate residual exchangeability. Parameters and nuisance terms "
+                "are estimated, so inference is approximate. Support preservation does not establish exchangeability.",
             )
         else:
             row.update(
                 method="Not run",
                 availability="not_implemented",
                 statistic=None,
-                reason=f"Interaction resampling unavailable: {WITHHELD.get(family, family)}.",
+                reason=f"Interaction residual permutation is not implemented for {family}.",
             )
             rows.append(row)
             continue
@@ -235,8 +241,8 @@ def interaction_null_tests(frame, x, y, design, family, config, trials, result, 
             row.update(reason=f"Interaction resampling not run: {inference_reason}")
             rows.append(row)
             continue
-        if (covariance_record or {}).get("computed") != "HC3":
-            row.update(reason="Interaction resampling not run: the analytic HC3 statistic is unavailable.")
+        if estimator not in {"HC3", "HC0"}:
+            row.update(reason="Interaction resampling not run: the analytic robust statistic is unavailable.")
             rows.append(row)
             continue
         observed = wald_for_term(result, covariance, idx)
@@ -277,14 +283,23 @@ def interaction_null_tests(frame, x, y, design, family, config, trials, result, 
                 null_params = np.asarray(null.params)
                 row["null_fit_checks"] = null._stats_fit_execution
                 if not converged_fit(null) or not np.isfinite(null_params).all():
-                    raise ValueError("the no-interaction model did not converge")
+                    raise ValueError("the term-reduced model failed fit acceptance checks")
                 if family == "negbin" and null_params[-1] < 1e-6:
-                    raise ValueError("the no-interaction NB2 dispersion is at its boundary")
+                    raise ValueError("the term-reduced NB2 dispersion is at its boundary")
+                from asaree.stats.fitted_distributions import fitted_distribution
+
+                distribution = fitted_distribution(null, family, config, trials)
+                draw = quantile_residual_sampler(rng, distribution, y, frame, config.get("exchangeability_blocks", []))
+                row["diagnostic_gate"] = dict(
+                    null_fit_accepted=True,
+                    finite_interior_pit=True,
+                    limitation="These numerical checks do not establish exchangeability",
+                )
+                row["null_distribution"] = distribution.construction
             except (ValueError, RuntimeError, np.linalg.LinAlgError) as exc:
-                row.update(reason=f"Interaction bootstrap not run: {exc}.")
+                row.update(reason=f"Interaction quantile-residual permutation not run: {exc}.")
                 rows.append(row)
                 continue
-            draw = null_model_sampler(rng, family, reduced_x @ null_params[: reduced_x.shape[1]], null_params, trials)
 
         draws, exceed, start = [], 0, time.monotonic()
         failure_reasons = Counter()
@@ -293,17 +308,22 @@ def interaction_null_tests(frame, x, y, design, family, config, trials, result, 
             if budget is not None and time.monotonic() - start >= budget:
                 break
             row["attempted"] += 1
-            simulated = draw()
             try:
+                simulated = draw()
                 with warnings.catch_warnings():
                     warnings.simplefilter("ignore")
                     refit = fit_model(simulated, x, family, config, trials)
                     refit_checks.append(dict(draw=row["attempted"], **refit._stats_fit_execution))
                     if not converged_fit(refit) or not np.isfinite(refit.params).all():
-                        raise ValueError("Nonconverged null refit.")
-                    refit_covariance, record = robust_covariance(refit, family, config.get("hc3_fallback", "hc0"))
+                        raise ValueError("Permutation refit failed configured acceptance checks.")
+                    refit_covariance, record = robust_covariance(
+                        refit,
+                        family,
+                        config.get("hc3_fallback", "hc0"),
+                        config.get("maximum_information_condition", 1e10),
+                    )
                     statistic = wald_for_term(refit, refit_covariance, idx)
-                if statistic is None or not np.isfinite(statistic) or record["computed"] != "HC3":
+                if statistic is None or not np.isfinite(statistic) or record["computed"] != estimator:
                     raise ValueError("Undefined null statistic.")
             except (
                 ValueError,

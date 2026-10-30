@@ -79,12 +79,33 @@ def analyze_custom(frame: pd.DataFrame, config: dict) -> dict:
     model_family.configure(y, aux)
     model = Model.from_base(model_family, y, x, aux)
     fit = model.fit()
-    fit_checks = custom_fit_checks(fit, config)
+    fit_checks = custom_fit_checks(fit, config, model)
     if not fit_checks["accepted"]:
-        raise ValueError("the requested model did not converge with usable information")
-    diagnostic = diagnose(model, fit, cell_idx, labels, N_SIM_DIAGNOSTICS, rng_diagnostics)
+        raise ValueError("the requested model failed numerical, support or influence acceptance checks")
+    diagnostic = diagnose(
+        model, fit, cell_idx, labels, config.get("n_diagnostic_simulations", N_SIM_DIAGNOSTICS), rng_diagnostics
+    )
     diagnostics = {k: v for k, v in diagnostic.items() if not k.startswith("_") and k not in ("ppc", "flags")}
     diagnostics.update(family=family, flags="; ".join(diagnostic["flags"]))
+    fit_checks["residual_diagnostics"] = diagnostics
+    if diagnostic["severe"]:
+        fit_checks.update(accepted=False, critical_diagnostics_gate=False, independently_checked_stationary_point=False)
+        return dict(
+            family=family,
+            covariance=dict(requested="HC3", computed=None, reason="Critical residual/dispersion diagnostics failed"),
+            tables=dict(
+                diagnostics=pd.DataFrame([diagnostics]),
+                fit_execution=pd.DataFrame(
+                    [
+                        dict(
+                            checks=fit_checks,
+                            attempts=[dict(method="Damped Newton", checks=fit_checks)],
+                            reportability_reason="Withheld: " + diagnostics["flags"],
+                        )
+                    ]
+                ),
+            ),
+        )
 
     contrast_families = default_families(factors)
     contrasts = [c for fam in contrast_families for c in build_contrasts(fam, cells, levels)]
@@ -101,7 +122,7 @@ def analyze_custom(frame: pd.DataFrame, config: dict) -> dict:
     quantities["estimate"] = estimates
     success = int(np.sum(np.isfinite(draws).all(axis=1)))
     if success >= config.get("minimum_success_fraction", 0.9) * config["n_boot"]:
-        quantities["ci_low"], quantities["ci_high"] = percentile_ci(draws, 0.95)
+        quantities["ci_low"], quantities["ci_high"] = percentile_ci(draws, config.get("confidence_level", 0.95))
     else:
         quantities["ci_low"], quantities["ci_high"] = np.nan, np.nan
     quantities["n_boot_ok"] = int(np.sum(~np.isnan(draws).any(axis=1)))
@@ -196,7 +217,7 @@ def analyze_custom(frame: pd.DataFrame, config: dict) -> dict:
             requested="HC3",
             computed="HC3",
             implementation="Custom likelihood observed-information sandwich; per-observation scores divided by "
-            "1 − generalized leverage (clipped to [0, 0.999]); regression-block leverage",
+            "1 − generalized leverage without clipping; regression-block leverage",
         ),
         tables=dict(
             custom_bootstrap_checks=pd.DataFrame(refit_checks),

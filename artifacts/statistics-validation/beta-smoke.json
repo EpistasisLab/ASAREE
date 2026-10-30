@@ -1,14 +1,19 @@
 {
   "configuration": {
     "alpha": 0.05,
+    "bootstrap_method": "parametric",
+    "confidence_level": 0.95,
     "denominator": null,
     "exchangeability_alpha": 0.01,
+    "exchangeability_blocks": [],
     "excluded_factor_reasons": {},
     "factors": [],
     "family": "auto",
     "hc3_fallback": "hc0",
     "max_order": 2,
     "maximum_absolute_parameter": 30,
+    "maximum_cooks_distance": 1,
+    "maximum_information_condition": 10000000000.0,
     "maximum_pearson_dispersion": 3,
     "maximum_scaled_score": null,
     "measurement_type": "auto",
@@ -16,6 +21,7 @@
     "minimum_runs_per_condition": 3,
     "minimum_success_fraction": 0.9,
     "n_boot": 20,
+    "n_diagnostic_simulations": 250,
     "n_perm": 99,
     "optimizer_maxiter": 500,
     "ordinal_levels": [],
@@ -28,8 +34,9 @@
     "statsmodels": "0.14.6"
   },
   "limitations": "Small null-rejection and pointwise null-coverage smoke study only. not validation of actual experiment reports, and not a basis for ruling out a 10% false-positive rate unless the recorded uncertainty and scope support that statement.",
+  "policy_version": 5,
   "python": "3.14.4",
-  "scope": "Native beta regression only; separate from any earlier six-report validation",
+  "scope": "Native beta with joint mean/precision expected-information HC3, primary fitted-model parametric intervals and fitted-null quantile-residual permutation. Separate from earlier report validation.",
   "seed": 20261030,
   "studies": [
     {
@@ -46,21 +53,21 @@
           "method": "analytic",
           "summary": {
             "all_simulations_bounds": [
-              0.16666666666666666,
-              0.16666666666666666
+              0.0,
+              0.0
             ],
             "confidence": 0.95,
             "denominator": "Reportable simulations only; withheld, failed and incomplete simulations excluded",
             "failed": 0,
             "incomplete": 0,
             "interpretation": "Calibration applies only to the recorded model, design, data-generating process and analysis configuration. It is not validation of other reports or designs.",
-            "not_rejected": 5,
-            "rejected": 1,
-            "rejection_rate": 0.16666666666666666,
+            "not_rejected": 6,
+            "rejected": 0,
+            "rejection_rate": 0.0,
             "reportable": 6,
             "simulations": 6,
-            "uncertainty_high": 0.6412345789976748,
-            "uncertainty_low": 0.004210744514489473,
+            "uncertainty_high": 0.4592581264399005,
+            "uncertainty_low": 0.0,
             "uncertainty_method": "Two-sided Clopper\u2013Pearson exact binomial interval",
             "withheld": 0
           }
@@ -121,21 +128,21 @@
           "method": "bootstrap",
           "summary": {
             "all_simulations_bounds": [
-              0.16666666666666666,
-              0.16666666666666666
+              0.0,
+              0.0
             ],
             "confidence": 0.95,
             "denominator": "Reportable simulations only; withheld, failed and incomplete simulations excluded",
             "failed": 0,
             "incomplete": 0,
             "interpretation": "Calibration applies only to the recorded model, design, data-generating process and analysis configuration. It is not validation of other reports or designs.",
-            "not_rejected": 5,
-            "rejected": 1,
-            "rejection_rate": 0.16666666666666666,
+            "not_rejected": 6,
+            "rejected": 0,
+            "rejection_rate": 0.0,
             "reportable": 6,
             "simulations": 6,
-            "uncertainty_high": 0.6412345789976748,
-            "uncertainty_low": 0.004210744514489473,
+            "uncertainty_high": 0.4592581264399005,
+            "uncertainty_low": 0.0,
             "uncertainty_method": "Two-sided Clopper\u2013Pearson exact binomial interval",
             "withheld": 0
           }
@@ -171,31 +178,39 @@
           "method": "bootstrap",
           "summary": {
             "all_simulations_bounds": [
-              0.16666666666666666,
-              0.16666666666666666
+              0.0,
+              0.0
             ],
             "confidence": 0.95,
             "denominator": "Reportable simulations only; withheld, failed and incomplete simulations excluded",
             "failed": 0,
             "incomplete": 0,
             "interpretation": "Calibration applies only to the recorded model, design, data-generating process and analysis configuration. It is not validation of other reports or designs.",
-            "not_rejected": 5,
-            "rejected": 1,
-            "rejection_rate": 0.16666666666666666,
+            "not_rejected": 6,
+            "rejected": 0,
+            "rejection_rate": 0.0,
             "reportable": 6,
             "simulations": 6,
-            "uncertainty_high": 0.6412345789976748,
-            "uncertainty_low": 0.004210744514489473,
+            "uncertainty_high": 0.4592581264399005,
+            "uncertainty_low": 0.0,
             "uncertainty_method": "Two-sided Clopper\u2013Pearson exact binomial interval",
             "withheld": 0
           }
         }
       ],
-      "rejection_event": "Any analytic Holm-adjusted factor-test p < configured alpha",
+      "rejection_event": "Secondary omnibus family: any analytic Holm-adjusted factor-test p < configured alpha. Primary interval noncoverage is reported separately per comparison, not pooled as independent trials.",
       "requested_simulations": 6,
       "runs_per_condition": 20,
       "simulations": [
         {
+          "covariance": {
+            "computed": "HC3",
+            "implementation": "Joint mean/precision beta scores; expected-information bread H^-1; generalized leverage h_i = trace(H^-1 I_i), including cross-information; score weights 1/(1-h_i), without clipping",
+            "leverage_sum": 4.000000000000002,
+            "max_leverage": 0.06672663215967331,
+            "requested": "HC3",
+            "verified": true
+          },
           "interval_coverage": {
             "Factor 1: 0 vs 1": {
               "analytic": true,
@@ -207,34 +222,42 @@
             },
             "Factor 1: 1 vs 2": {
               "analytic": true,
-              "bootstrap": false
+              "bootstrap": true
             }
           },
           "outcome": "not_rejected",
+          "primary_analysis": "parametric_bootstrap_intervals",
           "seed": 2834739545,
           "selected_family": "beta",
           "tests": [
             {
-              "p_adjusted": 0.6373123363976501,
+              "p_adjusted": 0.6754091509119431,
               "resampling_p_adjusted": 0.66,
               "term": "Factor 1"
             }
           ],
           "warnings": [
             "Inference assumes independent runs and is conditional on the observed experimental inputs.",
-            "Exploratory simulation count: confidence intervals need more draws for final reporting.",
-            "HC0 robust covariance was used. HC3 not implemented in this pipeline: this pipeline has no reviewed HC3 leverage construction for the separate mean and precision parts. Configured fallback: HC0."
+            "Exploratory simulation count: confidence intervals need more draws for final reporting."
           ]
         },
         {
+          "covariance": {
+            "computed": "HC3",
+            "implementation": "Joint mean/precision beta scores; expected-information bread H^-1; generalized leverage h_i = trace(H^-1 I_i), including cross-information; score weights 1/(1-h_i), without clipping",
+            "leverage_sum": 4.0,
+            "max_leverage": 0.06678897850284077,
+            "requested": "HC3",
+            "verified": true
+          },
           "interval_coverage": {
             "Factor 1: 0 vs 1": {
-              "analytic": false,
-              "bootstrap": false
+              "analytic": true,
+              "bootstrap": true
             },
             "Factor 1: 0 vs 2": {
               "analytic": true,
-              "bootstrap": false
+              "bootstrap": true
             },
             "Factor 1: 1 vs 2": {
               "analytic": true,
@@ -242,22 +265,30 @@
             }
           },
           "outcome": "not_rejected",
+          "primary_analysis": "parametric_bootstrap_intervals",
           "seed": 2923282001,
           "selected_family": "beta",
           "tests": [
             {
-              "p_adjusted": 0.11370609302137952,
+              "p_adjusted": 0.15049475763239858,
               "resampling_p_adjusted": 0.32,
               "term": "Factor 1"
             }
           ],
           "warnings": [
             "Inference assumes independent runs and is conditional on the observed experimental inputs.",
-            "Exploratory simulation count: confidence intervals need more draws for final reporting.",
-            "HC0 robust covariance was used. HC3 not implemented in this pipeline: this pipeline has no reviewed HC3 leverage construction for the separate mean and precision parts. Configured fallback: HC0."
+            "Exploratory simulation count: confidence intervals need more draws for final reporting."
           ]
         },
         {
+          "covariance": {
+            "computed": "HC3",
+            "implementation": "Joint mean/precision beta scores; expected-information bread H^-1; generalized leverage h_i = trace(H^-1 I_i), including cross-information; score weights 1/(1-h_i), without clipping",
+            "leverage_sum": 3.999999999999999,
+            "max_leverage": 0.06671108301544092,
+            "requested": "HC3",
+            "verified": true
+          },
           "interval_coverage": {
             "Factor 1: 0 vs 1": {
               "analytic": true,
@@ -273,22 +304,30 @@
             }
           },
           "outcome": "not_rejected",
+          "primary_analysis": "parametric_bootstrap_intervals",
           "seed": 135247,
           "selected_family": "beta",
           "tests": [
             {
-              "p_adjusted": 0.44517648773064045,
+              "p_adjusted": 0.4941173710789185,
               "resampling_p_adjusted": 0.52,
               "term": "Factor 1"
             }
           ],
           "warnings": [
             "Inference assumes independent runs and is conditional on the observed experimental inputs.",
-            "Exploratory simulation count: confidence intervals need more draws for final reporting.",
-            "HC0 robust covariance was used. HC3 not implemented in this pipeline: this pipeline has no reviewed HC3 leverage construction for the separate mean and precision parts. Configured fallback: HC0."
+            "Exploratory simulation count: confidence intervals need more draws for final reporting."
           ]
         },
         {
+          "covariance": {
+            "computed": "HC3",
+            "implementation": "Joint mean/precision beta scores; expected-information bread H^-1; generalized leverage h_i = trace(H^-1 I_i), including cross-information; score weights 1/(1-h_i), without clipping",
+            "leverage_sum": 4.0,
+            "max_leverage": 0.0667789765201589,
+            "requested": "HC3",
+            "verified": true
+          },
           "interval_coverage": {
             "Factor 1: 0 vs 1": {
               "analytic": true,
@@ -304,26 +343,34 @@
             }
           },
           "outcome": "not_rejected",
+          "primary_analysis": "parametric_bootstrap_intervals",
           "seed": 3156913854,
           "selected_family": "beta",
           "tests": [
             {
-              "p_adjusted": 0.3869598452005485,
+              "p_adjusted": 0.43734203286351847,
               "resampling_p_adjusted": 0.42,
               "term": "Factor 1"
             }
           ],
           "warnings": [
             "Inference assumes independent runs and is conditional on the observed experimental inputs.",
-            "Exploratory simulation count: confidence intervals need more draws for final reporting.",
-            "HC0 robust covariance was used. HC3 not implemented in this pipeline: this pipeline has no reviewed HC3 leverage construction for the separate mean and precision parts. Configured fallback: HC0."
+            "Exploratory simulation count: confidence intervals need more draws for final reporting."
           ]
         },
         {
+          "covariance": {
+            "computed": "HC3",
+            "implementation": "Joint mean/precision beta scores; expected-information bread H^-1; generalized leverage h_i = trace(H^-1 I_i), including cross-information; score weights 1/(1-h_i), without clipping",
+            "leverage_sum": 4.0,
+            "max_leverage": 0.06673107859705811,
+            "requested": "HC3",
+            "verified": true
+          },
           "interval_coverage": {
             "Factor 1: 0 vs 1": {
               "analytic": true,
-              "bootstrap": true
+              "bootstrap": false
             },
             "Factor 1: 0 vs 2": {
               "analytic": true,
@@ -335,22 +382,30 @@
             }
           },
           "outcome": "not_rejected",
+          "primary_analysis": "parametric_bootstrap_intervals",
           "seed": 3401675906,
           "selected_family": "beta",
           "tests": [
             {
-              "p_adjusted": 0.21399770419767153,
+              "p_adjusted": 0.2610317641830943,
               "resampling_p_adjusted": 0.32,
               "term": "Factor 1"
             }
           ],
           "warnings": [
             "Inference assumes independent runs and is conditional on the observed experimental inputs.",
-            "Exploratory simulation count: confidence intervals need more draws for final reporting.",
-            "HC0 robust covariance was used. HC3 not implemented in this pipeline: this pipeline has no reviewed HC3 leverage construction for the separate mean and precision parts. Configured fallback: HC0."
+            "Exploratory simulation count: confidence intervals need more draws for final reporting."
           ]
         },
         {
+          "covariance": {
+            "computed": "HC3",
+            "implementation": "Joint mean/precision beta scores; expected-information bread H^-1; generalized leverage h_i = trace(H^-1 I_i), including cross-information; score weights 1/(1-h_i), without clipping",
+            "leverage_sum": 3.999999999999999,
+            "max_leverage": 0.06673637749127392,
+            "requested": "HC3",
+            "verified": true
+          },
           "interval_coverage": {
             "Factor 1: 0 vs 1": {
               "analytic": true,
@@ -366,19 +421,19 @@
             }
           },
           "outcome": "not_rejected",
+          "primary_analysis": "parametric_bootstrap_intervals",
           "seed": 2589934666,
           "selected_family": "beta",
           "tests": [
             {
-              "p_adjusted": 0.639258597968876,
+              "p_adjusted": 0.677223172988853,
               "resampling_p_adjusted": 0.77,
               "term": "Factor 1"
             }
           ],
           "warnings": [
             "Inference assumes independent runs and is conditional on the observed experimental inputs.",
-            "Exploratory simulation count: confidence intervals need more draws for final reporting.",
-            "HC0 robust covariance was used. HC3 not implemented in this pipeline: this pipeline has no reviewed HC3 leverage construction for the separate mean and precision parts. Configured fallback: HC0."
+            "Exploratory simulation count: confidence intervals need more draws for final reporting."
           ]
         }
       ],
@@ -443,21 +498,21 @@
           "method": "bootstrap",
           "summary": {
             "all_simulations_bounds": [
-              0.16666666666666666,
-              0.16666666666666666
+              0.0,
+              0.0
             ],
             "confidence": 0.95,
             "denominator": "Reportable simulations only; withheld, failed and incomplete simulations excluded",
             "failed": 0,
             "incomplete": 0,
             "interpretation": "Calibration applies only to the recorded model, design, data-generating process and analysis configuration. It is not validation of other reports or designs.",
-            "not_rejected": 5,
-            "rejected": 1,
-            "rejection_rate": 0.16666666666666666,
+            "not_rejected": 6,
+            "rejected": 0,
+            "rejection_rate": 0.0,
             "reportable": 6,
             "simulations": 6,
-            "uncertainty_high": 0.6412345789976748,
-            "uncertainty_low": 0.004210744514489473,
+            "uncertainty_high": 0.4592581264399005,
+            "uncertainty_low": 0.0,
             "uncertainty_method": "Two-sided Clopper\u2013Pearson exact binomial interval",
             "withheld": 0
           }
@@ -593,21 +648,21 @@
           "method": "bootstrap",
           "summary": {
             "all_simulations_bounds": [
-              0.0,
-              0.0
+              0.16666666666666666,
+              0.16666666666666666
             ],
             "confidence": 0.95,
             "denominator": "Reportable simulations only; withheld, failed and incomplete simulations excluded",
             "failed": 0,
             "incomplete": 0,
             "interpretation": "Calibration applies only to the recorded model, design, data-generating process and analysis configuration. It is not validation of other reports or designs.",
-            "not_rejected": 6,
-            "rejected": 0,
-            "rejection_rate": 0.0,
+            "not_rejected": 5,
+            "rejected": 1,
+            "rejection_rate": 0.16666666666666666,
             "reportable": 6,
             "simulations": 6,
-            "uncertainty_high": 0.4592581264399005,
-            "uncertainty_low": 0.0,
+            "uncertainty_high": 0.6412345789976748,
+            "uncertainty_low": 0.004210744514489473,
             "uncertainty_method": "Two-sided Clopper\u2013Pearson exact binomial interval",
             "withheld": 0
           }
@@ -643,6 +698,31 @@
           "method": "bootstrap",
           "summary": {
             "all_simulations_bounds": [
+              0.16666666666666666,
+              0.16666666666666666
+            ],
+            "confidence": 0.95,
+            "denominator": "Reportable simulations only; withheld, failed and incomplete simulations excluded",
+            "failed": 0,
+            "incomplete": 0,
+            "interpretation": "Calibration applies only to the recorded model, design, data-generating process and analysis configuration. It is not validation of other reports or designs.",
+            "not_rejected": 5,
+            "rejected": 1,
+            "rejection_rate": 0.16666666666666666,
+            "reportable": 6,
+            "simulations": 6,
+            "uncertainty_high": 0.6412345789976748,
+            "uncertainty_low": 0.004210744514489473,
+            "uncertainty_method": "Two-sided Clopper\u2013Pearson exact binomial interval",
+            "withheld": 0
+          }
+        },
+        {
+          "comparison": "Factor 1: 1 vs 2",
+          "event": "Pointwise 95% interval excludes known null difference zero",
+          "method": "analytic",
+          "summary": {
+            "all_simulations_bounds": [
               0.0,
               0.0
             ],
@@ -665,49 +745,24 @@
         {
           "comparison": "Factor 1: 1 vs 2",
           "event": "Pointwise 95% interval excludes known null difference zero",
-          "method": "analytic",
-          "summary": {
-            "all_simulations_bounds": [
-              0.16666666666666666,
-              0.16666666666666666
-            ],
-            "confidence": 0.95,
-            "denominator": "Reportable simulations only; withheld, failed and incomplete simulations excluded",
-            "failed": 0,
-            "incomplete": 0,
-            "interpretation": "Calibration applies only to the recorded model, design, data-generating process and analysis configuration. It is not validation of other reports or designs.",
-            "not_rejected": 5,
-            "rejected": 1,
-            "rejection_rate": 0.16666666666666666,
-            "reportable": 6,
-            "simulations": 6,
-            "uncertainty_high": 0.6412345789976748,
-            "uncertainty_low": 0.004210744514489473,
-            "uncertainty_method": "Two-sided Clopper\u2013Pearson exact binomial interval",
-            "withheld": 0
-          }
-        },
-        {
-          "comparison": "Factor 1: 1 vs 2",
-          "event": "Pointwise 95% interval excludes known null difference zero",
           "method": "bootstrap",
           "summary": {
             "all_simulations_bounds": [
-              0.16666666666666666,
-              0.16666666666666666
+              0.3333333333333333,
+              0.3333333333333333
             ],
             "confidence": 0.95,
             "denominator": "Reportable simulations only; withheld, failed and incomplete simulations excluded",
             "failed": 0,
             "incomplete": 0,
             "interpretation": "Calibration applies only to the recorded model, design, data-generating process and analysis configuration. It is not validation of other reports or designs.",
-            "not_rejected": 5,
-            "rejected": 1,
-            "rejection_rate": 0.16666666666666666,
+            "not_rejected": 4,
+            "rejected": 2,
+            "rejection_rate": 0.3333333333333333,
             "reportable": 6,
             "simulations": 6,
-            "uncertainty_high": 0.6412345789976748,
-            "uncertainty_low": 0.004210744514489473,
+            "uncertainty_high": 0.7772219044964879,
+            "uncertainty_low": 0.0432718682927417,
             "uncertainty_method": "Two-sided Clopper\u2013Pearson exact binomial interval",
             "withheld": 0
           }
@@ -743,31 +798,39 @@
           "method": "bootstrap",
           "summary": {
             "all_simulations_bounds": [
-              0.16666666666666666,
-              0.16666666666666666
+              0.0,
+              0.0
             ],
             "confidence": 0.95,
             "denominator": "Reportable simulations only; withheld, failed and incomplete simulations excluded",
             "failed": 0,
             "incomplete": 0,
             "interpretation": "Calibration applies only to the recorded model, design, data-generating process and analysis configuration. It is not validation of other reports or designs.",
-            "not_rejected": 5,
-            "rejected": 1,
-            "rejection_rate": 0.16666666666666666,
+            "not_rejected": 6,
+            "rejected": 0,
+            "rejection_rate": 0.0,
             "reportable": 6,
             "simulations": 6,
-            "uncertainty_high": 0.6412345789976748,
-            "uncertainty_low": 0.004210744514489473,
+            "uncertainty_high": 0.4592581264399005,
+            "uncertainty_low": 0.0,
             "uncertainty_method": "Two-sided Clopper\u2013Pearson exact binomial interval",
             "withheld": 0
           }
         }
       ],
-      "rejection_event": "Any analytic Holm-adjusted factor-test p < configured alpha",
+      "rejection_event": "Secondary omnibus family: any analytic Holm-adjusted factor-test p < configured alpha. Primary interval noncoverage is reported separately per comparison, not pooled as independent trials.",
       "requested_simulations": 6,
       "runs_per_condition": "20, 25, 30 cyclically",
       "simulations": [
         {
+          "covariance": {
+            "computed": "HC3",
+            "implementation": "Joint mean/precision beta scores; expected-information bread H^-1; generalized leverage h_i = trace(H^-1 I_i), including cross-information; score weights 1/(1-h_i), without clipping",
+            "leverage_sum": 6.999999999999998,
+            "max_leverage": 0.05667838192606183,
+            "requested": "HC3",
+            "verified": true
+          },
           "interval_coverage": {
             "Factor 1 (0 vs 1) \u00d7 Factor 2 (0 vs 1)": {
               "analytic": true,
@@ -783,7 +846,7 @@
             },
             "Factor 1: 0 vs 1": {
               "analytic": true,
-              "bootstrap": true
+              "bootstrap": false
             },
             "Factor 1: 0 vs 2": {
               "analytic": true,
@@ -799,33 +862,41 @@
             }
           },
           "outcome": "not_rejected",
+          "primary_analysis": "parametric_bootstrap_intervals",
           "seed": 2610747632,
           "selected_family": "beta",
           "tests": [
             {
-              "p_adjusted": 0.6918278204552968,
-              "resampling_p_adjusted": 0.72,
+              "p_adjusted": 0.7980178986286126,
+              "resampling_p_adjusted": 1.0,
               "term": "Factor 1"
             },
             {
-              "p_adjusted": 0.6918278204552968,
-              "resampling_p_adjusted": 0.72,
+              "p_adjusted": 0.7980178986286126,
+              "resampling_p_adjusted": 1.0,
               "term": "Factor 2"
             },
             {
-              "p_adjusted": 0.971307037443798,
-              "resampling_p_adjusted": null,
+              "p_adjusted": 0.9740618497267782,
+              "resampling_p_adjusted": 1.0,
               "term": "Factor 1:Factor 2"
             }
           ],
           "warnings": [
             "Inference assumes independent runs and is conditional on the observed experimental inputs.",
             "Exploratory simulation count: confidence intervals need more draws for final reporting.",
-            "Run counts differ across conditions; comparisons weight conditions equally.",
-            "HC0 robust covariance was used. HC3 not implemented in this pipeline: this pipeline has no reviewed HC3 leverage construction for the separate mean and precision parts. Configured fallback: HC0."
+            "Run counts differ across conditions; comparisons weight conditions equally."
           ]
         },
         {
+          "covariance": {
+            "computed": "HC3",
+            "implementation": "Joint mean/precision beta scores; expected-information bread H^-1; generalized leverage h_i = trace(H^-1 I_i), including cross-information; score weights 1/(1-h_i), without clipping",
+            "leverage_sum": 7.000000000000001,
+            "max_leverage": 0.056707576011766465,
+            "requested": "HC3",
+            "verified": true
+          },
           "interval_coverage": {
             "Factor 1 (0 vs 1) \u00d7 Factor 2 (0 vs 1)": {
               "analytic": true,
@@ -845,11 +916,11 @@
             },
             "Factor 1: 0 vs 2": {
               "analytic": true,
-              "bootstrap": true
+              "bootstrap": false
             },
             "Factor 1: 1 vs 2": {
               "analytic": true,
-              "bootstrap": true
+              "bootstrap": false
             },
             "Factor 2: 0 vs 1": {
               "analytic": true,
@@ -857,33 +928,41 @@
             }
           },
           "outcome": "not_rejected",
+          "primary_analysis": "parametric_bootstrap_intervals",
           "seed": 346547410,
           "selected_family": "beta",
           "tests": [
             {
-              "p_adjusted": 0.6285534158713403,
-              "resampling_p_adjusted": 0.58,
+              "p_adjusted": 0.7344481496817656,
+              "resampling_p_adjusted": 0.66,
               "term": "Factor 1"
             },
             {
-              "p_adjusted": 0.6285534158713403,
-              "resampling_p_adjusted": 0.58,
+              "p_adjusted": 0.7344481496817656,
+              "resampling_p_adjusted": 0.66,
               "term": "Factor 2"
             },
             {
-              "p_adjusted": 0.6285534158713403,
-              "resampling_p_adjusted": null,
+              "p_adjusted": 0.7344481496817656,
+              "resampling_p_adjusted": 0.66,
               "term": "Factor 1:Factor 2"
             }
           ],
           "warnings": [
             "Inference assumes independent runs and is conditional on the observed experimental inputs.",
             "Exploratory simulation count: confidence intervals need more draws for final reporting.",
-            "Run counts differ across conditions; comparisons weight conditions equally.",
-            "HC0 robust covariance was used. HC3 not implemented in this pipeline: this pipeline has no reviewed HC3 leverage construction for the separate mean and precision parts. Configured fallback: HC0."
+            "Run counts differ across conditions; comparisons weight conditions equally."
           ]
         },
         {
+          "covariance": {
+            "computed": "HC3",
+            "implementation": "Joint mean/precision beta scores; expected-information bread H^-1; generalized leverage h_i = trace(H^-1 I_i), including cross-information; score weights 1/(1-h_i), without clipping",
+            "leverage_sum": 7.0,
+            "max_leverage": 0.05671524249551985,
+            "requested": "HC3",
+            "verified": true
+          },
           "interval_coverage": {
             "Factor 1 (0 vs 1) \u00d7 Factor 2 (0 vs 1)": {
               "analytic": true,
@@ -915,6 +994,7 @@
             }
           },
           "outcome": "not_rejected",
+          "primary_analysis": "parametric_bootstrap_intervals",
           "seed": 2950150899,
           "selected_family": "beta",
           "tests": [
@@ -930,18 +1010,25 @@
             },
             {
               "p_adjusted": 1.0,
-              "resampling_p_adjusted": null,
+              "resampling_p_adjusted": 1.0,
               "term": "Factor 1:Factor 2"
             }
           ],
           "warnings": [
             "Inference assumes independent runs and is conditional on the observed experimental inputs.",
             "Exploratory simulation count: confidence intervals need more draws for final reporting.",
-            "Run counts differ across conditions; comparisons weight conditions equally.",
-            "HC0 robust covariance was used. HC3 not implemented in this pipeline: this pipeline has no reviewed HC3 leverage construction for the separate mean and precision parts. Configured fallback: HC0."
+            "Run counts differ across conditions; comparisons weight conditions equally."
           ]
         },
         {
+          "covariance": {
+            "computed": "HC3",
+            "implementation": "Joint mean/precision beta scores; expected-information bread H^-1; generalized leverage h_i = trace(H^-1 I_i), including cross-information; score weights 1/(1-h_i), without clipping",
+            "leverage_sum": 6.999999999999998,
+            "max_leverage": 0.056710309715381144,
+            "requested": "HC3",
+            "verified": true
+          },
           "interval_coverage": {
             "Factor 1 (0 vs 1) \u00d7 Factor 2 (0 vs 1)": {
               "analytic": true,
@@ -973,37 +1060,45 @@
             }
           },
           "outcome": "not_rejected",
+          "primary_analysis": "parametric_bootstrap_intervals",
           "seed": 2612507500,
           "selected_family": "beta",
           "tests": [
             {
-              "p_adjusted": 0.5290885824885729,
+              "p_adjusted": 0.5624838755647034,
               "resampling_p_adjusted": 0.63,
               "term": "Factor 1"
             },
             {
-              "p_adjusted": 0.23294715440742936,
+              "p_adjusted": 0.27105517823142294,
               "resampling_p_adjusted": 0.24,
               "term": "Factor 2"
             },
             {
-              "p_adjusted": 0.18423288485140535,
-              "resampling_p_adjusted": null,
+              "p_adjusted": 0.24029608545260395,
+              "resampling_p_adjusted": 0.12,
               "term": "Factor 1:Factor 2"
             }
           ],
           "warnings": [
             "Inference assumes independent runs and is conditional on the observed experimental inputs.",
             "Exploratory simulation count: confidence intervals need more draws for final reporting.",
-            "Run counts differ across conditions; comparisons weight conditions equally.",
-            "HC0 robust covariance was used. HC3 not implemented in this pipeline: this pipeline has no reviewed HC3 leverage construction for the separate mean and precision parts. Configured fallback: HC0."
+            "Run counts differ across conditions; comparisons weight conditions equally."
           ]
         },
         {
+          "covariance": {
+            "computed": "HC3",
+            "implementation": "Joint mean/precision beta scores; expected-information bread H^-1; generalized leverage h_i = trace(H^-1 I_i), including cross-information; score weights 1/(1-h_i), without clipping",
+            "leverage_sum": 7.0,
+            "max_leverage": 0.0566423283097218,
+            "requested": "HC3",
+            "verified": true
+          },
           "interval_coverage": {
             "Factor 1 (0 vs 1) \u00d7 Factor 2 (0 vs 1)": {
               "analytic": false,
-              "bootstrap": false
+              "bootstrap": true
             },
             "Factor 1 (0 vs 2) \u00d7 Factor 2 (0 vs 1)": {
               "analytic": true,
@@ -1022,42 +1117,50 @@
               "bootstrap": true
             },
             "Factor 1: 1 vs 2": {
-              "analytic": false,
+              "analytic": true,
               "bootstrap": false
             },
             "Factor 2: 0 vs 1": {
               "analytic": true,
-              "bootstrap": false
+              "bootstrap": true
             }
           },
           "outcome": "not_rejected",
+          "primary_analysis": "parametric_bootstrap_intervals",
           "seed": 3390768222,
           "selected_family": "beta",
           "tests": [
             {
-              "p_adjusted": 0.22550102857021823,
-              "resampling_p_adjusted": 0.14,
+              "p_adjusted": 0.29027051047629515,
+              "resampling_p_adjusted": 0.21000000000000002,
               "term": "Factor 1"
             },
             {
-              "p_adjusted": 0.22550102857021823,
-              "resampling_p_adjusted": 0.14,
+              "p_adjusted": 0.29027051047629515,
+              "resampling_p_adjusted": 0.21000000000000002,
               "term": "Factor 2"
             },
             {
-              "p_adjusted": 0.22550102857021823,
-              "resampling_p_adjusted": null,
+              "p_adjusted": 0.29027051047629515,
+              "resampling_p_adjusted": 0.21000000000000002,
               "term": "Factor 1:Factor 2"
             }
           ],
           "warnings": [
             "Inference assumes independent runs and is conditional on the observed experimental inputs.",
             "Exploratory simulation count: confidence intervals need more draws for final reporting.",
-            "Run counts differ across conditions; comparisons weight conditions equally.",
-            "HC0 robust covariance was used. HC3 not implemented in this pipeline: this pipeline has no reviewed HC3 leverage construction for the separate mean and precision parts. Configured fallback: HC0."
+            "Run counts differ across conditions; comparisons weight conditions equally."
           ]
         },
         {
+          "covariance": {
+            "computed": "HC3",
+            "implementation": "Joint mean/precision beta scores; expected-information bread H^-1; generalized leverage h_i = trace(H^-1 I_i), including cross-information; score weights 1/(1-h_i), without clipping",
+            "leverage_sum": 7.0,
+            "max_leverage": 0.05665139277215051,
+            "requested": "HC3",
+            "verified": true
+          },
           "interval_coverage": {
             "Factor 1 (0 vs 1) \u00d7 Factor 2 (0 vs 1)": {
               "analytic": true,
@@ -1089,30 +1192,30 @@
             }
           },
           "outcome": "not_rejected",
+          "primary_analysis": "parametric_bootstrap_intervals",
           "seed": 191972084,
           "selected_family": "beta",
           "tests": [
             {
               "p_adjusted": 1.0,
-              "resampling_p_adjusted": 0.38,
+              "resampling_p_adjusted": 0.5700000000000001,
               "term": "Factor 1"
             },
             {
               "p_adjusted": 1.0,
-              "resampling_p_adjusted": 0.74,
+              "resampling_p_adjusted": 1.0,
               "term": "Factor 2"
             },
             {
               "p_adjusted": 1.0,
-              "resampling_p_adjusted": null,
+              "resampling_p_adjusted": 1.0,
               "term": "Factor 1:Factor 2"
             }
           ],
           "warnings": [
             "Inference assumes independent runs and is conditional on the observed experimental inputs.",
             "Exploratory simulation count: confidence intervals need more draws for final reporting.",
-            "Run counts differ across conditions; comparisons weight conditions equally.",
-            "HC0 robust covariance was used. HC3 not implemented in this pipeline: this pipeline has no reviewed HC3 leverage construction for the separate mean and precision parts. Configured fallback: HC0."
+            "Run counts differ across conditions; comparisons weight conditions equally."
           ]
         }
       ],
@@ -1178,21 +1281,21 @@
           "method": "bootstrap",
           "summary": {
             "all_simulations_bounds": [
-              0.0,
-              0.0
+              0.3333333333333333,
+              0.3333333333333333
             ],
             "confidence": 0.95,
             "denominator": "Reportable simulations only; withheld, failed and incomplete simulations excluded",
             "failed": 0,
             "incomplete": 0,
             "interpretation": "Calibration applies only to the recorded model, design, data-generating process and analysis configuration. It is not validation of other reports or designs.",
-            "not_rejected": 6,
-            "rejected": 0,
-            "rejection_rate": 0.0,
+            "not_rejected": 4,
+            "rejected": 2,
+            "rejection_rate": 0.3333333333333333,
             "reportable": 6,
             "simulations": 6,
-            "uncertainty_high": 0.4592581264399005,
-            "uncertainty_low": 0.0,
+            "uncertainty_high": 0.7772219044964879,
+            "uncertainty_low": 0.0432718682927417,
             "uncertainty_method": "Two-sided Clopper\u2013Pearson exact binomial interval",
             "withheld": 0
           }
@@ -1228,21 +1331,21 @@
           "method": "bootstrap",
           "summary": {
             "all_simulations_bounds": [
-              0.5,
-              0.5
+              0.3333333333333333,
+              0.3333333333333333
             ],
             "confidence": 0.95,
             "denominator": "Reportable simulations only; withheld, failed and incomplete simulations excluded",
             "failed": 0,
             "incomplete": 0,
             "interpretation": "Calibration applies only to the recorded model, design, data-generating process and analysis configuration. It is not validation of other reports or designs.",
-            "not_rejected": 3,
-            "rejected": 3,
-            "rejection_rate": 0.5,
+            "not_rejected": 4,
+            "rejected": 2,
+            "rejection_rate": 0.3333333333333333,
             "reportable": 6,
             "simulations": 6,
-            "uncertainty_high": 0.8818827512429748,
-            "uncertainty_low": 0.11811724875702526,
+            "uncertainty_high": 0.7772219044964879,
+            "uncertainty_low": 0.0432718682927417,
             "uncertainty_method": "Two-sided Clopper\u2013Pearson exact binomial interval",
             "withheld": 0
           }
@@ -1448,19 +1551,27 @@
           }
         }
       ],
-      "rejection_event": "Any analytic Holm-adjusted factor-test p < configured alpha",
+      "rejection_event": "Secondary omnibus family: any analytic Holm-adjusted factor-test p < configured alpha. Primary interval noncoverage is reported separately per comparison, not pooled as independent trials.",
       "requested_simulations": 6,
       "runs_per_condition": 20,
       "simulations": [
         {
+          "covariance": {
+            "computed": "HC3",
+            "implementation": "Joint mean/precision beta scores; expected-information bread H^-1; generalized leverage h_i = trace(H^-1 I_i), including cross-information; score weights 1/(1-h_i), without clipping",
+            "leverage_sum": 8.0,
+            "max_leverage": 0.05037030159202551,
+            "requested": "HC3",
+            "verified": true
+          },
           "interval_coverage": {
             "Factor 1 (0 vs 1) \u00d7 Factor 2 (0 vs 1)": {
               "analytic": true,
-              "bootstrap": true
+              "bootstrap": false
             },
             "Factor 1 (0 vs 1) \u00d7 Factor 3 (0 vs 1)": {
               "analytic": true,
-              "bootstrap": false
+              "bootstrap": true
             },
             "Factor 1: 0 vs 1": {
               "analytic": true,
@@ -1480,47 +1591,55 @@
             }
           },
           "outcome": "not_rejected",
+          "primary_analysis": "parametric_bootstrap_intervals",
           "seed": 3702796487,
           "selected_family": "beta",
           "tests": [
             {
               "p_adjusted": 1.0,
-              "resampling_p_adjusted": 0.32,
+              "resampling_p_adjusted": 0.64,
               "term": "Factor 1"
             },
             {
-              "p_adjusted": 0.4486462295838674,
-              "resampling_p_adjusted": 0.12,
+              "p_adjusted": 0.5271812950337027,
+              "resampling_p_adjusted": 0.3,
               "term": "Factor 2"
             },
             {
-              "p_adjusted": 0.0779145710674789,
-              "resampling_p_adjusted": 0.03,
+              "p_adjusted": 0.10999384496938536,
+              "resampling_p_adjusted": 0.06,
               "term": "Factor 3"
             },
             {
-              "p_adjusted": 0.41526361958134317,
-              "resampling_p_adjusted": null,
+              "p_adjusted": 0.49896706525510626,
+              "resampling_p_adjusted": 0.6,
               "term": "Factor 1:Factor 2"
             },
             {
-              "p_adjusted": 0.4486462295838674,
-              "resampling_p_adjusted": null,
+              "p_adjusted": 0.5271812950337027,
+              "resampling_p_adjusted": 0.6,
               "term": "Factor 1:Factor 3"
             },
             {
               "p_adjusted": 1.0,
-              "resampling_p_adjusted": null,
+              "resampling_p_adjusted": 0.81,
               "term": "Factor 2:Factor 3"
             }
           ],
           "warnings": [
             "Inference assumes independent runs and is conditional on the observed experimental inputs.",
-            "Exploratory simulation count: confidence intervals need more draws for final reporting.",
-            "HC0 robust covariance was used. HC3 not implemented in this pipeline: this pipeline has no reviewed HC3 leverage construction for the separate mean and precision parts. Configured fallback: HC0."
+            "Exploratory simulation count: confidence intervals need more draws for final reporting."
           ]
         },
         {
+          "covariance": {
+            "computed": "HC3",
+            "implementation": "Joint mean/precision beta scores; expected-information bread H^-1; generalized leverage h_i = trace(H^-1 I_i), including cross-information; score weights 1/(1-h_i), without clipping",
+            "leverage_sum": 8.000000000000002,
+            "max_leverage": 0.050283281644743126,
+            "requested": "HC3",
+            "verified": true
+          },
           "interval_coverage": {
             "Factor 1 (0 vs 1) \u00d7 Factor 2 (0 vs 1)": {
               "analytic": true,
@@ -1548,47 +1667,55 @@
             }
           },
           "outcome": "rejected",
+          "primary_analysis": "parametric_bootstrap_intervals",
           "seed": 1088394100,
           "selected_family": "beta",
           "tests": [
             {
               "p_adjusted": 1.0,
-              "resampling_p_adjusted": 0.78,
+              "resampling_p_adjusted": 1.0,
               "term": "Factor 1"
             },
             {
               "p_adjusted": 1.0,
-              "resampling_p_adjusted": 0.78,
+              "resampling_p_adjusted": 1.0,
               "term": "Factor 2"
             },
             {
-              "p_adjusted": 0.030033317742383568,
-              "resampling_p_adjusted": 0.06,
+              "p_adjusted": 0.04661356216243742,
+              "resampling_p_adjusted": 0.12,
               "term": "Factor 3"
             },
             {
               "p_adjusted": 1.0,
-              "resampling_p_adjusted": null,
+              "resampling_p_adjusted": 1.0,
               "term": "Factor 1:Factor 2"
             },
             {
               "p_adjusted": 1.0,
-              "resampling_p_adjusted": null,
+              "resampling_p_adjusted": 1.0,
               "term": "Factor 1:Factor 3"
             },
             {
               "p_adjusted": 1.0,
-              "resampling_p_adjusted": null,
+              "resampling_p_adjusted": 1.0,
               "term": "Factor 2:Factor 3"
             }
           ],
           "warnings": [
             "Inference assumes independent runs and is conditional on the observed experimental inputs.",
-            "Exploratory simulation count: confidence intervals need more draws for final reporting.",
-            "HC0 robust covariance was used. HC3 not implemented in this pipeline: this pipeline has no reviewed HC3 leverage construction for the separate mean and precision parts. Configured fallback: HC0."
+            "Exploratory simulation count: confidence intervals need more draws for final reporting."
           ]
         },
         {
+          "covariance": {
+            "computed": "HC3",
+            "implementation": "Joint mean/precision beta scores; expected-information bread H^-1; generalized leverage h_i = trace(H^-1 I_i), including cross-information; score weights 1/(1-h_i), without clipping",
+            "leverage_sum": 7.999999999999998,
+            "max_leverage": 0.05025937664407756,
+            "requested": "HC3",
+            "verified": true
+          },
           "interval_coverage": {
             "Factor 1 (0 vs 1) \u00d7 Factor 2 (0 vs 1)": {
               "analytic": true,
@@ -1615,7 +1742,8 @@
               "bootstrap": true
             }
           },
-          "outcome": "rejected",
+          "outcome": "not_rejected",
+          "primary_analysis": "parametric_bootstrap_intervals",
           "seed": 3775232779,
           "selected_family": "beta",
           "tests": [
@@ -1636,31 +1764,38 @@
             },
             {
               "p_adjusted": 1.0,
-              "resampling_p_adjusted": null,
+              "resampling_p_adjusted": 1.0,
               "term": "Factor 1:Factor 2"
             },
             {
-              "p_adjusted": 0.04830874275913337,
-              "resampling_p_adjusted": null,
+              "p_adjusted": 0.07092147841898029,
+              "resampling_p_adjusted": 0.06,
               "term": "Factor 1:Factor 3"
             },
             {
               "p_adjusted": 1.0,
-              "resampling_p_adjusted": null,
+              "resampling_p_adjusted": 1.0,
               "term": "Factor 2:Factor 3"
             }
           ],
           "warnings": [
             "Inference assumes independent runs and is conditional on the observed experimental inputs.",
-            "Exploratory simulation count: confidence intervals need more draws for final reporting.",
-            "HC0 robust covariance was used. HC3 not implemented in this pipeline: this pipeline has no reviewed HC3 leverage construction for the separate mean and precision parts. Configured fallback: HC0."
+            "Exploratory simulation count: confidence intervals need more draws for final reporting."
           ]
         },
         {
+          "covariance": {
+            "computed": "HC3",
+            "implementation": "Joint mean/precision beta scores; expected-information bread H^-1; generalized leverage h_i = trace(H^-1 I_i), including cross-information; score weights 1/(1-h_i), without clipping",
+            "leverage_sum": 8.0,
+            "max_leverage": 0.05036213461485134,
+            "requested": "HC3",
+            "verified": true
+          },
           "interval_coverage": {
             "Factor 1 (0 vs 1) \u00d7 Factor 2 (0 vs 1)": {
               "analytic": true,
-              "bootstrap": true
+              "bootstrap": false
             },
             "Factor 1 (0 vs 1) \u00d7 Factor 3 (0 vs 1)": {
               "analytic": false,
@@ -1684,6 +1819,7 @@
             }
           },
           "outcome": "not_rejected",
+          "primary_analysis": "parametric_bootstrap_intervals",
           "seed": 1313934455,
           "selected_family": "beta",
           "tests": [
@@ -1698,33 +1834,40 @@
               "term": "Factor 2"
             },
             {
-              "p_adjusted": 0.10904186826929205,
-              "resampling_p_adjusted": 0.09,
+              "p_adjusted": 0.14858897779922997,
+              "resampling_p_adjusted": 0.15,
               "term": "Factor 3"
             },
             {
-              "p_adjusted": 0.23353725655342486,
-              "resampling_p_adjusted": null,
+              "p_adjusted": 0.28835933145027415,
+              "resampling_p_adjusted": 0.24,
               "term": "Factor 1:Factor 2"
             },
             {
-              "p_adjusted": 0.14944130546093254,
-              "resampling_p_adjusted": null,
+              "p_adjusted": 0.1950118774528095,
+              "resampling_p_adjusted": 0.12,
               "term": "Factor 1:Factor 3"
             },
             {
-              "p_adjusted": 0.857677573022542,
-              "resampling_p_adjusted": null,
+              "p_adjusted": 0.9318839535906507,
+              "resampling_p_adjusted": 0.81,
               "term": "Factor 2:Factor 3"
             }
           ],
           "warnings": [
             "Inference assumes independent runs and is conditional on the observed experimental inputs.",
-            "Exploratory simulation count: confidence intervals need more draws for final reporting.",
-            "HC0 robust covariance was used. HC3 not implemented in this pipeline: this pipeline has no reviewed HC3 leverage construction for the separate mean and precision parts. Configured fallback: HC0."
+            "Exploratory simulation count: confidence intervals need more draws for final reporting."
           ]
         },
         {
+          "covariance": {
+            "computed": "HC3",
+            "implementation": "Joint mean/precision beta scores; expected-information bread H^-1; generalized leverage h_i = trace(H^-1 I_i), including cross-information; score weights 1/(1-h_i), without clipping",
+            "leverage_sum": 8.000000000000002,
+            "max_leverage": 0.05023448502560927,
+            "requested": "HC3",
+            "verified": true
+          },
           "interval_coverage": {
             "Factor 1 (0 vs 1) \u00d7 Factor 2 (0 vs 1)": {
               "analytic": true,
@@ -1752,12 +1895,13 @@
             }
           },
           "outcome": "not_rejected",
+          "primary_analysis": "parametric_bootstrap_intervals",
           "seed": 2164313146,
           "selected_family": "beta",
           "tests": [
             {
-              "p_adjusted": 0.16906186935975098,
-              "resampling_p_adjusted": 0.09,
+              "p_adjusted": 0.22167224948182496,
+              "resampling_p_adjusted": 0.18,
               "term": "Factor 1"
             },
             {
@@ -1772,27 +1916,34 @@
             },
             {
               "p_adjusted": 1.0,
-              "resampling_p_adjusted": null,
+              "resampling_p_adjusted": 1.0,
               "term": "Factor 1:Factor 2"
             },
             {
               "p_adjusted": 1.0,
-              "resampling_p_adjusted": null,
+              "resampling_p_adjusted": 1.0,
               "term": "Factor 1:Factor 3"
             },
             {
               "p_adjusted": 1.0,
-              "resampling_p_adjusted": null,
+              "resampling_p_adjusted": 1.0,
               "term": "Factor 2:Factor 3"
             }
           ],
           "warnings": [
             "Inference assumes independent runs and is conditional on the observed experimental inputs.",
-            "Exploratory simulation count: confidence intervals need more draws for final reporting.",
-            "HC0 robust covariance was used. HC3 not implemented in this pipeline: this pipeline has no reviewed HC3 leverage construction for the separate mean and precision parts. Configured fallback: HC0."
+            "Exploratory simulation count: confidence intervals need more draws for final reporting."
           ]
         },
         {
+          "covariance": {
+            "computed": "HC3",
+            "implementation": "Joint mean/precision beta scores; expected-information bread H^-1; generalized leverage h_i = trace(H^-1 I_i), including cross-information; score weights 1/(1-h_i), without clipping",
+            "leverage_sum": 8.0,
+            "max_leverage": 0.05029265001545806,
+            "requested": "HC3",
+            "verified": true
+          },
           "interval_coverage": {
             "Factor 1 (0 vs 1) \u00d7 Factor 2 (0 vs 1)": {
               "analytic": true,
@@ -1820,64 +1971,64 @@
             }
           },
           "outcome": "not_rejected",
+          "primary_analysis": "parametric_bootstrap_intervals",
           "seed": 1464326654,
           "selected_family": "beta",
           "tests": [
             {
               "p_adjusted": 1.0,
-              "resampling_p_adjusted": 0.42,
+              "resampling_p_adjusted": 1.0,
               "term": "Factor 1"
             },
             {
               "p_adjusted": 1.0,
-              "resampling_p_adjusted": 0.64,
+              "resampling_p_adjusted": 1.0,
               "term": "Factor 2"
             },
             {
-              "p_adjusted": 0.8480316206391265,
-              "resampling_p_adjusted": 0.33,
+              "p_adjusted": 0.9741330009937537,
+              "resampling_p_adjusted": 0.66,
               "term": "Factor 3"
             },
             {
               "p_adjusted": 1.0,
-              "resampling_p_adjusted": null,
+              "resampling_p_adjusted": 1.0,
               "term": "Factor 1:Factor 2"
             },
             {
               "p_adjusted": 1.0,
-              "resampling_p_adjusted": null,
+              "resampling_p_adjusted": 1.0,
               "term": "Factor 1:Factor 3"
             },
             {
               "p_adjusted": 1.0,
-              "resampling_p_adjusted": null,
+              "resampling_p_adjusted": 1.0,
               "term": "Factor 2:Factor 3"
             }
           ],
           "warnings": [
             "Inference assumes independent runs and is conditional on the observed experimental inputs.",
-            "Exploratory simulation count: confidence intervals need more draws for final reporting.",
-            "HC0 robust covariance was used. HC3 not implemented in this pipeline: this pipeline has no reviewed HC3 leverage construction for the separate mean and precision parts. Configured fallback: HC0."
+            "Exploratory simulation count: confidence intervals need more draws for final reporting."
           ]
         }
       ],
       "summary": {
         "all_simulations_bounds": [
-          0.3333333333333333,
-          0.3333333333333333
+          0.16666666666666666,
+          0.16666666666666666
         ],
         "confidence": 0.95,
         "denominator": "Reportable simulations only; withheld, failed and incomplete simulations excluded",
         "failed": 0,
         "incomplete": 0,
         "interpretation": "Calibration applies only to the recorded model, design, data-generating process and analysis configuration. It is not validation of other reports or designs.",
-        "not_rejected": 4,
-        "rejected": 2,
-        "rejection_rate": 0.3333333333333333,
+        "not_rejected": 5,
+        "rejected": 1,
+        "rejection_rate": 0.16666666666666666,
         "reportable": 6,
         "simulations": 6,
-        "uncertainty_high": 0.7772219044964879,
-        "uncertainty_low": 0.0432718682927417,
+        "uncertainty_high": 0.6412345789976748,
+        "uncertainty_low": 0.004210744514489473,
         "uncertainty_method": "Two-sided Clopper\u2013Pearson exact binomial interval",
         "withheld": 0
       }

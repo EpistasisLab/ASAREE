@@ -117,7 +117,13 @@ def finish_fit(result, config=None, family=None):
         boundary_ok = all(
             checks[key] for key in ("parameter_boundary_gate", "dispersion_boundary_gate", "probability_boundary_gate")
         )
-        if checks["accepted"] or not np.isfinite(result.params).all() or not boundary_ok:
+        if (
+            checks["accepted"]
+            or not np.isfinite(result.params).all()
+            or not boundary_ok
+            or (checks["optimizer_converged"] and not checks["critical_diagnostics_gate"])
+            or not checks["fitted_support_gate"]
+        ):
             break
         try:
             attempt = result.model.fit(
@@ -305,6 +311,7 @@ def analyze(frame: pd.DataFrame, config: dict) -> dict:
         execution = result._stats_fit_execution
         if not exact and not execution["checks"]["accepted"]:
             reasons.append("numerical fit acceptance checks failed")
+            reasons.extend(execution["checks"].get("diagnostics", {}).get("unavailable", []))
         tables["fit_execution"] = pd.DataFrame([execution])
         llf, n_parameters, likelihood_basis, likelihood_extra = (np.nan, len(result.params), "unavailable", {})
         with contextlib.suppress(ValueError, FloatingPointError, np.linalg.LinAlgError):
@@ -369,7 +376,9 @@ def analyze(frame: pd.DataFrame, config: dict) -> dict:
             )
         if usable and robust and not exact:
             try:
-                covariance, covariance_record = robust_covariance(result, family, config.get("hc3_fallback", "hc0"))
+                covariance, covariance_record = robust_covariance(
+                    result, family, config.get("hc3_fallback", "hc0"), config.get("maximum_information_condition", 1e10)
+                )
                 install_covariance(result, covariance, covariance_record)
                 covariance_label = f"{covariance_record['computed']} robust covariance"
             except (CovarianceUnavailableError, np.linalg.LinAlgError) as exc:
@@ -662,8 +671,12 @@ def analyze(frame: pd.DataFrame, config: dict) -> dict:
         else:
             metadata = dict(
                 kind="bootstrap",
-                procedure="case_bootstrap",
-                method="Cell-stratified case bootstrap; fixed selected model; percentile intervals",
+                procedure="case_bootstrap"
+                if config.get("bootstrap_method") == "case"
+                else "fitted_model_parametric_bootstrap",
+                method="Bootstrap intervals not run; "
+                + config.get("bootstrap_method", "parametric")
+                + " method requested",
                 requested=config["n_boot"],
                 attempted=0,
                 successful=0,

@@ -33,7 +33,7 @@ export function ExperimentStatistics({ experiment, version }: { experiment: stri
   }
   const analyses = [...latest.values()]
   const pending = run.isPending || analyses.some(a => a.status === 'pending' || a.status === 'running')
-  const reports = analyses.filter(a => (a.status === 'completed' || a.status === 'incomplete') && a.report_status === 'valid')
+  const reports = analyses.filter(a => (a.status === 'completed' || a.status === 'incomplete') && (a.report_status === 'valid' || a.report_status === 'descriptive'))
   const failed = analyses.filter(a => a.status === 'failed' || a.status === 'incomplete')
   const error = source.error || history.error || run.error
   const ready = !!version && !source.isError && (source.data?.n_measured_replicates ?? 0) > 0
@@ -79,7 +79,7 @@ function ReportRow({ experiment, analysis }: { experiment: string; analysis: Sta
       {open && <>
         {report.isLoading && <p role="status" className="p-3 text-xs text-muted-foreground">Loading report…</p>}
         {report.error && <p role="alert" className="p-3 text-xs text-destructive">{report.error.message}</p>}
-        {report.data?.output?.summary?.status === 'valid' && <StatisticsReport analysis={report.data} experiment={experiment} />}
+        {(report.data?.output?.summary?.status === 'valid' || report.data?.output?.summary?.status === 'descriptive') && <StatisticsReport analysis={report.data} experiment={experiment} />}
       </>}
     </div>
   </div>

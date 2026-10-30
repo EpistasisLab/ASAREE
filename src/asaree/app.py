@@ -33,6 +33,7 @@ from asaree.api.result_jobs import router as result_jobs_router
 from asaree.api.result_reads import router as result_reads_router
 from asaree.api.runs import router as runs_router
 from asaree.api.skills import router as skills_router
+from asaree.api.stats import router as stats_router
 from asaree.api.users import router as users_router
 from asaree.config import get_settings
 from asaree.models.database import dispose_engine
@@ -143,6 +144,7 @@ def create_app() -> FastAPI:
     app.include_router(agents_router, prefix="/api")
     app.include_router(runs_router, prefix="/api")
     app.include_router(experiments_router, prefix="/api")
+    app.include_router(stats_router, prefix="/api")
     app.include_router(result_reads_router, prefix="/api")
     app.include_router(result_jobs_router, prefix="/api")
     app.include_router(result_evidence_router, prefix="/api")

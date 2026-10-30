@@ -39,7 +39,7 @@ jobs:
     # A failed dispatcher must fail this required check instead of approving a change.
     # The branch-target guard must also run for a docs-only feat/fix PR targeting main.
     if: >-
-      ${{ always() && (
+      ${{ !cancelled() && (
         needs.changes.result != 'success' || needs.changes.outputs.backend == 'true' ||
         (github.event_name == 'pull_request' && github.base_ref == 'main' &&
           (startsWith(github.head_ref, 'feat/') || startsWith(github.head_ref, 'fix/')))
@@ -179,7 +179,7 @@ jobs:
   frontend:
     name: Type Check & Lint (frontend)
     needs: changes
-    if: ${{ always() && needs.changes.result == 'success' && needs.changes.outputs.frontend == 'true' }}
+    if: ${{ !cancelled() && needs.changes.result == 'success' && needs.changes.outputs.frontend == 'true' }}
     runs-on: ubuntu-latest
     defaults:
       run:

@@ -5,6 +5,7 @@ on:
     branches: [develop, main]
   pull_request:
     branches: [develop, main]
+    types: [opened, synchronize, reopened]
   workflow_dispatch:
 
 permissions:
@@ -36,8 +37,13 @@ jobs:
   backend:
     name: Lint & Test (backend)
     needs: changes
-    # Fail this required check if selection fails; skipped jobs still satisfy it.
-    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.backend == 'true') }}
+    # The target guard must run even for docs-only feature/fix PRs into main.
+    if: >-
+      ${{ !cancelled() && (
+        needs.changes.result != 'success' || needs.changes.outputs.backend == 'true' ||
+        (github.event_name == 'pull_request' && github.base_ref == 'main' &&
+          (startsWith(github.head_ref, 'feat/') || startsWith(github.head_ref, 'fix/')))
+      ) }}
     runs-on: ubuntu-latest
 
     # The suite runs against a real Postgres, not sqlite or mocks: this
@@ -81,6 +87,19 @@ jobs:
         run: |
           echo "::error::CI change selection failed. Fix the dispatcher before merging."
           exit 1
+
+      - name: Check pull request target
+        if: github.event_name == 'pull_request'
+        env:
+          PR_BASE: ${{ github.base_ref }}
+          PR_HEAD: ${{ github.head_ref }}
+        run: |
+          case "$PR_BASE:$PR_HEAD" in
+            main:feat/*|main:fix/*)
+              echo "::error::Feature and fix PRs must target develop. Change this PR's base branch to develop."
+              exit 1
+              ;;
+          esac
 
       - uses: actions/checkout@v6
 

@@ -61,6 +61,16 @@ This is a single-context repository with `CONTEXT.md` at the root and private lo
 
 Do not add `Co-Authored-By` or `Generated-with` lines to commits or PRs.
 
+## Branch and release workflow
+
+Follow [CONTRIBUTING.md](CONTRIBUTING.md): `main` is the default branch, but
+feature/fix branches start from and target `develop`. Set the PR base explicitly
+to `develop`; release and hotfix promotion into `main` is deliberate.
+Use merge commits for release/synchronization PRs. Replace temporary Motoro
+integration pins with tested release tags before ASAREE production releases.
+Require explicit user authorization before merging into `main` (including
+hotfixes), creating release tags, publishing artifacts, or deploying production.
+
 # Cost-conscious execution
 
 Favor the cheapest tool/approach that reliably gets the job done. Before doing any of the

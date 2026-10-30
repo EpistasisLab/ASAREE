@@ -4,7 +4,7 @@ import { modelCapabilities } from './modelCapabilities'
 describe('modelCapabilities', () => {
   it('does not guess sampling controls before backend metadata resolves', () => {
     expect(modelCapabilities()).toMatchObject({
-      supports_temperature: false, supports_effort: false, default_effort: null,
+      supports_temperature: null, supports_effort: null, default_effort: null,
     })
   })
 

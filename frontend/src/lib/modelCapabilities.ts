@@ -2,9 +2,9 @@ import type { ModelCapabilities } from '@/types/llmSettings'
 
 // Unresolved metadata exposes no sampling control; the server owns the fallback.
 const UNRESOLVED_CAPABILITIES: ModelCapabilities = {
-  supports_temperature: false,
-  supports_effort: false,
-  effort_levels: [],
+  supports_temperature: null,
+  supports_effort: null,
+  effort_levels: null,
   default_effort: null,
 }
 

@@ -11,10 +11,8 @@ readme = "README.md"
 requires-python = ">=3.12"
 
 dependencies = [
-    # Pinned to a tagged release of Motoro (see [tool.uv.sources] below —
-    # Motoro's own README documents its semver-tag convention), bumped
-    # only as a deliberate, reviewed action — never left floating to that
-    # repo's main. See project_plan/core_asaree_use_case.md in the ARES repo.
+    # Pin a tested Motoro release tag; update the lockfile with uv on each bump.
+    # Exact develop commits are temporary integration inputs, never release pins.
     "motoro",
     # The on-disk versioned dataset workspace (see [tool.uv.sources] below) —
     # its own package rather than a module of `asaree`, because the domain MCP
@@ -95,7 +93,7 @@ dev = [
 ]
 
 [tool.uv.sources]
-motoro = { git = "https://github.com/EpistasisLab/motoro.git", tag = "v0.13.0" }
+motoro = { git = "https://github.com/EpistasisLab/motoro.git", rev = "52dfd0720d9d10850c1e3099f4149b3c392192b9" }
 asaree-workspace-core = { path = "workspace-core", editable = true }
 # Every mcp-servers/ package is declared here, including asaree-sklearn-core
 # (which the six servers each depend on): uv resolves `tool.uv.sources` from

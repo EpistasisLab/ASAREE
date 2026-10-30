@@ -11,15 +11,21 @@ export function samplingKey(capabilities: ModelCapabilities | undefined, model: 
     effort_levels: capabilities.effort_levels,
     default_effort: capabilities.default_effort ?? null,
     temperature_effort_levels: capabilities.temperature_effort_levels ?? null,
+    effort_levels_complete: capabilities.effort_levels_complete ?? true,
+    unsupported_effort_levels: capabilities.unsupported_effort_levels ?? null,
   } : undefined
-  return ['llm-settings', 'sampling', { capabilities: metadata, model, temperature: temperature ?? null, effort: effort ?? null }] as const
+  return ['llm-settings', 'sampling-v2', {
+    capabilities: capabilities?.model_metadata ? undefined : metadata,
+    model_metadata: capabilities?.model_metadata,
+    model, temperature: temperature ?? null, effort: effort ?? null,
+  }] as const
 }
 
 export function useSamplingPreview(capabilities: ModelCapabilities | undefined, model: string, temperature?: number | null, effort?: string | null) {
   const queryKey = samplingKey(capabilities, model, temperature, effort)
   return useQuery({
     queryKey,
-    queryFn: () => llmSettingsApi.sampling({ ...queryKey[2], capabilities: queryKey[2].capabilities! }),
+    queryFn: () => llmSettingsApi.sampling(queryKey[2]),
     enabled: !!capabilities && !!model,
     staleTime: Infinity,
     retry: false,

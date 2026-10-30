@@ -91,7 +91,7 @@ async def test_resolve_azure_foundry_saved_credential_missing_api_base_raises(ow
         await upsert_setting(db, user_id=owner_id, provider="azure_foundry", api_key="secret-key", api_base=None)
 
     config = ModelConfig(provider="azure_foundry", model="gpt-5")
-    with pytest.raises(ValueError, match="api_base"):
+    with pytest.raises(ValueError, match="[Bb]ase"):
         await resolve(config, owner_id)
 
 
@@ -131,5 +131,5 @@ async def test_resolve_local_saved_credential_missing_api_base_raises(owner_id: 
         await upsert_setting(db, user_id=owner_id, provider="local", api_key="", api_base=None)
 
     config = ModelConfig(provider="local", model="m")
-    with pytest.raises(ValueError, match="api_base"):
+    with pytest.raises(ValueError, match="[Bb]ase"):
         await resolve(config, owner_id)

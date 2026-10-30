@@ -51,11 +51,11 @@ export function StatisticsReport({ analysis, experiment }: { analysis: StatsAnal
     setError('')
     setDownloading(true)
     try {
-      const blob = await statsApi.report(experiment, analysis.id)
+      const { blob, filename } = await statsApi.report(experiment, analysis.id)
       const url = URL.createObjectURL(blob)
       const link = document.createElement('a')
       link.href = url
-      link.download = `asaree-statistics-${analysis.id}.html`
+      link.download = filename
       link.click()
       setTimeout(() => URL.revokeObjectURL(url), 1000)
     } catch (cause) {

@@ -183,7 +183,12 @@ export const statsApi = {
   automatic: (experiment: string, version: string) => request<StatsAnalysis[]>(`/stats/${experiment}/automatic-analyses?protocol_revision_id=${encodeURIComponent(version)}`, {
     method: 'POST',
   }),
-  report: (experiment: string, id: string) => requestBlob(`/stats/${experiment}/analyses/${id}/report`),
+  report: async (experiment: string, id: string) => {
+    const response = await authedFetch(`/stats/${experiment}/analyses/${id}/report`)
+    const filename = response.headers.get('Content-Disposition')?.match(/filename="([^"]+)"/)?.[1]
+      ?? 'statistics-report.html'
+    return { blob: await response.blob(), filename }
+  },
   source: (experiment: string, version?: string) => request<StatsSource>(`/stats/${experiment}/source${version ? `?protocol_revision_id=${encodeURIComponent(version)}` : ''}`),
   history: (experiment: string, version?: string) =>
     request<StatsAnalysis[]>(`/stats/${experiment}/analyses${version ? `?protocol_revision_id=${encodeURIComponent(version)}` : ''}`),

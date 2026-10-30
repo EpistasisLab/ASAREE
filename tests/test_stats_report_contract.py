@@ -10,11 +10,34 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from asaree.services.stats_html import render_html
+from asaree.services.stats_html import render_html, report_filename
 from asaree.services.stats_source import StatsRequest, compute
 from asaree.stats.analysis import finish_fit
 from asaree.stats.fit_checks import native_fit_checks
 from asaree.stats.validation import rejection_summary
+
+
+def test_download_filename_identifies_experiment_version_metric_and_saved_utc_date():
+    saved = dict(
+        created_at="2026-10-30T23:30:00-07:00", status="completed", design_revision=2,
+        config={"metric": "internal_metric_id"},
+        output={"summary": {"metric_definition": {"label": "Success rate (%)"}}},
+    )
+    assert report_filename(saved, experiment_name="Reasoning Benchmark", protocol_revision=3) == (
+        "reasoning-benchmark_v3_success-rate_2026-10-31.html"
+    )
+    saved["status"] = "incomplete"
+    assert report_filename(saved, experiment_name="Reasoning Benchmark", protocol_revision=3).endswith(
+        "_2026-10-31_incomplete.html"
+    )
+
+
+def test_download_filename_sanitizes_paths_headers_and_handles_legacy_metadata():
+    saved = dict(created_at="2026-10-30", design_revision=2, config={"metric": "Duration"})
+    filename = report_filename(saved, experiment_name='../../Café "trial"\r\nInjected: value')
+    assert filename == "cafe-trial-injected-value_design-v2_duration_2026-10-30.html"
+    assert report_filename({}, experiment_name="") == "experiment_unversioned_metric_undated.html"
+    assert len(report_filename(saved, experiment_name="long" * 1000)) < 200
 
 
 def source_for_design(levels, *, unbalanced=False, missing=False, beta=False):

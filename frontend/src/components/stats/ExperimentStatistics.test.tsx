@@ -35,7 +35,7 @@ beforeEach(() => {
     design_revision: 1, fingerprint: 'source', excluded_row_replicates: 0,
   })
 })
-afterEach(() => { cleanup(); vi.restoreAllMocks() })
+afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals() })
 
 function mount(version: string | null = 'version-1') {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
@@ -97,6 +97,27 @@ it('shows concise statistics and a report download', async () => {
   expect(within(screen.getByRole('region', { name: 'What ran and why' })).getByText('Wald chi-square test (HC0 robust covariance)')).toBeInTheDocument()
   expect(within(screen.getByRole('region', { name: 'What ran and why' })).getByText('Delta-method Wald z-test (HC0 robust covariance)')).toBeInTheDocument()
   expect(screen.getByText(/checks whether the factor contributes to the fitted model/)).toBeInTheDocument()
+})
+
+it('downloads HTML using the readable filename supplied by the API', async () => {
+  vi.spyOn(statsApi, 'history').mockResolvedValue([saved])
+  vi.spyOn(statsApi, 'get').mockResolvedValue(saved)
+  const filename = 'reasoning-benchmark_v3_duration_2026-10-30.html'
+  vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('<html>Report</html>', {
+    headers: { 'Content-Disposition': `attachment; filename="${filename}"` },
+  })))
+  vi.stubGlobal('URL', class extends URL {
+    static createObjectURL = vi.fn(() => 'blob:report')
+    static revokeObjectURL = vi.fn()
+  })
+  const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (this: HTMLAnchorElement) {
+    expect(this.download).toBe(filename)
+    expect(this.href).toBe('blob:report')
+  })
+  mount()
+  fireEvent.click(await screen.findByRole('button', { name: /Duration/ }))
+  fireEvent.click(await screen.findByRole('button', { name: 'Download HTML report' }))
+  await waitFor(() => expect(click).toHaveBeenCalledOnce())
 })
 
 it('renders the primary interval result even when a stored analytic result is significant', async () => {

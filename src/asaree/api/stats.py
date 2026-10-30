@@ -105,11 +105,18 @@ async def history(
 
 @router.get("/{experiment_id}/analyses/{analysis_id}")
 async def detail(experiment_id: uuid.UUID, analysis_id: uuid.UUID, user: CurrentUser, db: DbSession) -> dict:
-    await _get_owned_experiment(db, experiment_id, user)
+    from asaree.services.stats_html import report_filename
+
+    experiment = await _get_owned_experiment(db, experiment_id, user)
     analysis = await db.get(StatsAnalysis, analysis_id)
     if analysis is None or analysis.experiment_id != experiment_id:
         raise HTTPException(404, "Analysis not found")
-    return summary(analysis, detail=True)
+    saved = summary(analysis, detail=True)
+    saved["report_filename"] = report_filename(
+        saved, experiment_name=experiment.name,
+        protocol_revision=analysis.request["source"].get("protocol_revision"),
+    )
+    return saved
 
 
 @router.get("/{experiment_id}/analyses/{analysis_id}/report", response_class=HTMLResponse)
@@ -124,7 +131,7 @@ async def report(experiment_id: uuid.UUID, analysis_id: uuid.UUID, user: Current
     except ValueError as exc:
         raise HTTPException(409, str(exc)) from exc
     return HTMLResponse(
-        html, headers={"Content-Disposition": f'attachment; filename="asaree-stats-{analysis_id}.html"'}
+        html, headers={"Content-Disposition": f'attachment; filename="{saved["report_filename"]}"'}
     )
 
 

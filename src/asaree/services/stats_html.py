@@ -4,10 +4,43 @@ from __future__ import annotations
 
 import json
 import math
+import re
+import unicodedata
+from datetime import UTC, datetime
 from html import escape
 
 from asaree.services.stats_distribution import saved_distribution_plot
 from asaree.services.stats_findings import describe_report_findings, primary_comparison_result
+
+
+def report_filename(analysis: dict, *, experiment_name: str, protocol_revision: int | None = None) -> str:
+    """Readable, bounded ASCII attachment name derived from saved report metadata."""
+    def slug(value, fallback):
+        ascii_value = unicodedata.normalize("NFKD", str(value or "")).encode("ascii", "ignore").decode()
+        return re.sub(r"[^a-z0-9]+", "-", ascii_value.lower()).strip("-")[:64].rstrip("-") or fallback
+
+    summary = (analysis.get("output") or {}).get("summary") or {}
+    definition = summary.get("metric_definition") or {}
+    metric = definition.get("label") or definition.get("name") or summary.get("metric")
+    metric = metric or (analysis.get("config") or {}).get("metric")
+    if protocol_revision is not None:
+        version = f"v{protocol_revision}"
+    elif analysis.get("design_revision") is not None:
+        version = f"design-v{analysis['design_revision']}"
+    else:
+        version = "unversioned"
+    try:
+        created = datetime.fromisoformat(analysis["created_at"].replace("Z", "+00:00"))
+        date = created.replace(tzinfo=UTC).date() if created.tzinfo is None else created.astimezone(UTC).date()
+    except (KeyError, TypeError, ValueError, AttributeError):
+        date = "undated"
+    incomplete = analysis.get("status") == "incomplete" or summary.get("execution_status") == "incomplete"
+    suffix = "_incomplete" if incomplete else ""
+    return (
+        f"{slug(experiment_name, 'experiment')}_{slug(version, 'unversioned')}_"
+        f"{slug(metric, 'metric')}_{date}{suffix}.html"
+    )
+
 
 DISTRIBUTION_NAMES = {
     "gaussian": "Gaussian (normal)",

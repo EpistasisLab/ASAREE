@@ -8,7 +8,7 @@ import itertools
 import json
 import uuid
 from datetime import UTC, datetime
-from importlib.metadata import version
+from importlib.metadata import distribution
 from typing import Any
 
 from motoro.schemas.agent import ModelConfig
@@ -20,7 +20,6 @@ from asaree.services.model_config import build_model_config, resolve_discovery_c
 
 _SNAPSHOT_KEY = "sampling_snapshot"
 _SNAPSHOT_VERSION = 2
-_MOTORO_REVISION = "52dfd0720d9d10850c1e3099f4149b3c392192b9"
 
 
 def sampling_policy_is_current(graph: dict[str, Any]) -> bool:
@@ -38,6 +37,8 @@ def _config_key(config: dict[str, Any]) -> str:
 
 
 def _pin_config(config: ModelConfig) -> dict[str, Any]:
+    package = distribution("motoro")
+    origin = json.loads(package.read_text("direct_url.json") or "{}")
     effective = resolve_sampling(
         config.resolved_capabilities or config.model_metadata or ModelCapabilities(),
         temperature=config.temperature,
@@ -51,19 +52,25 @@ def _pin_config(config: ModelConfig) -> dict[str, Any]:
     pinned["fallback_models"] = [fallback["config"] for fallback in fallbacks]
     return {
         "schema_version": _SNAPSHOT_VERSION,
-        "motoro_version": version("motoro"),
-        "motoro_revision": _MOTORO_REVISION,
+        "motoro_version": package.version,
+        "motoro_revision": origin.get("vcs_info", {}).get("commit_id"),
         "resolver": "provider-driven-v2",
         "frozen_at": datetime.now(UTC).isoformat(),
         "input": config.model_dump(mode="json"),
-        "provider_request_sampling": _sampling_kwargs(config, f"{config.provider.value}/{config.model}").get(
-            "extra_body", {}
-        ),
+        "provider_request_sampling": _sampling_request(config),
         "provider_controls_unadvertised_defaults": effective.temperature is None or effective.effort is None,
         "config": pinned,
         "sampling": effective.model_dump(mode="json"),
         "fallbacks": fallbacks,
     }
+
+
+def _sampling_request(config: ModelConfig) -> dict[str, Any]:
+    kwargs = _sampling_kwargs(config, f"{config.provider.value}/{config.model}")
+    native: dict[str, Any] = kwargs.get(
+        "extra_body", {key: kwargs[key] for key in ("temperature", "reasoning_effort") if key in kwargs}
+    )
+    return native
 
 
 def _check_override_origin(config: dict[str, Any]) -> None:
@@ -147,7 +154,7 @@ def published_model_config(graph: dict[str, Any], config: dict[str, Any]) -> dic
 def _validated_pinned_config(snapshot: dict[str, Any]) -> dict[str, Any]:
     pinned: dict[str, Any] = copy.deepcopy(snapshot["config"])
     # Guard omitted values as well as explicit ones against future resolver changes.
-    current = _sampling_kwargs(ModelConfig(**pinned), f"{pinned['provider']}/{pinned['model']}").get("extra_body", {})
+    current = _sampling_request(ModelConfig(**pinned))
     if current != snapshot["provider_request_sampling"]:
         raise ValueError(
             "Published sampling no longer matches its frozen request. Use the original runtime or republish."

@@ -236,3 +236,28 @@ async def test_ambiguous_draft_override_must_be_resolved_before_publication(grap
     graph["nodes"][0]["data"]["config"]["resolved_capabilities"] = {"supports_temperature": True}
     with pytest.raises(ValueError, match="no recorded source"):
         await sampling_snapshots.freeze_sampling(graph, design_spec=None, owner_id=uuid.uuid4())
+
+
+def test_snapshot_runtime_provenance_handles_release_wheels_without_a_git_origin(monkeypatch):
+    from motoro.schemas.agent import ModelConfig
+
+    monkeypatch.setattr(
+        sampling_snapshots,
+        "distribution",
+        lambda name: SimpleNamespace(
+            version="future-release",
+            read_text=lambda filename: None,
+        ),
+    )
+    pin = sampling_snapshots._pin_config(ModelConfig(model="custom"))
+    assert pin["motoro_version"] == "future-release"
+    assert pin["motoro_revision"] is None
+
+
+def test_bedrock_snapshot_records_adapter_sampling_values():
+    from motoro.schemas.agent import ModelConfig
+
+    pin = sampling_snapshots._pin_config(
+        ModelConfig(provider="bedrock", model="custom", effort="medium", temperature=0)
+    )
+    assert pin["provider_request_sampling"] == {"temperature": 0, "reasoning_effort": "medium"}

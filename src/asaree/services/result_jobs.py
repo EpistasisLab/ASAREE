@@ -32,7 +32,7 @@ from asaree.models.protocol_run import ProtocolRun
 from asaree.models.result_job import ResultJob, ResultJobMember
 from asaree.services.dataset_row_csv import RowSource
 from asaree.services.indexed_row_source import IndexedRows, read_indexed_row_source
-from asaree.services.protocol_execution import plan_cell_runs
+from asaree.services.protocol_execution import ProtocolValidationError, plan_cell_runs
 from asaree.services.protocol_runs import (
     RERUN_ON_REQUEST_STATUSES,
     RETRYABLE_PROTOCOL_RUN_STATUSES,
@@ -506,7 +506,11 @@ async def _advance_command(identifier: uuid.UUID) -> bool:
                 .where(ResultJob.id == identifier, ResultJob.status != "cancelled")
                 .values(
                     status="failed",
-                    error=str(exc)[:512] if isinstance(exc, ValueError) else "Command failed; retry preparation.",
+                    error=(
+                        str(exc)[:512]
+                        if isinstance(exc, (ValueError, ProtocolValidationError))
+                        else "Command failed; retry preparation."
+                    ),
                 )
             )
         return False

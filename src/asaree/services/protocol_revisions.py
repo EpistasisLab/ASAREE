@@ -21,7 +21,7 @@ from asaree.services.datasets import get_dataset_by_name
 from asaree.services.design_revisions import get_current_revision
 from asaree.services.experiment_versions import experiment_settings, publication_matches_experiment
 from asaree.services.protocol_graph_schema import functional_protocol_graph_hash
-from asaree.services.sampling_snapshots import freeze_sampling
+from asaree.services.sampling_snapshots import freeze_sampling, sampling_policy_is_current
 
 
 async def get_revision(db: AsyncSession, revision_id: uuid.UUID) -> ProtocolRevision | None:
@@ -231,8 +231,10 @@ async def publish_protocol(
 
 
 def is_draft_published(protocol: Protocol, published: ProtocolRevision | None) -> bool:
-    return published is not None and functional_protocol_graph_hash(protocol.graph) == functional_protocol_graph_hash(
-        published.graph
+    return (
+        published is not None
+        and sampling_policy_is_current(published.graph)
+        and functional_protocol_graph_hash(protocol.graph) == functional_protocol_graph_hash(published.graph)
     )
 
 

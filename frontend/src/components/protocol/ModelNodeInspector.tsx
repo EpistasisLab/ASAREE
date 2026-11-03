@@ -48,11 +48,8 @@ export function ModelNodeInspector({
   // Every provider now has a real per-user credential (credential_resolver.py's
   // SUPPORTED_PROVIDERS) -- no more "informational, nothing to set up" branch.
   const provider = node?.data.config?.provider
-  // GET /llm-settings/{provider}/models -- a live per-credential listing for
-  // anthropic and azure_foundry, the static catalog for openai (which has no
-  // capability endpoint) and for anyone with no credential saved yet. See
-  // llm_model_discovery.py's docstring for what each provider actually
-  // answers. Shared with the canvas node cards via useProviderModels, so
+  // GET /llm-settings/{provider}/models supplies per-credential provider facts.
+  // Missing capabilities remain unknown. Shared via useProviderModels, so
   // opening this inspector reads the list those cards already fetched rather
   // than issuing its own request.
   const { credentialsQuery, hasCredential, modelsQuery, models, capabilities: resolvedCapabilities, capabilitiesPending, capabilitiesError, retryCapabilities } = useProviderModels(provider, node?.data.config.model, node?.data.config.resolved_capabilities)
@@ -197,9 +194,9 @@ export function ModelNodeInspector({
             value={config.model}
             models={models}
             isLoading={modelsQuery.isLoading}
-            onChange={(model) => patchConfig({ model, resolved_capabilities: null, temperature: null, effort: null })}
+            onChange={(model) => patchConfig({ model, resolved_capabilities: null, resolved_capabilities_origin: null, temperature: null, effort: null })}
           />
-          {modelsQuery.data?.source === 'error' && modelsQuery.data.note && (
+          {modelsQuery.data?.note && (
             <p className="text-xs text-muted-foreground">{modelsQuery.data.note}</p>
           )}
           {isOffCatalogModel && (
@@ -216,6 +213,7 @@ export function ModelNodeInspector({
           <Select
             value={config.resolved_capabilities?.supports_temperature ? 'temperature' : 'auto'}
             onValueChange={(value) => value && patchConfig({
+              resolved_capabilities_origin: value === 'temperature' ? 'override' : null,
               resolved_capabilities: value === 'temperature'
                 ? { supports_temperature: true, supports_effort: false, effort_levels: [], default_effort: null }
                 : null,
@@ -233,6 +231,11 @@ export function ModelNodeInspector({
         </div>
       )}
 
+      {config.resolved_capabilities && config.resolved_capabilities_origin !== 'override' && <div className="space-y-2 text-xs text-muted-foreground">
+        <p>These saved capability rules have no recorded source. Choose Automatic to refresh provider metadata, or confirm them as your override before publishing.</p>
+        <Button variant="outline" size="sm" onClick={() => patchConfig({ resolved_capabilities: null, resolved_capabilities_origin: null })}>Use automatic metadata</Button>
+        <Button variant="outline" size="sm" onClick={() => patchConfig({ resolved_capabilities_origin: 'override' })}>Keep saved override</Button>
+      </div>}
       {capabilitiesPending && <p role="status" className="text-xs text-muted-foreground">{capabilitiesError ?? 'Resolving model capabilities…'}</p>}
       {capabilitiesError && <Button variant="outline" size="sm" onClick={() => void retryCapabilities()}>Retry</Button>}
 

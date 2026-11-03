@@ -6,6 +6,7 @@ in-memory check still applies, it's just per-process rather than shared).
 from __future__ import annotations
 
 import logging
+import uuid
 from collections import defaultdict
 from datetime import UTC, datetime
 
@@ -20,6 +21,43 @@ _REDIS_KEY_PREFIX = "ratelimit:"
 # this dict without bound.
 _attempts: dict[str, list[float]] = defaultdict(list)
 _MAX_KEYS = 10_000
+
+_CONSUME = """
+redis.call('ZREMRANGEBYSCORE', KEYS[1], '-inf', ARGV[1] - ARGV[2])
+if redis.call('ZCARD', KEYS[1]) >= tonumber(ARGV[3]) then
+    local oldest = redis.call('ZRANGE', KEYS[1], 0, 0, 'WITHSCORES')
+    return math.max(1, math.ceil(tonumber(oldest[2]) + ARGV[2] - ARGV[1]))
+end
+redis.call('ZADD', KEYS[1], ARGV[1], ARGV[4])
+redis.call('EXPIRE', KEYS[1], ARGV[2])
+return 0
+"""
+
+
+async def consume_rate_limit(key: str, *, limit: int, window_seconds: int) -> tuple[bool, int]:
+    """Atomically check and record an attempt, including a per-process outage fallback."""
+    now = datetime.now(UTC).timestamp()
+    if len(_attempts) > _MAX_KEYS // 2:
+        _prune(window_seconds)
+    try:
+        # The low-level async command has no annotations in redis-py.
+        retry_after = int(
+            await get_redis().execute_command(  # type: ignore[no-untyped-call]
+                "EVAL", _CONSUME, 1, f"{_REDIS_KEY_PREFIX}{key}", now, window_seconds, limit, uuid.uuid4().hex
+            )
+        )
+    except Exception:
+        logger.warning("rate_limit_redis_unavailable")
+        retry_after = None
+    # No awaits between checking and recording: atomic within this event loop.
+    recent = [t for t in _attempts[key] if t > now - window_seconds]
+    _attempts[key] = recent
+    if retry_after is None and len(recent) >= limit:
+        return False, max(1, int(recent[0] + window_seconds - now) + 1)
+    if retry_after:
+        return False, retry_after
+    recent.append(now)
+    return True, 0
 
 
 def _prune(window_seconds: int) -> None:

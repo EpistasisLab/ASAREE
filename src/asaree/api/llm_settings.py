@@ -17,19 +17,22 @@ from pydantic import BaseModel
 from asaree.deps import CurrentUser, DbSession
 from asaree.services.credential_resolver import SUPPORTED_PROVIDERS
 from asaree.services.llm_connection_check import check_connection
-from asaree.services.llm_model_cache import discover_models_cached, invalidate_models_cache, store_models_cache
+from asaree.services.llm_model_cache import (
+    ModelDiscoveryRateLimitError,
+    discover_models_cached,
+    store_models_cache,
+)
 from asaree.services.llm_model_discovery import ModelInfo
-from asaree.services.model_config import resolve_model_capabilities
+from asaree.services.model_config import resolve_model_metadata
+from asaree.services.provider_config import ProviderConfigurationError
 from asaree.services.rate_limit import check_rate_limit, record_attempt
 from asaree.services.tool_calling import model_tool_calling_support
 from asaree.services.user_llm_settings import delete_setting, get_setting, list_settings, upsert_setting
 
 router = APIRouter(prefix="/llm-settings", tags=["llm-settings"])
 
-# Only the Azure Foundry path makes a real outbound call using the user's own
-# key (Anthropic/OpenAI resolve from a static, in-process catalog) -- capped
-# defensively so a retry loop can't hammer Azure with it, same posture ARES
-# already takes for the same call.
+# Bound provider discovery independently of connection checks. Motoro decides
+# which providers use a live listing or a catalog; ASAREE owns request limits.
 _DISCOVERY_MAX_ATTEMPTS = 10
 _DISCOVERY_WINDOW_SECONDS = 60
 
@@ -59,6 +62,7 @@ class LLMSettingResponse(BaseModel):
 class LLMModelInfoResponse(ModelCapabilities):
     id: str
     label: str | None
+    model_metadata: ModelInfo
     # Unlike the three above, this one doesn't come from Motoro's
     # ModelCapabilities registry -- it's litellm's own function-calling flag,
     # the same oracle ``model_supports_tool_calling`` uses to pick an agent's
@@ -80,6 +84,7 @@ def _model_response(model: ModelInfo, provider: str) -> LLMModelInfoResponse:
     return LLMModelInfoResponse(
         id=model.id,
         label=model.label,
+        model_metadata=model,
         **model.capabilities.model_dump(),
         supports_tool_calling=model_tool_calling_support(provider, model.id),
     )
@@ -96,7 +101,8 @@ class LLMConnectionCheckResponse(BaseModel):
 
 
 class SamplingPreviewRequest(BaseModel):
-    capabilities: ModelCapabilities
+    capabilities: ModelCapabilities | None = None
+    model_metadata: ModelInfo | None = None
     model: str = "<unspecified>"
     temperature: float | None = None
     effort: str | None = None
@@ -106,7 +112,14 @@ class SamplingPreviewRequest(BaseModel):
 async def sampling_preview_endpoint(body: SamplingPreviewRequest, user: CurrentUser) -> ResolvedSampling:
     """Use execution's resolver for defaults and validation without calling a model."""
     try:
-        return resolve_sampling(body.capabilities, temperature=body.temperature, effort=body.effort, model=body.model)
+        if body.model_metadata is not None and body.model_metadata.id != body.model:
+            raise SamplingConfigurationError("Metadata must describe the selected model")
+        return resolve_sampling(
+            body.capabilities or body.model_metadata or ModelCapabilities(),
+            temperature=body.temperature,
+            effort=body.effort,
+            model=body.model,
+        )
     except SamplingConfigurationError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -117,19 +130,19 @@ async def upsert_llm_setting_endpoint(
 ) -> LLMSettingResponse:
     if body.provider not in SUPPORTED_PROVIDERS:
         raise HTTPException(status_code=422, detail=f"provider must be one of {sorted(SUPPORTED_PROVIDERS)}")
-    setting = await upsert_setting(
-        db,
-        user_id=user.id,
-        provider=body.provider,
-        api_key=body.api_key,
-        api_base=body.api_base,
-        azure_project_endpoint=body.azure_project_endpoint,
-    )
-    # A new key can reach a different set of models than the old one, and a
-    # changed Azure project endpoint points at an entirely different set of
-    # deployments -- either way the cached list is now about a credential
-    # that no longer exists.
-    await invalidate_models_cache(user_id=user.id, provider=body.provider)
+    try:
+        setting = await upsert_setting(
+            db,
+            user_id=user.id,
+            provider=body.provider,
+            api_key=body.api_key,
+            api_base=body.api_base,
+            azure_project_endpoint=body.azure_project_endpoint,
+        )
+    except ProviderConfigurationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from None
+    # Cache identity follows the saved credential, so in-flight lookups of
+    # the old credential cannot repopulate the new credential's namespace.
     return LLMSettingResponse(
         provider=setting.provider, api_base=setting.api_base, azure_project_endpoint=setting.azure_project_endpoint
     )
@@ -151,7 +164,6 @@ async def delete_llm_setting_endpoint(provider: str, user: CurrentUser, db: DbSe
     deleted = await delete_setting(db, user_id=user.id, provider=provider)
     if not deleted:
         raise HTTPException(status_code=404, detail="No credential saved for this provider.")
-    await invalidate_models_cache(user_id=user.id, provider=provider)
 
 
 @router.get("/{provider}/connection", response_model=LLMConnectionCheckResponse)
@@ -184,9 +196,12 @@ async def check_connection_endpoint(provider: str, user: CurrentUser, db: DbSess
     if setting is None:
         raise HTTPException(status_code=404, detail="No credential saved for this provider.")
 
-    result = await check_connection(provider=provider, setting=setting)
+    try:
+        result = await check_connection(provider=provider, setting=setting)
+    except ProviderConfigurationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from None
     if provider == "azure_foundry" and result.status == "ok" and result.models is not None:
-        await store_models_cache(user_id=user.id, provider=provider, models=result.models)
+        await store_models_cache(user_id=user.id, provider=provider, setting=setting, models=result.models)
     return LLMConnectionCheckResponse(
         provider=provider,
         status=result.status,
@@ -216,20 +231,39 @@ async def list_models_endpoint(provider: str, user: CurrentUser, db: DbSession) 
     await record_attempt(key, window_seconds=_DISCOVERY_WINDOW_SECONDS)
 
     setting = await get_setting(db, user_id=user.id, provider=provider)
-    models, source, note = await discover_models_cached(user_id=user.id, provider=provider, setting=setting)
+    try:
+        listing = await discover_models_cached(user_id=user.id, provider=provider, setting=setting)
+    except ProviderConfigurationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from None
+    except ModelDiscoveryRateLimitError as exc:
+        raise _discovery_rate_limit_response(exc) from None
     return LLMSettingModelsResponse(
-        models=[_model_response(model, provider) for model in models],
-        source=source,
-        note=note,
+        models=[_model_response(model, provider) for model in listing.models],
+        source=listing.source,
+        note=listing.note,
     )
 
 
-@router.get("/{provider}/model-capabilities", response_model=ModelCapabilities)
+@router.get("/{provider}/model-capabilities", response_model=LLMModelInfoResponse)
 async def model_capabilities_endpoint(
     provider: str, model: Annotated[str, Query(min_length=1, max_length=256)], user: CurrentUser, db: DbSession
-) -> ModelCapabilities:
+) -> LLMModelInfoResponse:
     if provider not in SUPPORTED_PROVIDERS:
         raise HTTPException(status_code=422, detail=f"provider must be one of {sorted(SUPPORTED_PROVIDERS)}")
     if not model.strip():
         raise HTTPException(status_code=422, detail="model must not be blank")
-    return await resolve_model_capabilities(provider=provider, model=model, db=db, owner_id=user.id)
+    try:
+        metadata = await resolve_model_metadata(provider=provider, model=model, db=db, owner_id=user.id)
+        return _model_response(metadata, provider)
+    except ProviderConfigurationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from None
+    except ModelDiscoveryRateLimitError as exc:
+        raise _discovery_rate_limit_response(exc) from None
+
+
+def _discovery_rate_limit_response(exc: ModelDiscoveryRateLimitError) -> HTTPException:
+    return HTTPException(
+        status_code=429,
+        headers={"Retry-After": str(exc.retry_after)},
+        detail={"message": str(exc), "retry_after_seconds": exc.retry_after},
+    )

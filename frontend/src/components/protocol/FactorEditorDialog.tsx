@@ -75,7 +75,7 @@ export function LlmConfigLevelRow({ value, onChange }: { value: StructuredLevel;
     <div className="grid grid-cols-2 gap-2 rounded-lg border p-2">
       <div className="space-y-1">
         <Label className="text-xs">Provider</Label>
-        <Select value={provider} onValueChange={(v) => v && patch({ provider: v, model: '', resolved_capabilities: null, temperature: null, effort: null })}>
+        <Select value={provider} onValueChange={(v) => v && patch({ provider: v, model: '', resolved_capabilities: null, resolved_capabilities_origin: null, model_metadata: null, temperature: null, effort: null })}>
           <SelectTrigger className="h-8 w-full">
             <SelectValue>{() => PROVIDER_META[provider]?.label ?? provider}</SelectValue>
           </SelectTrigger>
@@ -94,9 +94,14 @@ export function LlmConfigLevelRow({ value, onChange }: { value: StructuredLevel;
           value={(value.model as string) ?? ''}
           models={models}
           isLoading={modelsQuery.isLoading}
-          onChange={(model) => patch({ model, resolved_capabilities: null, temperature: null, effort: null })}
+          onChange={(model) => patch({ model, resolved_capabilities: null, resolved_capabilities_origin: null, model_metadata: null, temperature: null, effort: null })}
         />
       </div>
+      {!!value.resolved_capabilities && value.resolved_capabilities_origin !== 'override' && <div className="col-span-2 space-y-2 text-xs text-muted-foreground">
+        <p>Saved capability rules have no recorded source. Resolve them before publishing.</p>
+        <Button size="sm" variant="outline" onClick={() => patch({ resolved_capabilities: null, resolved_capabilities_origin: null })}>Use automatic metadata</Button>
+        <Button size="sm" variant="outline" onClick={() => patch({ resolved_capabilities_origin: 'override' })}>Keep saved override</Button>
+      </div>}
       {capabilitiesPending && <p role="status" className="col-span-2 text-xs text-muted-foreground">{capabilitiesError ?? 'Resolving model capabilities…'}</p>}
       <SamplingControls capabilities={capabilitiesPending ? undefined : resolvedCapabilities ?? selectedModelInfo}
         model={String(value.model ?? '')} temperature={value.temperature as number | null | undefined}

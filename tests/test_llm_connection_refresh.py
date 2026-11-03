@@ -8,6 +8,7 @@ import pytest
 from motoro.services.model_capabilities import ModelCapabilities
 
 from asaree.api import llm_settings as api
+from asaree.models.user_llm_setting import UserLLMSetting
 from asaree.services import llm_model_cache as cache
 from asaree.services.llm_connection_check import ConnectionCheck
 from asaree.services.llm_model_discovery import ModelInfo
@@ -26,12 +27,13 @@ async def test_azure_connection_refreshes_cache_only_when_successful(
 
     redis = SimpleNamespace(get=AsyncMock(side_effect=lambda key: stored.get(key)), set=AsyncMock(side_effect=put))
     monkeypatch.setattr(cache, "get_redis", lambda: redis)
-    await cache.store_models_cache(user_id=user.id, provider="azure_foundry", models=deployments[:3])
+    saved = UserLLMSetting(provider="azure_foundry", api_key_encrypted="encrypted-key", api_base="resource")
+    await cache.store_models_cache(user_id=user.id, provider="azure_foundry", setting=saved, models=deployments[:3])
     discovery = AsyncMock(side_effect=AssertionError("Menu must reuse the checked deployments"))
     monkeypatch.setattr(cache, "discover_models", discovery)
     monkeypatch.setattr(api, "check_rate_limit", AsyncMock(return_value=(True, 0)))
     monkeypatch.setattr(api, "record_attempt", AsyncMock())
-    monkeypatch.setattr(api, "get_setting", AsyncMock(return_value=object()))
+    monkeypatch.setattr(api, "get_setting", AsyncMock(return_value=saved))
     monkeypatch.setattr(
         api,
         "check_connection",

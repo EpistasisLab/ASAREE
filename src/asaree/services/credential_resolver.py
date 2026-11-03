@@ -16,11 +16,12 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
-from motoro.services.credentials import foundry_api_base
+from motoro.services.providers import get_inference_connection
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from asaree.models.database import get_engine
-from asaree.services.user_llm_settings import decrypt_api_key, get_setting
+from asaree.services.provider_config import provider_config
+from asaree.services.user_llm_settings import get_setting
 
 SUPPORTED_PROVIDERS = frozenset({"anthropic", "openai", "azure_foundry", "openrouter", "local"})
 
@@ -57,57 +58,9 @@ async def resolve(config: Any, principal_id: uuid.UUID | None) -> dict[str, str 
                 f"an agent that uses {provider}."
             )
 
-        if provider == "azure_foundry":
-            # api_base here is the Foundry *resource name or URL* the user
-            # pasted into their setting — foundry_api_base derives/normalizes
-            # the actual base URL from it, same as core's own env resolver.
-            resource = setting.api_base or getattr(config, "api_base", None)
-            if not resource:
-                raise ValueError(
-                    "azure_foundry credential has no api_base — the base URL is derived "
-                    "from the Foundry resource name, so a key alone is not enough. Set "
-                    "api_base via PUT /llm-settings."
-                )
-            model = getattr(config, "model", "") or ""
-            return {
-                "model": f"azure_ai/{model}",
-                "api_key": decrypt_api_key(setting),
-                "api_base": foundry_api_base(resource),
-                "api_version": None,
-                "aws_region_name": None,
-            }
-
-        if provider == "local":
-            # No fixed default host (there's no one address a self-hosted
-            # server lives at) -- api_base is required, same as
-            # azure_foundry's resource above. Routed through litellm's
-            # generic `openai/` provider, same as Motoro's own env resolver
-            # (services.credentials.env_credential_resolver) -- see that
-            # module for why "local" needs this and azure_foundry needs
-            # `azure_ai/` instead.
-            base = setting.api_base or getattr(config, "api_base", None)
-            if not base:
-                raise ValueError(
-                    "local credential has no api_base -- there's no default host for a self-hosted "
-                    "server. Set api_base via PUT /llm-settings."
-                )
-            model = getattr(config, "model", "") or ""
-            return {
-                "model": f"openai/{model}",
-                # Most self-hosted OpenAI-compatible servers don't check the
-                # key, but litellm's OpenAI client still requires a non-empty
-                # string -- the credential's own key is optional for exactly
-                # this reason.
-                "api_key": decrypt_api_key(setting) or "not-needed",
-                "api_base": base,
-                "api_version": None,
-                "aws_region_name": None,
-            }
-
-        return {
-            "model": None,
-            "api_key": decrypt_api_key(setting),
-            "api_base": setting.api_base or getattr(config, "api_base", None),
-            "api_version": None,
-            "aws_region_name": None,
-        }
+        return get_inference_connection(
+            provider_config(
+                provider=provider, setting=setting, fallback_api_base=getattr(config, "api_base", None)
+            ),
+            model=getattr(config, "model", "") or "",
+        )

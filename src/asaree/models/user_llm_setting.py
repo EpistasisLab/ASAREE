@@ -35,9 +35,8 @@ class UserLLMSetting(Base, TimestampMixin):
     # azure_foundry only -- the *project*-scoped endpoint (e.g.
     # https://{resource}.services.ai.azure.com/api/projects/{project}), a
     # genuinely different piece of connection info than api_base's resource
-    # host: the resource host authenticates inference (foundry_api_base(),
-    # credential_resolver.py), but listing what's actually deployed
-    # (llm_model_discovery.py's _discover_azure) is a project-scoped call
+    # host: Motoro resolves the resource host for inference, but its
+    # deployment listing is a project-scoped call
     # that 404s against the bare resource host. Optional -- inference works
     # with just api_base; only the Model dropdown's live discovery needs
     # this too. Always NULL for anthropic/openai.

@@ -27,7 +27,7 @@ import type {
   CellSummary,
   Trial,
 } from '@/types/experiments'
-import type { LLMConnectionCheck, LLMProvider, LLMSetting, LLMSettingModelsResponse, ModelCapabilities, ResolvedSampling } from '@/types/llmSettings'
+import type { LLMConnectionCheck, LLMProvider, LLMSetting, LLMSettingModelsResponse, ModelCapabilities, ModelMetadata, ResolvedSampling } from '@/types/llmSettings'
 import type { McpOAuthAuthorization, McpServer } from '@/types/mcpServers'
 import type { OkfBundle, OkfDocument } from '@/types/okf'
 import type { CellRunBatch, DatasetRowSchema, PromptPreview, Protocol, ProtocolGraph, ProtocolRevision, ProtocolRun, TestRun } from '@/types/protocols'
@@ -659,14 +659,11 @@ export const llmSettingsApi = {
   upsert: (data: { provider: LLMProvider; api_key: string; api_base?: string | null; azure_project_endpoint?: string | null }) =>
     request<LLMSetting>('/llm-settings', { method: 'PUT', body: data }),
   remove: (provider: LLMProvider) => request<void>(`/llm-settings/${provider}`, { method: 'DELETE' }),
-  // `provider` is a plain string, not LLMProvider -- unlike credential
-  // storage (scoped to azure_foundry only in the UI today), model listing
-  // works for anthropic/openai too, and answers even with no credential
-  // saved (see llm_model_discovery.py's static catalog fallback).
+  // Discovery uses saved credentials; unavailable listings permit a typed ID.
   listModels: (provider: string) => request<LLMSettingModelsResponse>(`/llm-settings/${provider}/models`),
   modelCapabilities: (provider: string, model: string) =>
     request<ModelCapabilities>(`/llm-settings/${provider}/model-capabilities?${new URLSearchParams({ model })}`),
-  sampling: (data: { capabilities: ModelCapabilities; model: string; temperature?: number | null; effort?: string | null }) =>
+  sampling: (data: { capabilities?: ModelCapabilities; model_metadata?: ModelMetadata; model: string; temperature?: number | null; effort?: string | null }) =>
     request<ResolvedSampling>('/llm-settings/sampling', { method: 'POST', body: data }),
   // Zero-token liveness check against the stored credential -- a free
   // authenticated GET per provider, never an inference call. On demand only

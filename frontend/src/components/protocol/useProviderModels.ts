@@ -19,9 +19,9 @@ import type { ModelCapabilities } from '@/types/llmSettings'
 // LlmCredentialsSection) already drops these lists too. Saving a key and
 // immediately seeing the right models depends on that -- don't "tidy" this
 // into a disjoint key like ['provider-models', provider].
-export const providerModelsKey = (provider: string | undefined) => ['llm-settings', provider, 'models'] as const
+export const providerModelsKey = (provider: string | undefined) => ['llm-settings', provider, 'models-v2'] as const
 export const modelCapabilitiesKey = (provider: string | undefined, model: string | undefined) =>
-  ['llm-settings', provider, 'model-capabilities', model] as const
+  ['llm-settings', provider, 'model-capabilities-v2', model] as const
 
 // Model lists turn over on the order of weeks, but the default QueryClient
 // (main.tsx) sets no staleTime, so every inspector open, canvas mount and
@@ -50,9 +50,8 @@ export function useProviderModels(provider: string | undefined, model?: string, 
   })
   const hasCredential = (credentialsQuery.data ?? []).some((c) => c.provider === provider)
 
-  // Azure Foundry alone needs a credential before there's anything to ask --
-  // its list IS the resource's deployments. anthropic/openai answer from a
-  // catalog, so they fetch regardless.
+  // Azure requires a saved resource to list deployments. Other providers return
+  // an explicit discovery status even before a credential has been configured.
   const modelsQuery = useQuery({
     queryKey: providerModelsKey(provider),
     queryFn: () => llmSettingsApi.listModels(provider!),
@@ -64,7 +63,7 @@ export function useProviderModels(provider: string | undefined, model?: string, 
   const models = modelsQuery.data?.models ?? []
   const listedModel = models.find((entry) => entry.id === model)
   const listReady = modelsQuery.isFetched || (provider === 'azure_foundry' && credentialsQuery.isSuccess && !hasCredential)
-  // Custom IDs must use execution's registry lookup too. Reuse the same query
+  // Custom IDs must use execution's metadata lookup too. Reuse the same query
   // across nodes, inspectors and factor editors; pause while the user types.
   const customCapabilitiesQuery = useQuery({
     queryKey: modelCapabilitiesKey(provider, settledModel),
@@ -77,7 +76,9 @@ export function useProviderModels(provider: string | undefined, model?: string, 
   const capabilitiesPending = !!model && !capabilities
   const capabilitiesError = capabilitiesPending && settledModel === model && customCapabilitiesQuery.isError
     ? 'Could not resolve model capabilities. Try again.'
-    : undefined
+    : modelsQuery.isError || modelsQuery.data?.source === 'error'
+      ? 'Provider discovery is unavailable. Explicit sampling values will be validated by the provider.'
+      : undefined
 
   return {
     credentialsQuery,
@@ -87,6 +88,9 @@ export function useProviderModels(provider: string | undefined, model?: string, 
     capabilities,
     capabilitiesPending,
     capabilitiesError,
-    retryCapabilities: () => customCapabilitiesQuery.refetch(),
+    retryCapabilities: async () => {
+      await modelsQuery.refetch()
+      if (!override && model) await customCapabilitiesQuery.refetch()
+    },
   }
 }

@@ -40,8 +40,8 @@ export const LLM_PROVIDER_LABELS: Record<LLMProvider, string> = Object.fromEntri
 
 // Matches src/asaree/api/llm_settings.py's LLMModelInfoResponse/
 // LLMSettingModelsResponse -- GET /llm-settings/{provider}/models.
-// Sampling capabilities come from provider discovery with Motoro's registry
-// as fallback, and the same metadata reaches execution (some newer models 400 on
+// Sampling capabilities come from provider discovery, with missing facts left
+// unknown. The same metadata reaches execution (some newer models 400 on
 // an explicit temperature and take an `effort` dial instead), so the same
 // response tells the Inspector both which models to list AND which control
 // to show for whichever one is selected.
@@ -52,13 +52,30 @@ export interface ModelCapabilities {
   effort_levels: string[] | null
   default_effort?: string | null
   temperature_effort_levels?: string[] | null
+  effort_levels_complete?: boolean
+  unsupported_effort_levels?: string[] | null
+  // Present on discovered responses; absent on deliberate capability overrides.
+  model_metadata?: ModelMetadata
+}
+
+export interface ModelDefault {
+  value: unknown
+  source: 'provider' | 'catalog' | 'unknown'
+}
+
+export interface ModelMetadata {
+  id: string
+  label: string | null
+  capabilities: ModelCapabilities
+  capability_sources: Record<string, 'provider' | 'catalog' | 'unknown'>
+  defaults: { temperature: ModelDefault; effort: ModelDefault; additional: Record<string, ModelDefault> }
 }
 
 export interface ResolvedSampling {
   temperature: number | null
   effort: string | null
-  temperature_source: 'explicit' | 'advertised_default' | 'application_fallback' | 'omitted'
-  effort_source: 'explicit' | 'advertised_default' | 'application_fallback' | 'omitted'
+  temperature_source: 'explicit' | 'advertised_default' | 'capability_override' | 'application_fallback' | 'omitted'
+  effort_source: 'explicit' | 'advertised_default' | 'capability_override' | 'application_fallback' | 'omitted'
   temperature_omission_reason: string | null
   effort_omission_reason: string | null
 }
@@ -100,10 +117,7 @@ export interface LLMConnectionCheck {
 
 export interface LLMSettingModelsResponse {
   models: LLMModelInfo[]
-  // "static" -- Anthropic/OpenAI's curated, provider-wide catalog, no
-  // credential needed. "api" -- a live Azure Foundry deployment discovery
-  // that succeeded. "error" -- discovery couldn't run at all (see `note`);
-  // the Inspector falls back to a free-text Model field in this case.
+  // New discovery returns api/error. Static remains readable for legacy clients.
   source: 'static' | 'api' | 'error'
   note: string | null
 }

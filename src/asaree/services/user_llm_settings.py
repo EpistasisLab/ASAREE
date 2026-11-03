@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from asaree.models.user_llm_setting import UserLLMSetting
 from asaree.security.encryption import decrypt, encrypt
+from asaree.services.provider_config import make_provider_config, normalize_optional_endpoint
 
 
 def _resource_host_from_project_endpoint(project_endpoint: str) -> str:
@@ -50,6 +51,16 @@ async def upsert_setting(
     resource host as its own prefix and asking for both looked like two
     near-identical URLs with no visible reason to differ.
     """
+    azure_project_endpoint = normalize_optional_endpoint(azure_project_endpoint)
+    config = make_provider_config(
+        provider=provider,
+        api_key=api_key,
+        # A project URL replaces the GUI's resource field, including stale input.
+        api_base=None if provider == "azure_foundry" and azure_project_endpoint else api_base,
+        azure_project_endpoint=azure_project_endpoint,
+    )
+    api_base = config.api_base
+    azure_project_endpoint = config.azure_project_endpoint
     if provider == "azure_foundry" and azure_project_endpoint:
         api_base = _resource_host_from_project_endpoint(azure_project_endpoint)
 

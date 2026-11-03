@@ -57,8 +57,8 @@ The provider-operations integration was first tested against Motoro commit
 `227311f683e6be629ac4e7b2cc93a1ed1323d084`
 ([EpistasisLab/motoro#15](https://github.com/EpistasisLab/motoro/pull/15)). Motoro
 subsequently released those changes in `v0.14.0`. The current provider-driven
-sampling integration pins Motoro develop commit
-`52dfd0720d9d10850c1e3099f4149b3c392192b9` pending a tested release tag. For future
+sampling integration pins Motoro release tag `v0.15.0`
+(`f1e7ea8b47b5d81581ffaf57dc595554dc6b21aa`). For future
 integrations, **release Motoro first** and complete this sequence before ASAREE's
 production release:
 

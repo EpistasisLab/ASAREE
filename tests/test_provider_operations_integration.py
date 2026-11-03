@@ -28,7 +28,8 @@ from asaree.services.llm_model_discovery import discover_models
 from asaree.services.provider_config import make_provider_config, provider_config
 from asaree.services.user_llm_settings import encrypt
 
-INTEGRATION_COMMIT = "52dfd0720d9d10850c1e3099f4149b3c392192b9"
+MOTORO_RELEASE = "v0.15.0"
+MOTORO_RELEASE_COMMIT = "f1e7ea8b47b5d81581ffaf57dc595554dc6b21aa"
 PROVIDERS = ["anthropic", "openai", "azure_foundry", "openrouter", "local"]
 OWNER = uuid.UUID("11111111-1111-1111-1111-111111111111")
 SECRET = "provider-secret-for-tests"
@@ -289,6 +290,32 @@ async def endpoint(monkeypatch):
     monkeypatch.setattr(api, "get_setting", AsyncMock(return_value=None))
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
         yield app, client
+
+
+async def test_sampling_preview_accepts_local_model_capability_fields(endpoint):
+    _, client = endpoint
+    response = await client.post(
+        "/llm-settings/sampling",
+        json={
+            "model": "qwen3.8:27b-q8_0",
+            "capabilities": {
+                "supports_temperature": None,
+                "supports_effort": None,
+                "default_temperature": None,
+                "effort_levels": None,
+                "default_effort": None,
+                "temperature_effort_levels": None,
+                "effort_levels_complete": True,
+                "unsupported_effort_levels": None,
+            },
+            "temperature": 0.7,
+            "effort": None,
+        },
+    )
+    assert response.status_code == 200, response.json()
+    assert response.json()["temperature"] == 0.7
+    assert response.json()["temperature_source"] == "explicit"
+    assert response.json()["effort"] is None
 
 
 async def test_endpoints_keep_missing_credentials_unknown_metadata_and_limits(endpoint, monkeypatch):
@@ -599,8 +626,9 @@ async def test_anthropic_outage_preserves_cached_live_metadata_and_error(endpoin
 def test_exact_installed_release_and_standalone_consumer(tmp_path):
     distribution = importlib.metadata.distribution("motoro")
     origin = json.loads(distribution.read_text("direct_url.json"))
-    assert origin["vcs_info"]["commit_id"] == INTEGRATION_COMMIT
-    assert origin["vcs_info"]["requested_revision"] == INTEGRATION_COMMIT
+    assert distribution.version == MOTORO_RELEASE.removeprefix("v")
+    assert origin["vcs_info"]["commit_id"] == MOTORO_RELEASE_COMMIT
+    assert origin["vcs_info"]["requested_revision"] == MOTORO_RELEASE
     assert "dir_info" not in origin
     assert Path(distribution.locate_file("motoro/services/providers.py")).is_file()
     consumer = """

@@ -2,12 +2,12 @@ import { displayFactorName } from '@/lib/factorLabels'
 import { useEffect, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import type { Edge, Node } from '@xyflow/react'
-import { AlertTriangle, Square } from 'lucide-react'
+import { AlertTriangle, LoaderCircle, Square } from 'lucide-react'
 import { ApiError, experimentsApi, protocolsApi } from '@/api/client'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { factorBindingDiscrepancies, type FactorBindingDiscrepancy } from '@/lib/factorBindings'
-import { useBatchPreview } from '@/lib/resultJobs'
+import { useBatchPreview, useResultJob } from '@/lib/resultJobs'
 import { ResultJobProgress } from './ResultJobProgress'
 import { executionKeys, useExecutionSummary } from '@/lib/executionQueries'
 import { protocolForExperimentQueryKey, protocolGraphQueryKey, toPersistedGraph } from '@/lib/protocolGraph'
@@ -94,6 +94,19 @@ export function RunAllCellsButton({ protocol, experimentId, regenerationRequired
   </>
 }
 
+// Keep visible attempts current while cancellation winds down, including after
+// the cancellation job has finished issuing its requests.
+function useStoppingRefresh(experimentId: string, stopping: boolean) {
+  const client = useQueryClient()
+  useEffect(() => {
+    if (!stopping) return
+    const refresh = () => { void client.invalidateQueries({ queryKey: executionKeys.root(experimentId) }, { cancelRefetch: false }) }
+    refresh()
+    const interval = window.setInterval(refresh, 1000)
+    return () => window.clearInterval(interval)
+  }, [client, experimentId, stopping])
+}
+
 function StopRunsButton({
   protocol,
   experimentId,
@@ -110,24 +123,30 @@ function StopRunsButton({
   const stopMutation = useMutation({
     mutationFn: () => Promise.all(uniqueRunIds.map((runId) => protocolsApi.cancelRun(protocol!.id, runId))),
     onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: executionKeys.root(experimentId) })
       queryClient.invalidateQueries({ queryKey: ['experiments', experimentId, 'runs'] })
       queryClient.invalidateQueries({ queryKey: ['protocols', protocol!.id, 'runs'] })
     },
   })
+  const stopping = stopMutation.isPending || stopMutation.isSuccess
+  useStoppingRefresh(experimentId, stopping)
 
   if (!protocol || uniqueRunIds.length === 0) return null
   const label = all || uniqueRunIds.length > 1 ? 'Stop all' : 'Stop'
-  return (
+  return <>
     <Button
       variant="outline"
       size="xs"
       className="h-5 border-destructive/40 px-1.5 text-[0.65rem] text-destructive hover:bg-destructive/10 hover:text-destructive"
-      disabled={stopMutation.isPending}
+      disabled={stopping}
+      aria-busy={stopping}
+      title={stopping ? 'Cancellation requested. Active work is winding down.' : undefined}
       onClick={() => stopMutation.mutate()}
     >
-      <Square className="size-3" /> {stopMutation.isPending ? 'Stopping…' : label}
+      {stopping ? <LoaderCircle aria-hidden="true" className="size-3 animate-spin" /> : <Square className="size-3" />} <span role={stopping ? 'status' : undefined}>{stopping ? 'Stopping…' : label}</span>
     </Button>
-  )
+    {stopMutation.error && <p role="alert" className="text-xs text-destructive">{stopMutation.error.message}</p>}
+  </>
 }
 
 // A deliberate one-replicate run is different from the batch's resume
@@ -255,7 +274,7 @@ function RunReplicateButton({
           confirmError={errorMessage}
         />
       )}
-      {activeRunId && <StopRunsButton protocol={protocol} experimentId={experimentId} runIds={[activeRunId]} />}
+      {activeRunId && <StopRunsButton key={activeRunId} protocol={protocol} experimentId={experimentId} runIds={[activeRunId]} />}
     </>
   )
 }
@@ -303,11 +322,24 @@ const ACTIVE_STATUSES = ['pending', 'running', 'finalizing']
 // replicate. Once clicked it stays up so the cancellation's progress is visible.
 function StopAllButton({ protocol, experimentId, cellId, active }: { protocol?: Protocol; experimentId: string; cellId?: string; active: boolean }) {
   const [jobId, setJobId] = useState<string>()
+  const [stopping, setStopping] = useState(false)
+  const job = useResultJob(experimentId, jobId)
   const stop = useMutation({ mutationFn: () => experimentsApi.createResultJob(experimentId,
     { protocol_id: protocol?.id, protocol_revision_id: protocol?.published_revision_id ?? undefined },
-    { kind: 'cancel', cell_id: cellId, request_key: newRequestKey() }), onSuccess: job => setJobId(job.id) })
+    { kind: 'cancel', cell_id: cellId, request_key: newRequestKey() }),
+    onMutate: () => { setStopping(true); setJobId(undefined) },
+    onSuccess: job => setJobId(job.id),
+    onError: () => setStopping(false),
+  })
+  useEffect(() => {
+    if (job.data && (['failed', 'cancelled', 'expired'].includes(job.data.status)
+      || job.data.status === 'completed' && !active)) setStopping(false)
+  }, [job.data, active])
+  useStoppingRefresh(experimentId, stopping)
   if (!active && !jobId && !stop.isPending) return null
-  return <><Button variant="destructive" size="xs" disabled={!protocol || stop.isPending} onClick={() => stop.mutate()}><Square className="size-3" />{cellId ? 'Stop cell' : 'Stop all'}</Button>
+  return <><Button variant="destructive" size="xs" disabled={!protocol || stopping || !active} aria-busy={stopping} onClick={() => stop.mutate()}>
+    {stopping ? <LoaderCircle aria-hidden="true" className="size-3 animate-spin" /> : <Square className="size-3" />}{stopping ? cellId ? 'Stopping cell…' : 'Stopping all…' : cellId ? 'Stop cell' : 'Stop all'}</Button>
+    {stopping && <p role="status" className="text-xs text-muted-foreground">Stopping… queued attempts are being cancelled; active work is winding down.</p>}
     <ResultJobProgress experimentId={experimentId} jobId={jobId} />
     {stop.error && <p role="alert" className="text-xs text-destructive">{stop.error.message}</p>}</>
 }

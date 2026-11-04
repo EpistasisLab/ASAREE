@@ -4046,7 +4046,7 @@ def _build_revision_instruction(base_instruction: str, verdict: dict[str, Any], 
     return "\n\n".join(parts)
 
 
-async def _monitor_protocol_run(protocol_run_id: uuid.UUID, cancel_event: asyncio.Event, interval: float = 1.5) -> None:
+async def _monitor_protocol_run(protocol_run_id: uuid.UUID, cancel_event: asyncio.Event, interval: float = 0.5) -> None:
     """Monitor cancellation and refresh liveness during an in-flight run.
 
     Watches for a Stop click (POST .../cancel) that a completely different

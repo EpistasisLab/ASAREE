@@ -11,7 +11,7 @@ from decimal import Decimal
 from math import isfinite
 from typing import Any
 
-from sqlalchemy import and_, case, cast, func, literal, or_, select, true, update
+from sqlalchemy import and_, case, cast, func, literal, or_, select, text, true, update
 from sqlalchemy.dialects.postgresql import JSONB
 
 from asaree.models.database import get_session
@@ -115,6 +115,25 @@ def summarize_usage(
     return accumulator.finish(started_at, completed_at)
 
 
+def metric_preview_refresh_query(only_run_id: uuid.UUID | None = None) -> Any:
+    """Refresh compact scalar projections without refetching provider telemetry."""
+    batch = (
+        select(ProtocolRun.id)
+        .where(
+            ProtocolRun.status.in_(TERMINAL), ProtocolRun.is_test_run.is_(False),
+            ProtocolRun.target_node_id.is_(None),
+            text("result_summary->>'metric_projection_version' IS DISTINCT FROM '2'"),
+            ProtocolRun.id == only_run_id if only_run_id else true(),
+        )
+        .order_by(ProtocolRun.id).limit(BATCH_SIZE)
+    )
+    return update(ProtocolRun).where(ProtocolRun.id.in_(batch)).values(
+        result_summary=func.asaree_result_preview(ProtocolRun.attempt_result, ProtocolRun.node_runs),
+        # Fires the existing result-change outbox trigger without altering usage.
+        usage_summary=ProtocolRun.usage_summary, updated_at=ProtocolRun.updated_at,
+    ).execution_options(synchronize_session=False)
+
+
 async def capture_result_usage(_ctx: dict[str, Any], *, only_run_id: uuid.UUID | None = None) -> None:
     """Select bounded durable work, capture all causally attributed runs, then publish.
 
@@ -126,6 +145,7 @@ async def capture_result_usage(_ctx: dict[str, Any], *, only_run_id: uuid.UUID |
         locked = await db.scalar(select(func.pg_try_advisory_xact_lock(73912841)))
         if not locked:
             return
+        await db.execute(metric_preview_refresh_query(only_run_id))
         now = datetime.now(UTC)
         node = (
             func.jsonb_each(

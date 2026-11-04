@@ -289,6 +289,7 @@ def catalog(source: dict) -> dict:
                 name=name,
                 n=n,
                 **{k: v for k, v in source.get("metric_metadata", {}).get(name, {}).items() if k not in {"name", "n"}},
+                **measurement_availability(source, name),
             )
             for name, n in sorted(metrics.items())
         ],
@@ -304,6 +305,33 @@ def catalog(source: dict) -> dict:
     )
 
 
+def measurement_availability(source: dict, metric: str) -> dict:
+    """Count the same usable outcomes as analysis, without fitting any models."""
+    from asaree.services.stats_automatic import automatic_inputs, plan_metric
+
+    result: dict = {"n_usable": None, "minimum_per_cell": None, "availability_reason": None}
+    try:
+        plan = plan_metric(source, metric)
+        converted, config, _ = automatic_inputs(source, StatsRequest(metric=metric).model_dump(), plan)
+        frame = measurement_frame(converted, config)
+        result["n_usable"] = len(frame)
+        if len(frame):
+            counts = frame.groupby([f"factor_{i}" for i in range(len(config["factors"]))]).size()
+            result["minimum_per_cell"] = int(counts.min())
+        if len(frame) < 5:
+            result["availability_reason"] = (
+                f"Not enough measurements: {len(frame)} usable; at least 5 overall are needed for model fitting."
+            )
+        elif result["minimum_per_cell"] < 3:
+            result["availability_reason"] = (
+                f"Not enough measurements: the least-measured observed cell has {result['minimum_per_cell']}; "
+                "at least 3 per observed cell are needed for model fitting."
+            )
+    except (ValueError, KeyError) as exc:
+        result["availability_reason"] = str(exc)
+    return result
+
+
 def prepare_frame(source: dict, config: dict) -> pd.DataFrame:
     factors = config["factors"]
     if config.get("denominator") and config["family"] not in ("binomial", "betabinomial", "auto"):
@@ -312,9 +340,44 @@ def prepare_frame(source: dict, config: dict) -> pd.DataFrame:
         raise ValueError("Ordinal levels must be unique.")
     if len(set(factors)) != len(factors):
         raise ValueError("Select distinct factors.")
-    available = {f["name"] for f in catalog(source)["factors"]}
+    levels: dict[str, set[str]] = {}
+    for row in source["rows"]:
+        for name, value in row["factors"].items():
+            if value is not None and not isinstance(value, dict | list):
+                levels.setdefault(name, set()).add(str(value))
+    available = {name for name, values in levels.items() if len(values) >= 2}
     if not set(factors) <= available:
         raise ValueError("Select varying factors present in this source snapshot.")
+    frame = measurement_frame(source, config)
+    if len(frame) < 5:
+        raise ValueError("At least five scored whole-dataset replicates are required for this metric.")
+    if frame.outcome.nunique() < 2:
+        raise ValueError("The selected outcome is constant.")
+    family = config["family"]
+    y = frame.outcome.to_numpy(float)
+    if family in ("gamma", "lognormal") and np.any(y <= 0):
+        raise ValueError(f"{family} requires strictly positive outcomes.")
+    if family in ("poisson", "negbin", "zip", "zinb", "hurdle_poisson", "hurdle_negbin") and (
+        np.any(y < 0) or np.any(y != np.round(y))
+    ):
+        raise ValueError("Count models require nonnegative integer outcomes.")
+    if family == "beta" and np.any((y <= 0) | (y >= 1)):
+        raise ValueError("Beta regression requires values strictly between zero and one.")
+    if family == "binomial" and not config.get("denominator") and not set(y) <= {0, 1}:
+        raise ValueError("Binomial outcomes require binary values or a trials denominator.")
+    if len(frame) > 5000:
+        raise ValueError("Statistics support up to 5,000 scored replicates per analysis.")
+    counts = [frame[f"factor_{i}"].nunique() for i in range(len(factors))]
+    if any(count < 2 for count in counts):
+        raise ValueError("Each selected factor needs at least two observed levels after missing outcomes are excluded.")
+    if math.prod(counts) > 128:
+        raise ValueError("Select factors with at most 128 combined cells.")
+    return frame
+
+
+def measurement_frame(source: dict, config: dict) -> pd.DataFrame:
+    """Extract usable per-metric observations; missing values never become zero."""
+    factors = config["factors"]
     rows = []
     for item in source["rows"]:
         values = item["metrics"]
@@ -342,32 +405,7 @@ def prepare_frame(source: dict, config: dict) -> pd.DataFrame:
                 raise ValueError("Binomial counts require integer successes and positive integer trials.")
             row["trials"] = trials
         rows.append(row)
-    frame = pd.DataFrame(rows)
-    if len(frame) < 5:
-        raise ValueError("At least five scored whole-dataset replicates are required for this metric.")
-    if frame.outcome.nunique() < 2:
-        raise ValueError("The selected outcome is constant.")
-    family = config["family"]
-    y = frame.outcome.to_numpy(float)
-    if family in ("gamma", "lognormal") and np.any(y <= 0):
-        raise ValueError(f"{family} requires strictly positive outcomes.")
-    if family in ("poisson", "negbin", "zip", "zinb", "hurdle_poisson", "hurdle_negbin") and (
-        np.any(y < 0) or np.any(y != np.round(y))
-    ):
-        raise ValueError("Count models require nonnegative integer outcomes.")
-    if family == "beta" and np.any((y <= 0) | (y >= 1)):
-        raise ValueError("Beta regression requires values strictly between zero and one.")
-    if family == "binomial" and not config.get("denominator") and not set(y) <= {0, 1}:
-        raise ValueError("Binomial outcomes require binary values or a trials denominator.")
-    if len(frame) > 5000:
-        raise ValueError("Statistics support up to 5,000 scored replicates per analysis.")
-    # Prevent factorial explosion, rank-deficient full designs and unstable fits.
-    counts = [frame[f"factor_{i}"].nunique() for i in range(len(factors))]
-    if any(count < 2 for count in counts):
-        raise ValueError("Each selected factor needs at least two observed levels after missing outcomes are excluded.")
-    if math.prod(counts) > 128:
-        raise ValueError("Select factors with at most 128 combined cells.")
-    return frame
+    return pd.DataFrame(rows)
 
 
 def json_safe(value: Any) -> Any:

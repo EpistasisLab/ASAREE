@@ -24,7 +24,7 @@ from asaree.services.result_reads import (
     cell_predicates,
     parent_predicates,
     resolve_result_scope,
-    runtime_metrics,
+    result_metrics,
     slot_query,
 )
 
@@ -125,8 +125,8 @@ def rollup_query(scope: ResultScope) -> Any:
     metrics = func.jsonb_each(slots.c.result["metrics"]).table_valued("key", "value").lateral("metrics")
     identities = {
         identifier: metric["key"]
-        for identifier, metric in runtime_metrics(scope).items()
-        if metric["aggregation"] in {"mean", "sum"}
+        for identifier, metric in result_metrics(scope).items()
+        if metric["aggregation"] in {"mean", "sum"} and metric["valueType"] in {"number", "boolean"}
     }
     metric_key = case(identities, value=metrics.c.key, else_=None) if identities else metrics.c.key
     metric_query = select(
@@ -215,7 +215,7 @@ async def rebuild_result_summary(db: AsyncSession, scope: ResultScope, generatio
         key: None
         for key in ("cost_usd", "input_tokens", "output_tokens", "total_tokens", "duration_seconds", "agent_run_count")
     }
-    aggregations = {metric["key"]: metric["aggregation"] for metric in runtime_metrics(scope).values()}
+    aggregations = {metric["key"]: metric["aggregation"] for metric in result_metrics(scope).values()}
     batch = []
     result = await db.stream(rollup_query(scope))
     all_usage_totals: dict[str, Any] = {}
@@ -354,7 +354,7 @@ async def rebuild_result_summary(db: AsyncSession, scope: ResultScope, generatio
         "executed_count": totals["executed"],
         "scored_count": totals["scored"],
         "cell_result_counts": {key: int(value) for key, value in result_counts.items()},
-        "cell_result_details_version": 1,
+        "cell_result_details_version": 2,
         "cell_count": totals["cells"],
         "replicate_count": totals["replicates"],
         "usage": usage,

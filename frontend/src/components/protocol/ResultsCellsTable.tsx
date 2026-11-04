@@ -5,13 +5,15 @@ import type { UsageMetric } from '@/lib/resultUsage'
 import type { ExecutionCell, ExecutionSummary } from '@/types/executionResults'
 import type { DesignSpec } from '@/types/experiments'
 import { displayFactorCondition } from '@/lib/experiment'
+import { cellMetricValue, formatCellMetric, metricAggregationLabel, type ResultMetric } from '@/lib/resultMetrics'
 
 const metricLabels: Record<UsageMetric, string> = {
   total_tokens: 'Tokens', cost_usd: 'Cost', duration_seconds: 'Duration',
 }
 
-export function ResultsCellsTable({ cells, metric, attemptScope, unit, startIndex = 0, onSelect, designSpec }: {
+export function ResultsCellsTable({ cells, metric, measurement, attemptScope, unit, startIndex = 0, onSelect, designSpec }: {
   cells: ExecutionCell[]; metric: UsageMetric; attemptScope: 'latest' | 'all'
+  measurement?: ResultMetric
   unit: ExecutionSummary['unit']; startIndex?: number; onSelect: (cell: ExecutionCell) => void
   designSpec?: DesignSpec | null
 }) {
@@ -20,7 +22,7 @@ export function ResultsCellsTable({ cells, metric, attemptScope, unit, startInde
       <thead className="border-b bg-muted/40 text-[10px] uppercase text-muted-foreground">
         <tr><th scope="col" className="px-2 py-2 text-left font-medium">Cell</th>
           <th scope="col" className="px-2 py-2 text-right font-medium">Progress</th>
-          <th scope="col" className="px-2 py-2 text-right font-medium">{metricLabels[metric]}</th>
+          <th scope="col" className="px-2 py-2 text-right font-medium">{measurement ? `${measurement.label}${measurement.aggregation && measurement.valueType ? ` · ${metricAggregationLabel(measurement)}` : ''}` : metricLabels[metric]}</th>
           <th scope="col" className="w-7"><span className="sr-only">Details</span></th></tr>
       </thead>
       <tbody className="divide-y">
@@ -39,6 +41,8 @@ export function ResultsCellsTable({ cells, metric, attemptScope, unit, startInde
               : metric === 'cost_usd' ? new Intl.NumberFormat(undefined, { style: 'currency', currency: 'USD', maximumFractionDigits: value > 0 && value < 0.01 ? 4 : 2 }).format(value)
                 : value < 60 ? `${Math.round(value)} sec` : value < 3600 ? `${(value / 60).toFixed(1)} min` : `${(value / 3600).toFixed(1)} hr`
           }
+          const measurementValue = measurement ? cellMetricValue(cell, measurement) : null
+          if (measurement) formatted = measurementValue === null ? '—' : formatCellMetric(measurementValue, measurement)
           return <tr key={cell.cell_id} onClick={() => onSelect(cell)}
             className="cursor-pointer transition-colors even:bg-muted/10 hover:bg-primary/10 focus-within:bg-primary/10">
             <th scope="row" className="px-2 py-1.5 text-left font-normal">
@@ -54,7 +58,8 @@ export function ResultsCellsTable({ cells, metric, attemptScope, unit, startInde
               </span>
             </td>
             <td className="whitespace-nowrap px-2 py-2 text-right font-mono tabular-nums"
-              title={value == null ? 'Not reported' : metric === 'total_tokens' ? `${value.toLocaleString()} tokens` : metric === 'duration_seconds' ? `${value.toLocaleString()} seconds` : `${value.toLocaleString(undefined, { maximumFractionDigits: 6 })} USD`}>{formatted}</td>
+              title={measurement ? `${cell.metric_counts?.[measurement.key] ?? 0} measured replicates` : value == null ? 'Not reported' : metric === 'total_tokens' ? `${value.toLocaleString()} tokens` : metric === 'duration_seconds' ? `${value.toLocaleString()} seconds` : `${value.toLocaleString(undefined, { maximumFractionDigits: 6 })} USD`}>{formatted}
+              {measurement && <span className="mt-1 block text-[10px] text-muted-foreground">{cell.metric_counts?.[measurement.key] ?? 0} measured</span>}</td>
             <td className="px-1 py-2 text-muted-foreground"><ChevronRight className="size-3.5" aria-hidden="true" /></td>
           </tr>
         })}

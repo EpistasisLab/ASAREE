@@ -18,6 +18,25 @@ const cells: ExecutionCell[] = [
 ]
 
 describe('Results usage charts', () => {
+  it('selects a published custom metric in the existing chart and preserves zero and missing values', () => {
+    render(<ResultsProgress summary={{ ...summary,
+      metric_labels: { score: 'Custom score', note: 'Explanation' }, metric_types: { score: 'number' },
+      metric_aggregations: { score: 'mean' } }} cells={[
+      { ...cells[0], metric_values: { score: -2 }, metric_counts: { score: 3 } },
+      { ...cells[1], metric_values: { score: 0 }, metric_counts: { score: 2 } },
+      { cell_id: 'missing', cell_label: 'model=c', cell_number: 9, factor_values: {} },
+    ]} cellsLoading={false} />)
+    fireEvent.change(screen.getByRole('combobox', { name: 'Metric by cell' }), { target: { value: 'metric:score' } })
+    const chart = within(screen.getByRole('region', { name: 'Custom score by cell' }))
+    expect(chart.getByRole('img', { name: 'Cell 7: -2' })).toHaveAttribute('title', expect.stringContaining('3 measured replicates'))
+    expect(chart.getByRole('img', { name: 'Cell 8: 0' })).toBeInTheDocument()
+    expect(chart.getByRole('img', { name: 'Cell 9: Not reported' })).toBeInTheDocument()
+    expect(chart.getByText('Mean across measured replicates in each cell.')).toBeVisible()
+    fireEvent.change(screen.getByRole('combobox', { name: 'Metric by cell' }), { target: { value: 'metric:note' } })
+    expect(screen.getByText(/no numeric cell aggregation/)).toBeVisible()
+    expect(screen.queryByRole('img')).not.toBeInTheDocument()
+  })
+
   it('switches tile and chart labels when the experiment completes', () => {
     const view = render(<ResultsProgress summary={summary} cells={cells} cellsLoading={false} />)
     expect(screen.getByRole('button', { name: 'Show tokens so far by cell' })).toBeInTheDocument()

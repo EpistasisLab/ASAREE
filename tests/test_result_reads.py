@@ -59,6 +59,7 @@ from asaree.services.result_reads import (
     read_summary,
     read_usage_distribution,
     resolve_result_scope,
+    result_metrics,
     runtime_metrics,
     slot_query,
     usage_distribution_query,
@@ -408,6 +409,32 @@ def test_catalog_defaults_determine_comparison_direction_when_omitted():
         }
     )
     assert runtime_metrics(selected)['cost']['direction'] == 'minimize'
+
+
+def test_result_metrics_include_published_custom_metrics_and_preserve_their_identity():
+    selected = scope(
+        design_spec={"metrics": [{"id": "draft-only", "name": "Draft-only metric", "kind": "custom"}]},
+        measurement_plan={
+            "metrics": [
+                {"id": "accuracy", "name": "Accuracy", "value_type": "number", "aggregation": "mean"},
+                {"id": "passed", "name": "Passed", "value_type": "boolean", "aggregation": "rate"},
+                {"id": "captured", "name": "Captured custom score"},
+                {"id": "note", "name": "Explanation", "value_type": "opaque", "aggregation": "none"},
+            ],
+            "producers": [], "inputs": [],
+        },
+    )
+    definitions = result_metrics(selected)
+    assert set(definitions) == {"accuracy", "passed", "note", "captured"}
+    assert definitions["accuracy"]["key"] == "accuracy"
+    assert definitions["passed"]["valueType"] == "boolean"
+    assert definitions["passed"]["aggregation"] == "mean"
+    assert definitions["captured"]["aggregation"] == "mean"
+    sql = str(rollup_query(selected).compile(dialect=postgresql.dialect(), compile_kwargs={"literal_binds": True}))
+    assert "WHEN 'accuracy' THEN 'accuracy'" in sql
+    assert "WHEN 'passed' THEN 'passed'" in sql
+    assert "WHEN 'captured' THEN 'captured'" in sql
+    assert "WHEN 'note'" not in sql
 
 
 def test_cursor_binds_scope_kind_and_filters():
@@ -1322,6 +1349,52 @@ async def test_cell_summaries_aggregate_replicates_in_sql(results_db):
     assert summaries["other"] == {**summaries["other"], "replicate_count": 1, "scored_count": 0, "metrics": {}}
     # A revision id from another experiment never leaks its cells.
     assert await summarize_cells(db, experiment_id=uuid.uuid4(), revision_id=cell.design_revision_id) == []
+
+
+async def test_custom_metric_previews_and_backfill_feed_numeric_cell_summaries(results_db):
+    from dataclasses import replace
+
+    from asaree.services.result_usage import metric_preview_refresh_query
+
+    db, selected, cell, user = results_db
+    selected = replace(selected, measurement_plan={
+        "metrics": [{"id": "score", "name": "Custom score"}, {"id": "note", "name": "Explanation"}],
+        "producers": [], "inputs": [],
+    })
+    runs = []
+    for number, value in enumerate([0, 0.8, None], start=1):
+        parent = FactorialReplicateResult(cell_id=cell.id, replicate_number=number, replicate_label=f"custom-{number}")
+        db.add(parent)
+        await db.flush()
+        run = ProtocolRun(
+            protocol_id=selected.protocol_id, owner_id=user.id,
+            protocol_revision_id=selected.protocol_revision_id, design_revision_id=selected.design_revision_id,
+            replicate_result_id=parent.id, replicate_label=parent.replicate_label,
+            status="completed", node_runs={}, usage_summary={"settled": True, "cost_usd": 0.1},
+            attempt_result={"measurement": {"observations": [
+                {"metric_id": "score", "metric_name": "Custom score", "value": value,
+                 "status": "measured" if value is not None else "unavailable",
+                 "producer": {"producer_id": "asaree.python_script"}},
+                {"metric_id": "note", "metric_name": "Explanation", "value": {"text": "opaque"},
+                 "status": "measured", "producer": {"producer_id": "asaree.agent_output"}},
+            ]}},
+        )
+        db.add(run)
+        await db.flush()
+        runs.append(run)
+    await db.refresh(runs[0])
+    assert runs[0].result_summary["metrics"] == {"score": 0}
+    # Simulate a settled historical run whose old projection omitted custom values.
+    runs[0].result_summary = {"metrics": {}}
+    await db.flush()
+    await db.execute(metric_preview_refresh_query(runs[0].id))
+    await db.refresh(runs[0])
+    assert runs[0].usage_summary == {"settled": True, "cost_usd": 0.1}
+    assert runs[0].result_summary["metrics"] == {"score": 0}
+    await rebuild_result_summary(db, selected, 1)
+    page = await read_cells(db, selected)
+    assert page["items"][0]["metric_values"] == {"score": 0.4}
+    assert page["items"][0]["metric_counts"] == {"score": 2}
 
 
 async def test_streamed_export_matches_the_analysis_csv(results_db, monkeypatch):

@@ -96,6 +96,7 @@ def runtime_metrics(scope: ResultScope) -> dict[str, dict[str, Any]]:
                 "id": declaration.id,
                 "name": declaration.name,
                 "key": previous.get("key", declaration.id),
+                "unit": declaration.unit or previous.get("unit") or defaults.get("unit"),
                 "valueType": declaration.value_type or defaults.get("valueType", "number"),
                 "aggregation": declaration.aggregation
                 or previous.get("aggregation")
@@ -104,6 +105,38 @@ def runtime_metrics(scope: ResultScope) -> dict[str, dict[str, Any]]:
                 or previous.get("direction")
                 or defaults.get("defaultDirection", "neutral"),
             }
+    return definitions
+
+
+def result_metrics(scope: ResultScope) -> dict[str, dict[str, Any]]:
+    """Published metric identities for display and scalar cell aggregation."""
+    definitions = runtime_metrics(scope)
+    if scope.measurement_plan is not None:
+        plan = parse_measurement_plan(normalize_experiment_measurement_plan(scope.measurement_plan, None))
+        for metric in plan.metrics:
+            if metric.id not in definitions:
+                definitions[metric.id] = {
+                    "id": metric.id, "key": metric.id, "name": metric.name,
+                    # Custom declarations may accept arbitrary JSON. The compact
+                    # result preview projects only actual numbers/booleans; its
+                    # cell mean never casts text or structured output to a number.
+                    "valueType": metric.value_type or "number",
+                    "unit": metric.unit,
+                    "aggregation": "mean" if metric.aggregation == "rate" else metric.aggregation or "mean",
+                    "direction": metric.direction or "neutral",
+                }
+    else:
+        for metric in normalize_metrics((scope.design_spec or {}).get("metrics")):
+            if metric["id"] not in definitions:
+                definitions[metric["id"]] = {
+                    **metric, "key": metric["id"],
+                    "valueType": metric.get("valueType", "number"),
+                    "aggregation": metric.get("aggregation", "mean"),
+                    "direction": metric.get("direction", "neutral"),
+                }
+    for definition in definitions.values():
+        if definition.get("aggregation") == "rate":
+            definition["aggregation"] = "mean"
     return definitions
 
 
@@ -384,12 +417,12 @@ async def read_summary(db: AsyncSession, scope: ResultScope) -> dict[str, Any]:
     refresh = await db.get(ResultRefresh, scope.key)
     if refresh is None:
         await request_refresh(db, scope)
-    elif (refresh.summary is not None and refresh.summary.get("cell_result_details_version") != 1
+    elif (refresh.summary is not None and refresh.summary.get("cell_result_details_version") != 2
           and refresh.generation == refresh.processed_generation):
         # Older cached summaries need one rebuild to acquire cell result details.
         refresh.generation += 1
         await db.flush()
-    metrics = list(runtime_metrics(scope).values())
+    metrics = list(result_metrics(scope).values())
     connected = {edge.get("source") for edge in scope.graph.get("edges", [])}
     datasets = {}
     for node in scope.graph.get("nodes", []):
@@ -414,6 +447,7 @@ async def read_summary(db: AsyncSession, scope: ResultScope) -> dict[str, Any]:
             metric["key"]: metric["valueType"] for metric in metrics if metric["aggregation"] in {"mean", "sum"}
         },
         "metric_labels": {metric["key"]: metric["name"] for metric in metrics},
+        "metric_units": {metric["key"]: metric.get("unit") for metric in metrics},
         "metric_aggregations": {metric["key"]: metric["aggregation"] for metric in metrics},
         "metric_directions": {metric["key"]: metric["direction"] for metric in metrics},
         **(refresh.summary if refresh and refresh.summary is not None else {}),

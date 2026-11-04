@@ -78,12 +78,13 @@ async def test_history_exposes_report_status_without_loading_reports(monkeypatch
     )
     # No output attribute: history must use the projected status, not load report JSON.
     result = MagicMock()
-    result.all.return_value = [(analysis, "valid"), (analysis, "unavailable")]
+    result.all.return_value = [(analysis, "valid", []), (analysis, "unavailable", ["Not enough measurements."])]
     db = SimpleNamespace(execute=AsyncMock(return_value=result))
     monkeypatch.setattr(api, "_get_owned_experiment", AsyncMock())
     user = object()
     saved = await api.history(experiment_id, user, db)
     assert [item["report_status"] for item in saved] == ["valid", "unavailable"]
+    assert saved[1]["report_warnings"] == ["Not enough measurements."]
     assert all("output" not in item for item in saved)
     api._get_owned_experiment.assert_awaited_once_with(db, experiment_id, user)
 

@@ -1,10 +1,10 @@
-import { useState } from 'react'
+import { useId, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ChevronRight } from 'lucide-react'
 import { statsApi } from '@/api/client'
 import { Button } from '@/components/ui/button'
 import { StatisticsReport } from './StatisticsReport'
-import type { StatsAnalysis } from '@/types/stats'
+import type { StatsAnalysis, StatsMetricSource } from '@/types/stats'
 
 export function ExperimentStatistics({ experiment, version }: { experiment: string; version: string | null }) {
   const client = useQueryClient()
@@ -23,7 +23,10 @@ export function ExperimentStatistics({ experiment, version }: { experiment: stri
   })
   const run = useMutation({
     mutationFn: () => statsApi.automatic(experiment, version!),
-    onSuccess: () => client.invalidateQueries({ queryKey: historyKey }),
+    onSuccess: () => Promise.all([
+      client.invalidateQueries({ queryKey: historyKey }),
+      client.invalidateQueries({ queryKey: ['statistics-source', experiment, version] }),
+    ]),
   })
   const latest = new Map<string, StatsAnalysis>()
   for (const analysis of history.data ?? []) {
@@ -32,6 +35,10 @@ export function ExperimentStatistics({ experiment, version }: { experiment: stri
     }
   }
   const analyses = [...latest.values()]
+  const metrics = source.data?.metrics.length ? source.data.metrics
+    : analyses.map(a => ({ name: a.config.metric, n: 0 }))
+  const changed = !!source.data && analyses.some(a =>
+    a.status !== 'pending' && a.status !== 'running' && a.fingerprint !== source.data.fingerprint)
   const pending = run.isPending || analyses.some(a => a.status === 'pending' || a.status === 'running')
   const reports = analyses.filter(a => (a.status === 'completed' || a.status === 'incomplete') && (a.report_status === 'valid' || a.report_status === 'descriptive'))
   const failed = analyses.filter(a => a.status === 'failed' || a.status === 'incomplete')
@@ -40,6 +47,12 @@ export function ExperimentStatistics({ experiment, version }: { experiment: stri
 
   return <div className="@container space-y-3 p-3">
     <p className="text-xs text-muted-foreground">Analyze metrics from the experiment version being viewed. Methods are selected automatically. Rerunning replaces this version’s existing reports.</p>
+    <div className="space-y-1 rounded-md border border-border bg-muted/20 p-3 text-xs text-muted-foreground">
+      <p>Whole-dataset replicates are treated as independent observations.</p>
+      <p>Model fitting needs at least <strong className="text-foreground">5 usable measurements overall</strong> and <strong className="text-foreground">3 per observed cell</strong>, for each metric. These minimums do not guarantee a reliable comparison. Constant outcomes may receive a descriptive-only report.</p>
+      <p>Missing measurements are excluded, not treated as zero. Each metric may use a different set of completed replicates.</p>
+    </div>
+    {changed && !pending && <p role="status" className="rounded-md border border-[color:var(--chart-4)]/40 p-3 text-xs text-[color:var(--chart-4)]">New or changed results are available for this version. Rerun analysis to update the reports.</p>}
     <Button size="sm" disabled={!ready || pending || history.isLoading} onClick={() => run.mutate()}>
       {pending ? 'Analyzing metrics…' : 'Analyze all metrics'}
     </Button>
@@ -51,35 +64,57 @@ export function ExperimentStatistics({ experiment, version }: { experiment: stri
     {failed.map(a => <p key={a.id} role="alert" className="break-words text-xs text-destructive">{a.config.metric}: {a.error || (a.status === 'incomplete' ? 'Analysis incomplete. Rerun to finish the requested procedures.' : 'Analysis failed. Please rerun the analysis.')}</p>)}
     {version && !history.isLoading && !history.error && !pending && reports.length === 0 && <p className="text-xs text-muted-foreground">No statistical reports are available for this experiment version. Analyze all metrics after collecting sufficient experiment results.</p>}
     <div className="space-y-2">
-      {reports.map(analysis => <ReportRow key={analysis.id} experiment={experiment} analysis={analysis} />)}
+      {metrics.map(metric => <ReportRow key={metric.name} experiment={experiment} metric={metric} analysis={latest.get(metric.name)} sourceFingerprint={source.data?.fingerprint} />)}
     </div>
   </div>
 }
 
-function ReportRow({ experiment, analysis }: { experiment: string; analysis: StatsAnalysis }) {
+function ReportRow({ experiment, metric, analysis, sourceFingerprint }: {
+  experiment: string; metric: StatsMetricSource; analysis?: StatsAnalysis; sourceFingerprint?: string
+}) {
   const [open, setOpen] = useState(false)
+  const id = useId()
+  const finished = analysis?.status === 'completed' || analysis?.status === 'incomplete'
   const report = useQuery({
-    queryKey: ['stats-analysis', experiment, analysis.id],
-    queryFn: () => statsApi.get(experiment, analysis.id),
-    enabled: open,
+    queryKey: ['stats-analysis', experiment, analysis?.id],
+    queryFn: () => statsApi.get(experiment, analysis!.id),
+    enabled: open && finished,
     staleTime: 0,
     refetchOnMount: 'always',
   })
+  const status = !analysis ? (metric.availability_reason?.startsWith('Not enough') ? 'Needs measurements' : 'Not analyzed')
+    : analysis.status === 'pending' ? 'Queued' : analysis.status === 'running' ? 'Analyzing'
+    : analysis.status === 'failed' ? 'Analysis failed' : analysis.status === 'incomplete' ? 'Analysis incomplete'
+    : analysis.report_status === 'descriptive' ? 'Descriptive only'
+    : analysis.report_status === 'valid' ? 'Report ready' : 'Report unavailable'
+  const outdated = finished && sourceFingerprint && analysis.fingerprint !== sourceFingerprint
+  const valid = analysis?.report_status === 'valid' || analysis?.report_status === 'descriptive'
+  const reason = analysis?.error || (finished && !valid && !outdated && metric.availability_reason)
+    || (!valid && analysis?.report_warnings?.join(' '))
+    || (!analysis && metric.availability_reason)
   return <div className="overflow-hidden rounded-md border border-border">
-    <button type="button" aria-expanded={open} aria-controls={`stats-report-${analysis.id}`}
+    <Button variant="ghost" aria-expanded={open} aria-controls={id}
       onClick={() => setOpen(value => !value)}
-      className="flex w-full cursor-pointer items-center gap-2 p-3 text-left text-xs transition-colors hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring">
+      className="h-auto w-full justify-start whitespace-normal p-3 text-left text-xs">
       <ChevronRight aria-hidden="true" className={`size-3.5 shrink-0 transition-transform ${open ? 'rotate-90' : ''}`} />
       <span className="min-w-0 flex-1 space-y-1">
-        <span className="block break-words text-[0.95625rem] font-semibold">{analysis.config.metric}</span>
-        <span className="block text-muted-foreground">{new Date(analysis.created_at).toLocaleString()}</span>
+        <span className="block break-words text-[0.95625rem] font-semibold">{metric.name}</span>
+        <span className="block text-muted-foreground">{status}{outdated ? ' · Results changed' : ''}</span>
+        {metric.n_usable != null && <span className="block font-mono text-muted-foreground">Current: {metric.n_usable} usable measurements · least-measured observed cell: {metric.minimum_per_cell ?? 0}</span>}
+        {metric.n_usable == null && <span className="block font-mono text-muted-foreground">{metric.n} recorded measurements</span>}
+        {reason && <span className="block break-words text-muted-foreground">{reason}</span>}
+        {analysis && <span className="block text-muted-foreground">{new Date(analysis.created_at).toLocaleString()}</span>}
       </span>
-    </button>
-    <div id={`stats-report-${analysis.id}`} hidden={!open} className="border-t">
+    </Button>
+    <div id={id} hidden={!open} className="border-t">
       {open && <>
+        {!analysis && <p className="p-3 text-xs text-muted-foreground">{metric.availability_reason || 'No report has been generated. Select Analyze all metrics to create one.'}</p>}
+        {analysis?.status === 'failed' && <p className="p-3 text-xs text-destructive">{analysis.error || 'Analysis failed. Rerun analysis to try again.'}</p>}
+        {(analysis?.status === 'pending' || analysis?.status === 'running') && <p role="status" className="p-3 text-xs text-muted-foreground">This metric is being analyzed. You can return later.</p>}
         {report.isLoading && <p role="status" className="p-3 text-xs text-muted-foreground">Loading report…</p>}
         {report.error && <p role="alert" className="p-3 text-xs text-destructive">{report.error.message}</p>}
         {(report.data?.output?.summary?.status === 'valid' || report.data?.output?.summary?.status === 'descriptive') && <StatisticsReport analysis={report.data} experiment={experiment} />}
+        {report.data?.output?.summary && report.data.output.summary.status !== 'valid' && report.data.output.summary.status !== 'descriptive' && <div className="space-y-2 p-3 text-xs text-muted-foreground"><p>No statistical report could be produced.</p>{report.data.output.summary.warnings.map((warning, i) => <p key={i}>{warning}</p>)}</div>}
       </>}
     </div>
   </div>

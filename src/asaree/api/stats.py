@@ -44,7 +44,10 @@ async def replace_automatic_reports(
     await db.execute(delete(StatsAnalysis).where(*scope).execution_options(synchronize_session=False))
 
 
-def summary(analysis: StatsAnalysis, *, detail: bool = False, report_status: str | None = None) -> dict:
+def summary(
+    analysis: StatsAnalysis, *, detail: bool = False,
+    report_status: str | None = None, report_warnings: list[str] | None = None,
+) -> dict:
     result = dict(
         id=str(analysis.id),
         status=analysis.status,
@@ -54,6 +57,7 @@ def summary(analysis: StatsAnalysis, *, detail: bool = False, report_status: str
         fingerprint=analysis.request["source"]["fingerprint"],
         design_revision=analysis.request["source"]["design_revision"],
         report_status=report_status,
+        report_warnings=report_warnings or [],
     )
     if detail:
         result["output"] = dict(analysis.output)
@@ -85,7 +89,10 @@ async def history(
 ) -> list[dict]:
     await _get_owned_experiment(db, experiment_id, user)
     statement = (
-        select(StatsAnalysis, StatsAnalysis.output["summary"]["status"].as_string())
+        select(
+            StatsAnalysis, StatsAnalysis.output["summary"]["status"].as_string(),
+            StatsAnalysis.output["summary"]["warnings"],
+        )
         .options(defer(StatsAnalysis.output))
         .where(StatsAnalysis.experiment_id == experiment_id, AUTOMATIC)
     )
@@ -100,7 +107,7 @@ async def history(
             .limit(100)
         )
     ).all()
-    return [summary(a, report_status=report_status) for a, report_status in analyses]
+    return [summary(a, report_status=status, report_warnings=warnings) for a, status, warnings in analyses]
 
 
 @router.get("/{experiment_id}/analyses/{analysis_id}")

@@ -5,16 +5,20 @@ import { Card } from '@/components/ui/card'
 import type { ExecutionCell, ExecutionSummary } from '@/types/executionResults'
 import { CellUsageChart } from './CellUsageChart'
 import { experimentResultStatus, formatUsageValue, usageMetricLabels, type UsageMetric } from '@/lib/resultUsage'
+import { selectedResultMetrics } from '@/lib/resultMetrics'
 
 export function ResultsProgress({ summary, cells, cellsLoading, cellsError, attemptScope = 'latest', onAttemptScopeChange, chartPagination, selectedMetric, onMetricChange, onSelectCell, selectedCellId }: {
   summary: ExecutionSummary; cells: ExecutionCell[]; cellsLoading: boolean; cellsError?: string
   attemptScope?: 'latest' | 'all'; onAttemptScopeChange?: (scope: 'latest' | 'all') => void; chartPagination?: ReactNode
-  selectedMetric?: UsageMetric; onMetricChange?: (metric: UsageMetric) => void
+  selectedMetric?: string; onMetricChange?: (metric: string) => void
   onSelectCell?: (cell: ExecutionCell) => void
   selectedCellId?: string
 }) {
-  const [internalMetric, setInternalMetric] = useState<UsageMetric>('total_tokens')
+  const [internalMetric, setInternalMetric] = useState<string>('total_tokens')
   const metric = selectedMetric ?? internalMetric
+  const measurements = summary.unit === 'replicate' ? selectedResultMetrics(summary) : []
+  const measurement = measurements.find(item => `metric:${item.key}` === metric)
+  const usageMetric: UsageMetric = metric === 'cost_usd' || metric === 'duration_seconds' ? metric : 'total_tokens'
   const completed = summary.counts?.completed ?? 0
   const total = summary.expected ?? summary.total ?? 0
   const status = experimentResultStatus(summary)
@@ -64,6 +68,20 @@ export function ResultsProgress({ summary, cells, cellsLoading, cellsError, atte
         </Button>
       </Card>)}
     </div>
-    <CellUsageChart cells={cells} metric={metric} loading={cellsLoading} error={cellsError} attemptScope={attemptScope} pagination={chartPagination} completed={completedExperiment} onSelectCell={onSelectCell} selectedCellId={selectedCellId} />
+    <label className="block space-y-1 text-xs text-muted-foreground">
+      <span>Metric by cell</span>
+      <select aria-label="Metric by cell" value={measurement ? metric : usageMetric}
+        onChange={event => { setInternalMetric(event.target.value); onMetricChange?.(event.target.value) }}
+        className="h-9 w-full min-w-0 rounded-md border border-input bg-background px-2 text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+        {measurements.length > 0 && <optgroup label="Selected experiment metrics">{measurements.map(item => <option key={item.key} value={`metric:${item.key}`}>{item.label}</option>)}</optgroup>}
+        <optgroup label="Operational usage summaries">
+          <option value="total_tokens">{labels.total_tokens}</option>
+          <option value="cost_usd">{labels.cost_usd}</option>
+          <option value="duration_seconds">{labels.duration_seconds}</option>
+        </optgroup>
+      </select>
+    </label>
+    {measurement && <p className="text-[11px] text-muted-foreground">Selected metrics summarize numeric measurements from the latest completed, non-truncated replicate attempts. Cell summaries use the configured aggregation, or a mean when unspecified. Text and structured outputs remain in replicate details. The attempt toggle above applies only to operational usage summaries. Missing measurements are excluded, not treated as zero.</p>}
+    <CellUsageChart cells={cells} metric={usageMetric} measurement={measurement} loading={cellsLoading} error={cellsError} attemptScope={attemptScope} pagination={chartPagination} completed={completedExperiment} onSelectCell={onSelectCell} selectedCellId={selectedCellId} />
   </section>
 }

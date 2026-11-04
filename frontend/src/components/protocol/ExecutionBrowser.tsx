@@ -19,6 +19,7 @@ import { formatUsageDistributionValue, type UsageMetric } from '@/lib/resultUsag
 import { ResultsMetadata } from './ResultsContext'
 import { CellCard, ReplicateRow, ReplicateStatus } from './CellPresentation'
 import { executionStatusColor, executionStatusCount, executionStatusPillColor, STATUS_PILL_SIZE } from '@/lib/executionStatus'
+import { selectedResultMetrics } from '@/lib/resultMetrics'
 import { emptyExecutionFilters, filterParams, hasExecutionFilters, statusLabels, RunBrowserControls } from './RunBrowserControls'
 
 const summaryStatuses = [
@@ -101,7 +102,9 @@ export function ExecutionBrowser({ experimentId, scope, experiment, mode, onSele
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set())
   const [filters, setFilters] = useState<ExecutionFilters>(emptyExecutionFilters)
   const [attemptScope, setAttemptScope] = useState<'latest' | 'all'>('latest')
-  const [metric, setMetric] = useState<UsageMetric>('total_tokens')
+  const [metric, setMetric] = useState<string>('total_tokens')
+  const measurement = summary.data && selectedResultMetrics(summary.data).find(item => `metric:${item.key}` === metric)
+  const usageMetric: UsageMetric = metric === 'cost_usd' || metric === 'duration_seconds' ? metric : 'total_tokens'
   const [internalSelectedCellId, setSelectedCellId] = useState<string>()
   const selectedCellId = controlledSelectedCellId === undefined ? internalSelectedCellId : controlledSelectedCellId ?? undefined
   const pager = useCursor()
@@ -126,7 +129,7 @@ export function ExecutionBrowser({ experimentId, scope, experiment, mode, onSele
     {cells.isPending ? <Skeleton className="h-20" /> : cells.error && !cells.data ? <p role="alert" className="text-xs text-destructive">{cells.error.message}</p> : <>
       <CursorControls next={cells.data?.next_cursor} back={pager.back} onNext={pager.next} onBack={pager.previous} busy={cells.isFetching} pageIndex={pager.pageIndex} count={cells.data?.items.length} total={cells.data?.total} recordLabel="cells" />
       {!cells.data?.items.length && <p className="text-xs text-muted-foreground">{hasExecutionFilters(filters) ? 'No cells match these filters.' : 'No generated cells in this version.'}</p>}
-      {mode === 'results' ? !!cells.data?.items.length && <ResultsCellsTable cells={cells.data.items} metric={metric}
+      {mode === 'results' ? !!cells.data?.items.length && <ResultsCellsTable cells={cells.data.items} metric={usageMetric} measurement={measurement || undefined}
         designSpec={summary.data?.design_spec ?? experiment?.design_spec}
         attemptScope={attemptScope} unit={summary.data?.unit ?? 'replicate'} startIndex={pager.pageIndex * EXECUTION_PAGE_SIZE}
         onSelect={selectCell} />

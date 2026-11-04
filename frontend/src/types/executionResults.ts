@@ -50,6 +50,7 @@ export interface ExecutionSummary {
   design_spec: DesignSpec | null
   metric_types: Record<string, 'number' | 'boolean'>
   metric_labels?: Record<string, string>
+  metric_units?: Record<string, string | null>
   metric_aggregations: Record<string, 'mean' | 'sum'>
   metric_directions: Record<string, MeasurementDirection>
   /** Historical API fields; never select a metric or affect ordering. */

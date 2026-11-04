@@ -315,6 +315,30 @@ def test_declared_opaque_and_unmeasured_metrics_are_visible_in_catalog():
     assert entries["Not measured"]["n"] == 0
 
 
+def test_catalog_reports_per_metric_measurement_shortfalls_without_fitting():
+    source = source_for([0, 1, 2, 3, 4, None], "Score")
+    source["metric_metadata"]["Missing"] = dict(kind="custom")
+    source["metric_metadata"]["Text"] = dict(kind="custom")
+    for row in source["rows"]:
+        row["metrics"]["Text"] = {"not": "scalar"}
+    entries = {m["name"]: m for m in catalog(source)["metrics"]}
+    assert entries["Score"]["n_usable"] == 5  # Zero is measured; None is missing.
+    assert entries["Score"]["minimum_per_cell"] == 2
+    assert "at least 3 per observed cell" in entries["Score"]["availability_reason"]
+    assert "No measured values" in entries["Missing"]["availability_reason"]
+    assert "structured" in entries["Text"]["availability_reason"]
+
+
+def test_catalog_counts_usable_numeric_strings_and_missing_trial_totals():
+    source = source_for(["1", "2", "1", "2", "1", "2"], "Successes", {"denominator": "Trials"})
+    for i, row in enumerate(source["rows"]):
+        row["metrics"]["Trials"] = None if i < 2 else 10
+    score = next(m for m in catalog(source)["metrics"] if m["name"] == "Successes")
+    assert score["n"] == 6
+    assert score["n_usable"] == 4
+    assert "at least 5 overall" in score["availability_reason"]
+
+
 def test_metric_identities_come_from_declarations_and_producer_bindings():
     definitions = metric_definitions(
         {"metrics": [dict(id="a", name="Latency", kind="runtime")]},

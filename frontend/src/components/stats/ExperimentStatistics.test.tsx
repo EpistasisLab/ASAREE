@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { statsApi } from '@/api/client'
@@ -42,7 +42,52 @@ function mount(version: string | null = 'version-1') {
   render(<QueryClientProvider client={client}><MemoryRouter initialEntries={['/experiments/experiment/protocol?tab=results&results=statistics']}>
     <ExperimentStatistics experiment="experiment" version={version} />
   </MemoryRouter></QueryClientProvider>)
+  return client
 }
+
+it('lists every selected metric before analysis and states the measurement requirements', async () => {
+  vi.mocked(statsApi.source).mockResolvedValue({
+    factors: [], metrics: [
+      { name: 'Cost', n: 6, n_usable: 6, minimum_per_cell: 3 },
+      { name: 'Accuracy', n: 4, n_usable: 4, minimum_per_cell: 2,
+        availability_reason: 'Not enough measurements: 4 usable; at least 5 overall are needed for model fitting.' },
+      { name: 'Quality', n: 0, availability_reason: 'No measured values are available for this metric.' },
+    ], n_replicates: 6, n_measured_replicates: 6,
+    design_revision: 1, fingerprint: 'current', excluded_row_replicates: 0,
+  })
+  mount()
+  expect(await screen.findByRole('button', { name: /Cost.*Not analyzed/ })).toBeVisible()
+  expect(screen.getByRole('button', { name: /Accuracy.*Needs measurements/ })).toHaveTextContent('4 usable measurements')
+  expect(screen.getByRole('button', { name: /Quality/ })).toHaveTextContent('No measured values')
+  expect(screen.getByText('5 usable measurements overall')).toBeVisible()
+  expect(screen.getByText('3 per observed cell')).toBeVisible()
+  expect(screen.getByText(/Missing measurements are excluded, not treated as zero/)).toBeVisible()
+})
+
+it('detects changed results after a source refresh and clears the notice for an updated report', async () => {
+  const current = { factors: [], metrics: [{ name: 'Duration', n: 10 }], n_replicates: 10,
+    n_measured_replicates: 10, design_revision: 1, fingerprint: saved.fingerprint, excluded_row_replicates: 0 }
+  vi.mocked(statsApi.source).mockResolvedValue(current)
+  vi.mocked(statsApi.history).mockResolvedValue([saved])
+  const client = mount()
+  await screen.findByRole('button', { name: /Duration.*Report ready/ })
+  expect(screen.queryByText(/New or changed results/)).not.toBeInTheDocument()
+  vi.mocked(statsApi.source).mockResolvedValue({ ...current, fingerprint: 'new-results' })
+  await act(() => client.invalidateQueries({ queryKey: ['statistics-source'] }))
+  expect(await screen.findByText(/New or changed results.*Rerun analysis/)).toBeVisible()
+  vi.mocked(statsApi.history).mockResolvedValue([{ ...saved, fingerprint: 'new-results' }])
+  await act(() => client.invalidateQueries({ queryKey: ['automatic-statistics'] }))
+  await waitFor(() => expect(screen.queryByText(/New or changed results/)).not.toBeInTheDocument())
+})
+
+it('keeps saved unavailable reasons visible even before opening a metric', async () => {
+  const get = vi.spyOn(statsApi, 'get')
+  vi.mocked(statsApi.history).mockResolvedValue([{ ...saved, report_status: 'unavailable',
+    report_warnings: ['The metric contains structured values; no scalar analysis is appropriate.'] }])
+  mount()
+  expect(await screen.findByRole('button', { name: /Duration/ })).toHaveTextContent('structured values')
+  expect(get).not.toHaveBeenCalled()
+})
 
 it('analyzes all metrics without asking users to select statistical settings', async () => {
   const automatic = vi.spyOn(statsApi, 'automatic').mockResolvedValue([])
@@ -158,15 +203,18 @@ it('keeps completed analytic results visible while marking interrupted resamplin
   expect(screen.getByText('Evidence of an effect')).toBeInTheDocument()
 })
 
-it('hides reports without valid conclusions', async () => {
+it('lists unavailable metrics and explains why without showing statistical conclusions', async () => {
   const unavailable = { ...saved, report_status: 'unavailable' as const, output: { ...saved.output!, summary: { ...saved.output!.summary!,
     status: 'unavailable' as const, tests: [], effects: [], warnings: ['Free text has no established statistical ordering.'] } } }
   vi.spyOn(statsApi, 'history').mockResolvedValue([unavailable, { ...unavailable, id: 'unreliable', report_status: 'unreliable' }])
   vi.spyOn(statsApi, 'get').mockResolvedValue(unavailable)
   mount()
   expect(await screen.findByText(/No statistical reports are available/)).toBeInTheDocument()
-  expect(screen.queryByRole('button', { name: /Duration/ })).not.toBeInTheDocument()
+  const row = await screen.findByRole('button', { name: /Duration/ })
+  expect(row).toHaveTextContent('Report unavailable')
   expect(statsApi.get).not.toHaveBeenCalled()
+  fireEvent.click(row)
+  expect(await screen.findByText('Free text has no established statistical ordering.')).toBeVisible()
   expect(screen.queryByText('Evidence of an effect')).not.toBeInTheDocument()
 })
 

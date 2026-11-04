@@ -10,6 +10,16 @@ const cell: ExecutionCell = {
 }
 
 describe('Results Cells table', () => {
+  it('shows selected metric aggregates with their measurement counts independently of operational totals', () => {
+    render(<ResultsCellsTable cells={[{ ...cell, metric_values: { accuracy: 0.8 }, metric_counts: { accuracy: 2 } }]}
+      metric="total_tokens" measurement={{ key: 'accuracy', label: 'Accuracy', aggregation: 'mean', valueType: 'number' }}
+      attemptScope="all" unit="replicate" onSelect={vi.fn()} />)
+    expect(screen.getByRole('columnheader', { name: 'Accuracy · Mean' })).toBeVisible()
+    expect(screen.getByText('0.8')).toBeVisible()
+    expect(screen.getByText('2 measured')).toBeVisible()
+    expect(screen.queryByText('12.5K')).not.toBeInTheDocument()
+  })
+
   it('shows completion and opens cell details from any part of the row', () => {
     const select = vi.fn()
     render(<ResultsCellsTable cells={[cell]} metric="total_tokens" attemptScope="latest" unit="replicate" onSelect={select} />)

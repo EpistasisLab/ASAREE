@@ -1,5 +1,5 @@
 import { displayFactorName } from '@/lib/factorLabels'
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import type { Edge, Node } from '@xyflow/react'
 import { AlertTriangle, Square } from 'lucide-react'
@@ -32,18 +32,21 @@ export function RunAllCellsButton({ protocol, experimentId, regenerationRequired
   const [lock, setLock] = useState(false)
   const [reruns, setReruns] = useState<Set<string>>(() => new Set())
   const [rerunAll, setRerunAll] = useState(false)
+  const [runPublishedRevision, setRunPublishedRevision] = useState<string>()
+  const publishRunRequested = useRef(false)
   const scope = { protocol_id: protocol?.id, protocol_revision_id: protocol?.published_revision_id ?? undefined }
   const [confirmedId, setConfirmedId] = useState<string>()
   const preview = useBatchPreview(experimentId, scope, { cell_id: cellId, rerun_slot_ids: [...reruns], rerun_completed: rerunAll }, open)
   const summary = useExecutionSummary(experimentId, scope, open && !!protocol)
   const experiment = useQuery({ queryKey: ['experiments', experimentId], queryFn: () => experimentsApi.get(experimentId), enabled: open })
   const run = useMutation({
-    mutationFn: async () => {
+    mutationFn: async (jobId: string) => {
       if (lock && !experiment.data?.locked_at) await experimentsApi.lock(experimentId)
-      return experimentsApi.confirmResultJob(experimentId, preview.data!.id)
+      return experimentsApi.confirmResultJob(experimentId, jobId)
     },
     onSuccess: job => { setConfirmedId(job.id); setOpen(false); void client.invalidateQueries({ queryKey: ['experiments', experimentId] }) },
   })
+  const { mutate: confirmRun } = run
   const publish = useMutation({ mutationFn: async () => {
     const live = client.getQueryData<{ nodes: Node[]; edges: Edge[] }>(protocolGraphQueryKey(protocol!.id))
     if (live) await protocolsApi.update(protocol!.id, { graph: toPersistedGraph(live.nodes, live.edges) })
@@ -51,22 +54,30 @@ export function RunAllCellsButton({ protocol, experimentId, regenerationRequired
   }, onSuccess: published => {
     client.setQueryData(protocolForExperimentQueryKey(experimentId), published)
     void client.invalidateQueries({ queryKey: executionKeys.root(experimentId) })
-    // A new publication changes the execution scope. Refresh its counts before confirming.
+    // Continue the requested run only once this publication's sealed plan is ready.
     setReruns(new Set())
+    if (publishRunRequested.current) setRunPublishedRevision(published.published_revision_id ?? undefined)
   } })
+  useEffect(() => {
+    if (!open || !runPublishedRevision || protocol?.published_revision_id !== runPublishedRevision
+      || preview.data?.protocol_revision_id !== runPublishedRevision || preview.data.status !== 'awaiting_confirmation') return
+    setRunPublishedRevision(undefined)
+    publishRunRequested.current = false
+    if ((preview.data.progress.planned ?? 0) > 0) confirmRun(preview.data.id)
+  }, [open, runPublishedRevision, protocol?.published_revision_id, preview.data, confirmRun])
   const blocked = !protocol || regenerationRequired || unboundFactors.length > 0 || bindingDiscrepancies.length > 0
   const pending = preview.data?.progress.planned ?? 0
-  return <><Button size={compact ? 'xs' : 'sm'} disabled={blocked} onClick={() => { setOpen(true); setReruns(new Set()); setLock(false) }}>{label}</Button>
+  return <><Button size={compact ? 'xs' : 'sm'} disabled={blocked} onClick={() => { setOpen(true); publishRunRequested.current = false; setRunPublishedRevision(undefined); setReruns(new Set()); setLock(false) }}>{label}</Button>
     <ResultJobProgress experimentId={experimentId} jobId={confirmedId} />
     {open && protocol && <RunConfirmDialog scope={{ type: 'selected-cells', title: dialogTitle,
       cellCount: preview.data?.progress.cell_count ?? 0, replicateCount: preview.data?.progress.replicate_count ?? 0,
       pendingReplicateCount: summary.data?.unit === 'row' ? 0 : pending, rerunReplicateCount: reruns.size }}
       nodes={protocol.graph.nodes as unknown as Node[]} edges={protocol.graph.edges as Edge[]} queryClient={client}
-      onCancel={() => setOpen(false)} onConfirm={() => run.mutate()}
+      onCancel={() => { setOpen(false); publishRunRequested.current = false; setRunPublishedRevision(undefined) }} onConfirm={() => confirmRun(preview.data!.id)}
       hasUnpublishedChanges={protocol.has_unpublished_changes} publishedRevision={protocol.published_revision}
-      onPublishAndRun={() => publish.mutate()} isPublishing={publish.isPending} publishError={publish.error?.message}
-      publishDisabled={publish.isPending || run.isPending} publishLabel="Publish & prepare preview"
-      confirmLabel={label} confirmDisabled={preview.data?.status !== 'awaiting_confirmation' || !pending || run.isPending || publish.isPending}
+      onPublishAndRun={() => { publishRunRequested.current = true; publish.mutate() }} isPublishing={publish.isPending} publishError={publish.error?.message}
+      publishDisabled={publish.isPending || run.isPending || !!runPublishedRevision}
+      confirmLabel={label} confirmDisabled={preview.data?.status !== 'awaiting_confirmation' || !pending || run.isPending || publish.isPending || !!runPublishedRevision}
       isConfirming={run.isPending} confirmError={run.error?.message}
       additionalContent={<div className="space-y-3">
         {preview.data?.status !== 'awaiting_confirmation' && <p role="status" className="text-xs">Preparing batch preview… {preview.data?.progress.scanned ?? 0} {summary.data?.unit === 'row' ? 'rows' : 'replicates'} checked.</p>}

@@ -6234,7 +6234,12 @@ async def run_protocol(protocol_run_id: uuid.UUID) -> None:
         elif failed:
             # Recursive conversation-depth exhaustion retains its distinct
             # terminal status instead of being flattened into "failed".
-            await set_status(db, protocol_run_id, status=failure_status, error=failure_error)
+            from asaree.services.protocol_failures import summarize_node_failures
+
+            await set_status(
+                db, protocol_run_id, status=failure_status,
+                error=summarize_node_failures(graph, node_runs, fallback=failure_error),
+            )
         else:
             await set_status(db, protocol_run_id, status="finalizing")
             # Preserve the graph's designated output as a run artifact.

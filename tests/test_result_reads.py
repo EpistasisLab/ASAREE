@@ -45,7 +45,9 @@ from asaree.services.result_reads import (
     completed_replicates_query,
     decode_cursor,
     encode_cursor,
+    enrich_run_errors,
     execution_search_selection,
+    failed_node_errors_query,
     metric_observation_reason,
     metric_observations_query,
     page_size,
@@ -96,6 +98,44 @@ def test_slot_reads_do_not_select_evidence_or_agent_runs():
     assert "protocol_runs.protocol_revision_id" in sql
     assert "protocol_runs.design_revision_id" in sql
     assert "LATERAL" in sql
+
+
+async def test_existing_generic_run_errors_recover_labels_and_causes_in_one_bounded_read():
+    run_id = uuid.UUID(int=50)
+    selected = scope(graph={'nodes': [{'id': 'score', 'data': {'label': 'Scoring stage'}}]})
+    items = [
+        {'run_id': str(run_id), 'status': 'failed', 'error': 'one or more nodes failed'},
+        {'run_id': str(uuid.UUID(int=51)), 'status': 'failed', 'error': 'Provider connection failed.'},
+    ]
+    db = AsyncMock()
+    result = MagicMock()
+    result.mappings.return_value.all.return_value = [{
+        'run_id': run_id, 'node_id': 'score', 'status': 'failed', 'error': 'Workspace not initialized.', 'total': 1,
+    }]
+    db.execute.return_value = result
+    await enrich_run_errors(db, selected, items)
+    assert items[0]['error'] == 'Scoring stage failed: Workspace not initialized.'
+    assert items[1]['error'] == 'Provider connection failed.'
+    db.execute.assert_awaited_once()
+    sql = str(failed_node_errors_query(selected, [run_id]).compile(
+        dialect=postgresql.dialect(), compile_kwargs={'literal_binds': True},
+    ))
+    assert 'failed_node_errors.position <= 5' in sql
+    assert 'protocol_runs.protocol_id' in sql
+    assert 'protocol_runs.protocol_revision_id' in sql
+    assert 'protocol_runs.design_revision_id' in sql
+    assert 'left(' in sql
+    assert 'output_text' not in sql and 'conversation' not in sql and 'attempt_result' not in sql
+
+
+async def test_generic_error_without_recorded_node_failures_explains_the_missing_evidence():
+    db = AsyncMock()
+    result = MagicMock()
+    result.mappings.return_value.all.return_value = []
+    db.execute.return_value = result
+    items = [{'run_id': str(uuid.uuid4()), 'status': 'failed', 'error': 'one or more nodes failed'}]
+    await enrich_run_errors(db, scope(), items)
+    assert 'no node-level error was recorded' in items[0]['error']
 
 
 def test_rollup_query_uses_compact_data_and_database_aggregates():

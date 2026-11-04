@@ -28,8 +28,8 @@ from asaree.services.llm_model_discovery import discover_models
 from asaree.services.provider_config import make_provider_config, provider_config
 from asaree.services.user_llm_settings import encrypt
 
-MOTORO_RELEASE = "v0.15.0"
-MOTORO_RELEASE_COMMIT = "f1e7ea8b47b5d81581ffaf57dc595554dc6b21aa"
+MOTORO_RELEASE = "v0.15.1"
+MOTORO_RELEASE_COMMIT = "805fa51455642b01c1fb9aff52fabd28ebfbb6b8"
 PROVIDERS = ["anthropic", "openai", "azure_foundry", "openrouter", "local"]
 OWNER = uuid.UUID("11111111-1111-1111-1111-111111111111")
 SECRET = "provider-secret-for-tests"

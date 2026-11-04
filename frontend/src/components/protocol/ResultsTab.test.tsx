@@ -56,6 +56,15 @@ beforeEach(() => {
 afterEach(() => { vi.clearAllMocks(); vi.useRealTimers() })
 
 describe('bounded Results reads', () => {
+  it('shows the failed node and underlying cause on a Runs replicate row', async () => {
+    vi.mocked(experimentsApi.listExecutions).mockResolvedValue({ items: [{
+      ...slot, status: 'failed', error: 'Scoring stage failed: Workspace not initialized.\nReviewer failed: Provider quota exceeded.',
+    }], next_cursor: null })
+    mount(<ExecutionRows experimentId="experiment" scope={{}} mode="runs" onSelect={vi.fn()} />)
+    const failure = await screen.findByText(/Scoring stage failed: Workspace not initialized/)
+    expect(failure).toHaveTextContent('Reviewer failed: Provider quota exceeded.')
+  })
+
   it('shows selected hash values and unavailable numeric-metric reasons in the Results panel', async () => {
     vi.mocked(experimentsApi.getExecutionSummary).mockResolvedValue({ ...summary,
       metric_labels: { hash: 'Prompt SHA-256', errors: 'Tool error rate' },

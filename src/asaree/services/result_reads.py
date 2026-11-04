@@ -35,6 +35,13 @@ from asaree.services.experiment_run_results import (
 from asaree.services.measurement_engine import parse_measurement_plan
 from asaree.services.measurement_migration import normalize_experiment_measurement_plan
 from asaree.services.metrics import METRIC_CATALOG, normalize_metrics
+from asaree.services.protocol_failures import (
+    MAX_FAILED_NODES,
+    MAX_NODE_ERROR_LENGTH,
+    MAX_RUN_ERROR_LENGTH,
+    is_generic_run_error,
+    summarize_node_failures,
+)
 
 PAGE_SIZE = 20
 MAX_PAGE_SIZE = 100
@@ -328,7 +335,7 @@ def slot_query(scope: ResultScope, *, cutoff: Any = None) -> Any:
             run.updated_at,
             run.started_at,
             run.completed_at,
-            func.left(run.error, 512).label("error"),
+            func.left(run.error, MAX_RUN_ERROR_LENGTH).label("error"),
             run.result_summary,
             run.usage_summary,
         )
@@ -529,7 +536,9 @@ async def read_executions(
     row_count = (refresh.summary or {}).get("source_row_count") if refresh else None
     if (scope.unit == "row" and row_count is not None and status in {None, "not_started"}
             and sort_metric is None and usage_metric is None):
-        return await _read_row_window(db, scope, int(row_count), filters, cursor, page_size(limit))
+        page = await _read_row_window(db, scope, int(row_count), filters, cursor, page_size(limit))
+        await enrich_run_errors(db, scope, page["items"])
+        return page
     position = decode_cursor(cursor, scope, "executions", filters)
     query = slot_query(scope)
     query = query.where(*cell_filters(FactorialCell, search, factors))
@@ -574,8 +583,10 @@ async def read_executions(
     rows = (await db.execute(statement.add_columns(label_order.label("label_order")).order_by(*orders)
                              .limit(page_size(limit) + 1))).mappings().all()
     last = rows[limit - 1] if len(rows) > limit else None
+    items = [execution_payload(dict(row)) for row in rows[:limit]]
+    await enrich_run_errors(db, scope, items)
     return {
-        "items": [execution_payload(dict(row)) for row in rows[:limit]],
+        "items": items,
         "total": total,
         "next_cursor": encode_cursor(scope, "executions", ([last["sort_value"]] if sort_metric else []) + [
             last["label_order"], str(last["cell_id"]), last["replicate_number"],
@@ -1107,7 +1118,7 @@ async def read_attempts(
         run.status,
         run.created_at,
         run.completed_at,
-        func.left(run.error, 512).label("error"),
+        func.left(run.error, MAX_RUN_ERROR_LENGTH).label("error"),
         run.result_summary,
         run.usage_summary,
     ).where(
@@ -1148,7 +1159,7 @@ async def read_attempts(
             .one_or_none()
         )
         legacy = dict(record) if record else None
-    return {
+    page = {
         "slot": execution_payload(dict(slot)),
         "legacy_result": legacy,
         "items": [
@@ -1170,6 +1181,8 @@ async def read_attempts(
         if len(rows) > limit
         else None,
     }
+    await enrich_run_errors(db, scope, [page["slot"], *page["items"]])
+    return page
 
 
 async def lookup_slot(db: AsyncSession, scope: ResultScope, replicate_label: str) -> dict[str, Any]:
@@ -1179,7 +1192,9 @@ async def lookup_slot(db: AsyncSession, scope: ResultScope, replicate_label: str
         raise RunResultsProjectionError("slot_not_found")
     if len(rows) != 1:
         raise ValueError("ambiguous_replicate_label_use_slot_id")
-    return execution_payload(dict(rows[0]))
+    payload = execution_payload(dict(rows[0]))
+    await enrich_run_errors(db, scope, [payload])
+    return payload
 
 
 async def read_cell(
@@ -1221,7 +1236,7 @@ async def read_attempt_detail(db: AsyncSession, scope: ResultScope, run_id: uuid
     query = select(
         ProtocolRun.id,
         ProtocolRun.status,
-        func.left(ProtocolRun.error, 2048).label("error"),
+        func.left(ProtocolRun.error, MAX_RUN_ERROR_LENGTH).label("error"),
         ProtocolRun.started_at,
         ProtocolRun.completed_at,
         ProtocolRun.protocol_revision_id,
@@ -1243,13 +1258,62 @@ async def read_attempt_detail(db: AsyncSession, scope: ResultScope, run_id: uuid
     run = (await db.execute(query)).mappings().one_or_none()
     if run is None:
         raise RunResultsProjectionError("attempt_not_found")
-    return {
+    detail = {
         **dict(run),
         "run_id": str(run["id"]),
         "node_labels": _node_labels(scope.graph),
         "usage": run["usage_summary"],
         "protocol_revision_id": str(run["protocol_revision_id"]) if run["protocol_revision_id"] else None,
     }
+    await enrich_run_errors(db, scope, [detail])
+    return detail
+
+
+def failed_node_errors_query(scope: ResultScope, run_ids: list[uuid.UUID]) -> Any:
+    """Project only bounded failure text for the already-paged generic errors."""
+    run = ProtocolRun
+    nodes = func.jsonb_each(case(
+        (func.jsonb_typeof(run.node_runs) == 'object', run.node_runs), else_=cast(literal('{}'), JSONB),
+    )).table_valued('key', 'value').lateral('failed_nodes')
+    state = cast(nodes.c.value, JSONB)
+    failures = select(
+        run.id.label('run_id'), nodes.c.key.label('node_id'),
+        state['status'].astext.label('status'),
+        func.left(state['error'].astext, MAX_NODE_ERROR_LENGTH + 1).label('error'),
+        func.count().over(partition_by=run.id).label('total'),
+        func.row_number().over(partition_by=run.id, order_by=nodes.c.key).label('position'),
+    ).select_from(run).join(nodes, true()).where(
+        run.id.in_(run_ids), run.protocol_id == scope.protocol_id,
+        run.protocol_revision_id == scope.protocol_revision_id,
+        or_(run.design_revision_id == scope.design_revision_id,
+            and_(legacy_flag(scope), run.design_revision_id.is_(None))),
+        run.is_test_run.is_(False), run.target_node_id.is_(None),
+        state['status'].astext.in_(('failed', 'limit_reached')),
+    ).subquery('failed_node_errors')
+    return select(failures).where(failures.c.position <= MAX_FAILED_NODES).order_by(
+        failures.c.run_id, failures.c.position,
+    )
+
+
+async def enrich_run_errors(db: AsyncSession, scope: ResultScope, items: list[dict[str, Any]]) -> None:
+    """Recover historical generic errors without fetching node outputs or whole evidence."""
+    pending = [item for item in items if item.get('run_id') and item.get('status') in {'failed', 'limit_reached'}
+               and is_generic_run_error(item.get('error'))]
+    if not pending:
+        return
+    run_ids = list({uuid.UUID(item['run_id']) for item in pending})
+    rows = (await db.execute(failed_node_errors_query(scope, run_ids))).mappings().all()
+    failures: dict[str, dict[str, Any]] = {}
+    totals: dict[str, int] = {}
+    for row in rows:
+        identifier = str(row['run_id'])
+        failures.setdefault(identifier, {})[row['node_id']] = {'status': row['status'], 'error': row['error']}
+        totals[identifier] = row['total']
+    for item in pending:
+        identifier = item['run_id']
+        item['error'] = summarize_node_failures(
+            scope.graph, failures.get(identifier, {}), total_failures=totals.get(identifier),
+        )
 
 
 async def read_evidence(

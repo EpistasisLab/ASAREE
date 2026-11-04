@@ -15,6 +15,25 @@ from asaree.services.protocol_graph_schema import functional_protocol_graph_hash
 from asaree.services.protocol_revisions import is_draft_published
 
 
+def test_azure_sampling_snapshot_matches_the_execution_route():
+    from motoro.schemas.agent import ModelConfig
+
+    config = ModelConfig(provider='azure_foundry', model='claude-haiku-5-5', effort='medium')
+    expected = _sampling_kwargs(config, 'azure_ai/claude-haiku-5-5')['extra_body']
+    assert sampling_snapshots._sampling_request(config) == expected
+
+
+def test_azure_claude_snapshot_pins_native_effort_and_rejects_the_old_request_shape():
+    from motoro.schemas.agent import ModelConfig
+
+    config = ModelConfig(provider='azure_foundry', model='claude-haiku-5-5', effort='medium')
+    pin = sampling_snapshots._pin_config(config)
+    assert pin['provider_request_sampling'] == {'output_config': {'effort': 'medium'}}
+    pin['provider_request_sampling'] = {'reasoning_effort': 'medium'}
+    with pytest.raises(ValueError, match='original runtime or republish'):
+        sampling_snapshots._validated_pinned_config(pin)
+
+
 @pytest.fixture(autouse=True)
 def discovery_context(monkeypatch):
     monkeypatch.setattr(

@@ -1,9 +1,11 @@
 import { useState, type ReactNode } from 'react'
 import { Button } from '@/components/ui/button'
+import { Sigma } from 'lucide-react'
 import type { ExecutionCell, ExecutionSummary } from '@/types/executionResults'
 import { CellUsageChart } from './CellUsageChart'
 import { experimentResultStatus, type UsageMetric } from '@/lib/resultUsage'
-import { selectedResultMetrics } from '@/lib/resultMetrics'
+import { formatCellMetric, selectedResultMetrics } from '@/lib/resultMetrics'
+import { ResultsScorecard } from './ResultsPanel'
 
 export function ResultsProgress({ summary, cells, cellsLoading, cellsError, attemptScope = 'latest', onAttemptScopeChange, chartPagination, selectedMetric, onMetricChange, onSelectCell, selectedCellId }: {
   summary: ExecutionSummary; cells: ExecutionCell[]; cellsLoading: boolean; cellsError?: string
@@ -16,6 +18,8 @@ export function ResultsProgress({ summary, cells, cellsLoading, cellsError, atte
   const measurements = selectedResultMetrics(summary)
   const metric = (selectedMetric ?? internalMetric) || (measurements[0] ? `metric:${measurements[0].key}` : '')
   const measurement = measurements.find(item => `metric:${item.key}` === metric)
+  const metricTotal = measurement ? summary.metric_totals?.[measurement.key] : undefined
+  const metricTotalCount = measurement ? summary.metric_total_counts?.[measurement.key] ?? 0 : 0
   const usageMetric: UsageMetric = metric === 'cost_usd' || metric === 'duration_seconds' ? metric : 'total_tokens'
   const completed = summary.counts?.completed ?? 0
   const total = summary.expected ?? summary.total ?? 0
@@ -56,6 +60,15 @@ export function ResultsProgress({ summary, cells, cellsLoading, cellsError, atte
         {measurements.map(item => <option key={item.key} value={`metric:${item.key}`}>{item.label}</option>)}
       </select>
     </label>
+    {measurement && metricTotal !== undefined && <div role="region" aria-label={`${measurement.label} total`}>
+      <ResultsScorecard label={`${measurement.label} · Total`} icon={Sigma}
+        help="Sum of recorded measurements from the latest completed attempts across all cells in this experiment version. Attempts that reached their iteration limit and missing measurements are excluded."
+        value={metricTotal === null ? '—' : formatCellMetric(metricTotal, measurement)}
+        valueTitle={metricTotal === null ? 'No measurements yet' : `${metricTotal.toLocaleString()}${measurement.unit ? ` ${measurement.unit}` : ''}`}
+        note={metricTotalCount > 0
+          ? `${metricTotalCount.toLocaleString()} measured ${summary.unit === 'row' ? 'row executions' : 'replicates'} · All cells in this version`
+          : 'No measurements yet'} />
+    </div>}
     {measurement && <p className="text-[11px] text-muted-foreground">Selected metrics show the latest attempt for each {summary.unit === 'row' ? 'row execution. Row outcomes are listed individually without cell aggregation' : 'replicate. Numeric cell summaries use completed attempts that did not reach their iteration limit'}. Open a cell below to inspect its recorded values and reasons for missing results. The attempt toggle above applies only to operational usage summaries. Missing measurements are excluded, not treated as zero.</p>}
     {(!measurement || summary.unit === 'replicate') && <CellUsageChart cells={cells} metric={usageMetric} measurement={measurement} loading={cellsLoading} error={cellsError} attemptScope={attemptScope} pagination={chartPagination} completed={completedExperiment} onSelectCell={onSelectCell} selectedCellId={selectedCellId} />}
   </section>

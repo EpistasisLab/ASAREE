@@ -86,6 +86,79 @@ def scope(**changes):
     return ResultScope(**(values | changes))
 
 
+@pytest.mark.parametrize("row_mode", [False, True])
+async def test_overview_metric_totals_span_cells_and_preserve_zero_and_missing(row_mode):
+    from types import SimpleNamespace
+
+    from asaree.services.result_rollups import RESULT_ISSUES, STATUSES
+
+    selected = scope(row_plan={} if row_mode else None, design_spec={"metrics": [
+        {"id": key, "name": key, "kind": "runtime", "catalogKey": key}
+        for key in ("total_tokens", "tool_calls", "cost_usd", "tool_error_rate", "prompt_sha256")
+    ] + [{"id": "custom", "name": "Custom output", "kind": "custom"}]})
+    rows = []
+    for number, tokens in enumerate((100, 200), start=1):
+        rows.append({
+            **dict.fromkeys(STATUSES, 0), **dict.fromkeys((f"issue_{reason}" for reason in RESULT_ISSUES), 0),
+            **dict.fromkeys(("truncated", "evaluating", "usage_complete", "usage_pending", "executed", "scored",
+                             "usable_results", "results_needing_attention"), 0),
+            **dict.fromkeys(("cost_usd", "input_tokens", "output_tokens", "total_tokens", "duration_seconds",
+                             "agent_run_count"), None),
+            "cell_id": uuid.UUID(int=number), "replicate_count": 1, "total": 1, "completed": 1,
+            "all_attempt_usage": {"total_tokens": 999},
+            "metrics": {
+                "total_tokens": {"sum": tokens, "mean": tokens, "count": 1},
+                "tool_calls": {"sum": 0, "mean": 0, "count": 1},
+                "tool_error_rate": {"sum": .5, "mean": .5, "count": 1},
+                "custom": {"sum": 10, "mean": 10, "count": 1},
+            },
+        })
+
+    async def stream_rows():
+        for row in rows:
+            yield row
+
+    db = AsyncMock()
+    db.get.return_value = SimpleNamespace(summary={"source_row_count": 2})
+    result = MagicMock()
+    result.mappings.return_value = stream_rows()
+    db.stream.return_value = result
+    executed = MagicMock()
+    executed.mappings.return_value.one.return_value = {"ready": 2, "needs_attention": 0, "awaiting_results": 0}
+    db.execute.return_value = executed
+    await rebuild_result_summary(db, selected, 1)
+    saved = db.execute.call_args_list[-1].args[0].compile().params["summary"]
+    assert saved["metric_totals"] == {"total_tokens": 300, "tool_calls": 0, "cost_usd": None}
+    assert saved["metric_total_counts"] == {"total_tokens": 2, "tool_calls": 2, "cost_usd": 0}
+    assert saved["all_attempt_usage"]["total_tokens"] == 999
+
+
+async def test_cached_overview_without_metric_totals_requests_one_refresh():
+    from types import SimpleNamespace
+
+    cached = SimpleNamespace(summary={"cell_result_details_version": 2}, generation=7, processed_generation=7,
+                             updated_at=None)
+    db = AsyncMock()
+    db.get.return_value = cached
+    first = await read_summary(db, scope())
+    second = await read_summary(db, scope())
+    assert first["refreshing"] and second["refreshing"]
+    assert cached.generation == 8
+    db.flush.assert_awaited_once()
+
+
+async def test_cached_overview_with_metric_totals_needs_no_extra_refresh():
+    from types import SimpleNamespace
+
+    cached = SimpleNamespace(summary={"cell_result_details_version": 2, "metric_totals": {}, "metric_total_counts": {}},
+                             generation=7, processed_generation=7, updated_at=None)
+    db = AsyncMock()
+    db.get.return_value = cached
+    summary = await read_summary(db, scope())
+    assert not summary["refreshing"]
+    db.flush.assert_not_awaited()
+
+
 def test_slot_reads_do_not_select_evidence_or_agent_runs():
     query = select(slot_query(scope()).subquery()).limit(21)
     sql = str(query.compile(dialect=postgresql.dialect(), compile_kwargs={"literal_binds": True}))

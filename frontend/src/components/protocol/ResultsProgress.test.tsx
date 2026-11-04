@@ -18,6 +18,45 @@ const cells: ExecutionCell[] = [
 ]
 
 describe('Results usage charts', () => {
+  it('shows the selected metric total across the whole version, independently of the visible page and attempt toggle', () => {
+    const totals = { ...summary, metric_labels: { tokens: 'Total tokens', cost: 'Cost' },
+      metric_types: { tokens: 'number' as const, cost: 'number' as const },
+      metric_units: { tokens: 'tokens', cost: 'USD' },
+      metric_aggregations: { tokens: 'sum' as const, cost: 'sum' as const },
+      metric_totals: { tokens: 1_250_000, cost: 12.5 }, metric_total_counts: { tokens: 60, cost: 60 } }
+    const view = render(<ResultsProgress summary={totals} cells={cells.slice(0, 1)} cellsLoading={false} selectedMetric="metric:tokens" />)
+    const tile = within(screen.getByRole('region', { name: 'Total tokens total' }))
+    expect(tile.getByText('1.25M tokens')).toHaveAttribute('title', '1,250,000 tokens')
+    expect(tile.getByText('60 measured replicates · All cells in this version')).toBeVisible()
+    view.rerender(<ResultsProgress summary={totals} cells={[]} cellsLoading={true} selectedMetric="metric:tokens" attemptScope="all" />)
+    expect(screen.getByRole('region', { name: 'Total tokens total' })).toHaveTextContent('1.25M tokens')
+    view.rerender(<ResultsProgress summary={totals} cells={cells} cellsLoading={false} selectedMetric="metric:cost" />)
+    expect(screen.getByRole('region', { name: 'Cost total' })).toHaveTextContent('$12.50')
+  })
+
+  it('distinguishes a measured zero total from no measurements, including row executions', () => {
+    const totals = { ...summary, unit: 'row' as const, metric_labels: { calls: 'Tool calls' },
+      metric_types: { calls: 'number' as const }, metric_aggregations: { calls: 'sum' as const },
+      metric_totals: { calls: 0 }, metric_total_counts: { calls: 4 } }
+    const view = render(<ResultsProgress summary={totals} cells={[]} cellsLoading={false} />)
+    expect(screen.getByRole('region', { name: 'Tool calls total' })).toHaveTextContent('4 measured row executions')
+    expect(within(screen.getByRole('region', { name: 'Tool calls total' })).getByText('0')).toBeVisible()
+    view.rerender(<ResultsProgress summary={{ ...totals, metric_totals: { calls: null }, metric_total_counts: { calls: 0 } }} cells={[]} cellsLoading={false} />)
+    const tile = within(screen.getByRole('region', { name: 'Tool calls total' }))
+    expect(tile.getByText('—')).toBeVisible()
+    expect(tile.getByText('No measurements yet')).toBeVisible()
+  })
+
+  it('does not invent totals for rates, hashes or custom outputs', () => {
+    render(<ResultsProgress summary={{ ...summary, metric_labels: { rate: 'Tool error rate', hash: 'Prompt SHA-256', custom: 'Custom output' },
+      metric_totals: {}, metric_total_counts: {} }} cells={[]} cellsLoading={false} />)
+    const picker = screen.getByRole('combobox', { name: 'Metric by cell' })
+    for (const key of ['rate', 'hash', 'custom']) {
+      fireEvent.change(picker, { target: { value: `metric:${key}` } })
+      expect(screen.queryByRole('region', { name: / total$/ })).not.toBeInTheDocument()
+    }
+  })
+
   it.each(['Input tokens', 'Output tokens', 'Total tokens'])('abbreviates millions in selected %s while keeping exact tooltip counts', (label) => {
     render(<ResultsProgress summary={{ ...summary, metric_labels: { selected: label },
       metric_types: { selected: 'number' }, metric_units: { selected: 'tokens' }, metric_aggregations: { selected: 'sum' },

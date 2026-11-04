@@ -51,6 +51,9 @@ export interface ExecutionSummary {
   metric_types: Record<string, 'number' | 'boolean'>
   metric_labels?: Record<string, string>
   metric_units?: Record<string, string | null>
+  /** Additive built-in measurements across all cells in this version. */
+  metric_totals?: Record<string, number | null>
+  metric_total_counts?: Record<string, number>
   metric_aggregations: Record<string, 'mean' | 'sum' | 'none'>
   metric_directions: Record<string, MeasurementDirection>
   /** Historical API fields; never select a metric or affect ordering. */

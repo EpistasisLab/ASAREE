@@ -58,24 +58,41 @@ export function CellUsageChart({ cells, metric, measurement, loading, error, att
     : maximum >= 1e6 ? { divisor: 1e6, label: 'Tokens (millions)' }
       : maximum >= 1e3 ? { divisor: 1e3, label: 'Tokens (thousands)' } : { divisor: 1, label: 'Tokens' }
   const format = (value: number) => measurement ? formatCellMetric(value, measurement) : formatValue(value, metric, durationUnit)
+  const isDuration = measurement ? measurement.unit === 'seconds' : metric === 'duration_seconds'
+  const isCost = measurement ? measurement.unit === 'USD' : metric === 'cost_usd'
+  const isTokens = measurement ? measurement.unit === 'tokens' : metric === 'total_tokens'
+  const isPercentage = measurement?.valueType === 'boolean' && measurement.aggregation === 'mean'
+  const formatBar = (value: number) => {
+    if (isDuration) {
+      const duration = value / (durationUnit === 'hr' ? 3600 : durationUnit === 'min' ? 60 : 1)
+      return duration.toLocaleString(undefined, { maximumFractionDigits: duration > 0 && duration < 0.1 ? 3 : 1 })
+    }
+    if (isCost) return value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: value > 0 && value < 0.01 ? 4 : 2 })
+    if (isPercentage) return (value * 100).toLocaleString(undefined, { maximumFractionDigits: 1 })
+    if (isTokens) return formatTokens(value)
+    return value.toLocaleString(undefined, { maximumSignificantDigits: 4 })
+  }
+  const axisUnit = isPercentage ? '%' : isDuration ? durationUnit : measurement?.unit
+  const yAxisLabel = measurement ? `${measurement.label}${axisUnit ? ` (${axisUnit})` : ''}`
+    : metric === 'total_tokens' ? tokenScale.label : metric === 'cost_usd' ? 'Cost (USD)' : `Execution time (${durationUnit})`
   const formatTick = (value: number) => !measurement && metric === 'total_tokens'
     ? (value / tokenScale.divisor).toLocaleString('en-US', { maximumFractionDigits: tokenScale.divisor === 1 ? 0 : 2 })
-    : format(value)
+    : formatBar(value)
   return <Card size="sm" className="gap-3 p-3" role="region" aria-label={chartTitle}>
     <div>
       <div className="flex items-start justify-between gap-2">
         <h3 className="text-xs font-medium">{chartTitle}</h3>
         {!completed && <Badge variant="outline" className="shrink-0 border-[color:var(--chart-4)]/40 text-[color:var(--chart-4)]">Partial data</Badge>}
       </div>
-      {!measurement && metric === 'total_tokens' && <p className="mt-1 text-[11px] text-muted-foreground">{tokenScale.label}</p>}
-      {!measurement && metric === 'duration_seconds' && <p className="mt-1 text-[11px] text-muted-foreground">Execution time ({durationUnit})</p>}
       {measurement && hasNumericCellAggregation(measurement) && <p className="mt-1 text-[11px] text-muted-foreground">{metricAggregationLabel(measurement)} across measured replicates in each cell.</p>}
     </div>
     {measurement && !hasNumericCellAggregation(measurement) ? <p className="text-xs text-muted-foreground">This metric has no numeric cell aggregation. Its recorded values and any missing-result reasons are listed by cell below.</p>
       : loading ? <p role="status" className="text-xs text-muted-foreground">Loading cell usage…</p>
       : error ? <p role="alert" className="text-xs text-destructive">{error}</p>
         : cells.length === 0 ? <p className="text-xs text-muted-foreground">No cells to display.</p>
-          : <div className="flex gap-2">
+          : <div className="space-y-2">
+            <p className="break-words text-[11px] text-muted-foreground" aria-label={`Y-axis: ${yAxisLabel}`}>{yAxisLabel}</p>
+            <div className="flex gap-2">
             <div aria-hidden="true" className="flex h-44 shrink-0 flex-col justify-between text-right font-mono text-[10px] text-muted-foreground">
               {[upper, (upper + lower) / 2, lower].map(value => <span key={value}>{formatTick(value)}</span>)}
             </div>
@@ -102,7 +119,7 @@ export function CellUsageChart({ cells, metric, measurement, loading, error, att
                           style={{ height: value === null ? '2px' : `${Math.max(1, Math.abs(value) / scale * 100)}%`,
                             ...(minimum < 0 ? { position: 'absolute', left: '50%', transform: 'translateX(-50%)', bottom: `${((value !== null && value < 0 ? value : 0) - lower) / scale * 100}%` } : {}) }}>
                           <span role="img" aria-label={`${label}: ${exactValue}`} title={tooltip} className="absolute inset-0">
-                            <span className="absolute inset-x-0 bottom-full pb-1 font-mono text-[10px] text-foreground">{value === null ? '—' : formatted}</span>
+                            <span className="absolute inset-x-0 bottom-full pb-1 font-mono text-[10px] text-foreground">{value === null ? '—' : formatBar(value)}</span>
                           </span>
                         </Button>
                       </div>
@@ -113,6 +130,8 @@ export function CellUsageChart({ cells, metric, measurement, loading, error, att
                 </ul>
               </div>
             </div>
+            </div>
+            <p className="text-center text-[11px] text-muted-foreground" aria-label="X-axis: Cell">Cell</p>
           </div>}
     {pagination}
     {!loading && !error && cells.length > 0 && (!measurement || hasNumericCellAggregation(measurement)) && <p className="text-[11px] text-muted-foreground">{measurement ? '— = no usable numeric measurements; see the recorded results below for each execution’s reason. Missing values are not zero.' : '— = usage not reported.'}</p>}

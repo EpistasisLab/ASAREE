@@ -23,7 +23,10 @@ describe('Results usage charts', () => {
       metric_types: { selected: 'number' }, metric_units: { selected: 'tokens' }, metric_aggregations: { selected: 'sum' },
     }} cells={[{ ...cells[0], metric_values: { selected: 1_250_000 }, metric_counts: { selected: 1 } }]} cellsLoading={false} />)
     const chart = within(screen.getByRole('region', { name: `${label} by cell` }))
-    expect(chart.getByText('1.25M tokens')).toBeVisible()
+    expect(chart.getByText('1.25M')).toBeVisible()
+    expect(chart.queryByText('1.25M tokens')).not.toBeInTheDocument()
+    expect(chart.getByLabelText(`Y-axis: ${label} (tokens)`)).toBeVisible()
+    expect(chart.getByLabelText('X-axis: Cell')).toBeVisible()
     expect(chart.getByRole('img', { name: 'Cell 7: 1,250,000' })).toHaveAttribute('title', expect.stringContaining('1,250,000'))
   })
 

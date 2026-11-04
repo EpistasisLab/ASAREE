@@ -9,7 +9,13 @@ import unicodedata
 from datetime import UTC, datetime
 from html import escape
 
-from asaree.services.stats_boxplots import render_boxplots, snapshot_boxplots
+from asaree.services.stats_boxplots import (
+    BOX_HEIGHT,
+    BOX_PLOT_HEIGHT,
+    BOX_TOP_PADDING,
+    render_boxplots,
+    snapshot_boxplots,
+)
 from asaree.services.stats_distribution import saved_distribution_plot
 from asaree.services.stats_findings import describe_report_findings, primary_comparison_result
 
@@ -487,16 +493,20 @@ background:repeating-linear-gradient(to top,transparent 0,transparent calc(25% -
 .numeric-ticks{{display:flex;justify-content:space-between;gap:4px;margin-top:8px;font:10px monospace;color:#526170}}
 .boxplots>p{{font-size:13px;color:#526170}}.box-figure figcaption{{font-size:14px;font-weight:600}}
 .box-scroll{{overflow-x:auto;max-width:100%}}.box-chart{{display:flex;gap:8px;min-width:max-content}}
-.box-y-title{{writing-mode:vertical-rl;transform:rotate(180deg);height:220px;text-align:center;font-size:12px;max-width:3rem;overflow-wrap:anywhere}}
-.box-y-ticks{{display:flex;flex-direction:column;justify-content:space-between;height:180px;
-margin-top:20px;text-align:right;font:11px monospace;color:#526170}}
-.box-groups{{display:flex;flex:1;gap:16px}}.box-group{{flex:1;border-bottom:1px solid #94a3b8;min-width:80px}}
+.box-y-title{{writing-mode:vertical-rl;transform:rotate(180deg);height:{BOX_HEIGHT}px;
+text-align:center;font-size:12px;max-width:3rem;overflow-wrap:anywhere}}
+.box-y-ticks{{display:flex;flex-direction:column;justify-content:space-between;height:{BOX_PLOT_HEIGHT}px;
+margin-top:{BOX_TOP_PADDING}px;text-align:right;font:11px monospace;color:#526170}}
+.box-groups{{display:flex;flex:1;gap:16px;position:relative}}
+.box-groups::before{{content:"";position:absolute;top:{BOX_HEIGHT}px;left:0;right:0;
+border-top:1px solid #94a3b8;pointer-events:none}}
+.box-group{{flex:1;min-width:80px}}
 .box-traces{{display:flex;justify-content:center;gap:4px}}.box-slot{{width:80px;text-align:center}}
-.box-slot svg{{display:block;width:80px;height:220px;stroke:#167fa2;fill:none;stroke-width:1.5}}
+.box-slot svg{{display:block;width:80px;height:{BOX_HEIGHT}px;stroke:#167fa2;fill:none;stroke-width:1.5}}
 .box-slot rect{{fill:#deeff4}}.box-slot .box-median{{stroke:#202c38;stroke-width:2}}.box-slot circle{{fill:#167fa2}}
-.box-slot p,.box-level{{margin:4px 0;font:11px monospace;overflow-wrap:anywhere;text-align:center}}
+.box-slot p,.box-level{{margin:8px 0 4px;font:11px monospace;overflow-wrap:anywhere;text-align:center}}
 .box-slot small{{display:block;color:#526170}}.box-level{{font-weight:600;padding:8px 0}}
-.missing-box{{height:220px;display:flex;align-items:center;font-size:11px;color:#526170}}
+.missing-box{{height:{BOX_HEIGHT}px;display:flex;align-items:center;font-size:11px;color:#526170}}
 .sr-only{{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}}
 .methodology{{margin:24px 0;border:1px solid #b6d9e4;border-radius:12px;overflow:hidden}}
 .methodology header{{padding:20px;background:#eef8fb;border-bottom:1px solid #b6d9e4}}

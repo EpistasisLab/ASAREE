@@ -7,6 +7,10 @@ import numpy as np
 
 from asaree.services.stats_labels import display_factor_name
 
+BOX_PLOT_HEIGHT = 350
+BOX_TOP_PADDING = 20
+BOX_HEIGHT = BOX_PLOT_HEIGHT + BOX_TOP_PADDING
+
 
 def box_summary(values):
     values = np.asarray(values, dtype=float)
@@ -77,7 +81,7 @@ def render_boxplots(plots, kind, metric, unit=None):
         low, high = low - padding, high + padding
 
         def y(value, low=low, high=high):
-            return 200 - 180 * (value - low) / (high - low)
+            return BOX_HEIGHT - BOX_PLOT_HEIGHT * (value - low) / (high - low)
 
         ticks = "".join(f"<span>{value:.4g}</span>" for value in np.linspace(high, low, 5))
         levels = list(dict.fromkeys(group["levels"][0] for group in groups))
@@ -106,7 +110,8 @@ def render_boxplots(plots, kind, metric, unit=None):
                     for value in group["outliers"]
                 )
                 boxes.append(
-                    f'<div class="box-slot"><svg viewBox="0 0 80 220" role="img" aria-label="{description}">'
+                    f'<div class="box-slot"><svg viewBox="0 0 80 {BOX_HEIGHT}" '
+                    f'role="img" aria-label="{description}">'
                     f'<title>{description}</title><path d="M40 {y(group["high"]):.4f} V{y(group["low"]):.4f} '
                     f'M25 {y(group["high"]):.4f} H55 M25 {y(group["low"]):.4f} H55"/>'
                     f'<rect x="15" y="{y(group["q3"]):.4f}" width="50" '

@@ -364,7 +364,7 @@ def test_html_escapes_custom_labels_and_never_embeds_external_images_or_scripts(
     assert "&lt;script&gt;alert(1)&lt;/script&gt;" in html
     assert "<script>" not in html
     assert "<svg>" not in html and "<img" not in html
-    assert '<svg viewBox="0 0 80 220" role="img"' in html
+    assert '<svg viewBox="0 0 80 370" role="img"' in html
     assert "&lt;img src=x onerror=&quot;alert(1)&quot;&gt;" in html
     assert "<dt>Unit</dt><dd>&lt;svg&gt;</dd>" in html
     assert "What ran and why" in html and "Analytic adjusted p" in html

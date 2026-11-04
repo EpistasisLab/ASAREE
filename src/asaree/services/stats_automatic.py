@@ -725,6 +725,9 @@ def analyze_automatic(source: dict, config: dict) -> dict:
             if plan["measurement_type"] == "ordinal"
             else None,
         )
+        from asaree.services.stats_boxplots import factor_boxplots
+
+        output["summary"]["boxplots"] = factor_boxplots(frame, factors, max_order=resolved.get("max_order", 2))
         return json_safe(output)
     except (ValueError, KeyError) as exc:
         return unavailable(source, config, str(exc))
@@ -816,6 +819,9 @@ def constant_outcome_report(source, config, plan, within_conditions=False):
                 rows=condition_rows,
             )
         ]
+    from asaree.services.stats_boxplots import snapshot_boxplots
+
+    output["summary"]["boxplots"] = snapshot_boxplots(output, source, config)
     return output
 
 

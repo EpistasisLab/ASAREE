@@ -9,6 +9,7 @@ import unicodedata
 from datetime import UTC, datetime
 from html import escape
 
+from asaree.services.stats_boxplots import render_boxplots, snapshot_boxplots
 from asaree.services.stats_distribution import saved_distribution_plot
 from asaree.services.stats_findings import describe_report_findings, primary_comparison_result
 
@@ -146,7 +147,7 @@ def model_fit_panel(summary, family, text):
     )
 
 
-def render_html(analysis: dict) -> str:
+def render_html(analysis: dict, *, source: dict | None = None) -> str:
     from asaree.services.stats_labels import present_summary
 
     output = analysis.get("output") or {}
@@ -154,6 +155,9 @@ def render_html(analysis: dict) -> str:
     if not summary:
         raise ValueError("This analysis predates the automatic report. Run an automatic analysis to create a report.")
     summary = present_summary(summary, (analysis.get("config") or {}).get("factors"), output.get("family"), output)
+    boxplots = (output.get("summary") or {}).get("boxplots")
+    if boxplots is None and source is not None:
+        boxplots = snapshot_boxplots(output, source, analysis.get("config") or {})
 
     def text(value):
         return escape(display(value), quote=True)
@@ -263,10 +267,18 @@ def render_html(analysis: dict) -> str:
         unit=definition.get("unit"),
         coding=[],
     )
-    metric_context = f"<p>{text(info['description'])}</p>"
-    if info.get("unit"):
-        metric_context += f"<p>Unit: {text(info['unit'])}</p>"
-    metric_context += "".join(f"<p>{text(line)}</p>" for line in info.get("coding", []))
+    report_fields = [
+        ("Metric description", info["description"]),
+        ("Unit", info.get("unit") or "Not specified"),
+        ("Analysis status", summary["status"]),
+        ("Execution", summary.get("execution_status", "completed")),
+        ("Analyzed observations", (summary.get("distribution") or {}).get("n", output.get("n_observations"))),
+        ("Created", analysis.get("created_at")),
+    ]
+    metric_context = '<dl class="report-summary">' + "".join(
+        f'<div><dt>{text(label)}</dt><dd>{text(value)}</dd></div>' for label, value in report_fields
+    ) + '</dl>'
+    metric_context += "".join(f'<p class="coding-note">{text(line)}</p>' for line in info.get("coding", []))
     family = output.get("family")
     distribution_section = ""
     if family and not model_fit_panel(summary, family, text):
@@ -449,6 +461,14 @@ th{{background:#eff3f6}}pre{{white-space:pre-wrap;overflow-wrap:anywhere;font-si
 .model-fit{{margin:20px 0;padding:20px;border:1px solid #dce6eb;border-radius:8px}}.model-fit h3{{margin:0 0 12px}}
 .fit-summary{{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin:0}}
 .fit-summary dt{{font-size:12px;color:#526170}}.fit-summary dd{{margin:2px 0 0;font:15px monospace}}
+.report-header{{padding:24px;border:1px solid #b6d9e4;border-top:4px solid #167fa2;
+border-radius:12px;background:#f6fafc}}
+.report-header h1{{margin:4px 0 16px}}.report-header>p{{margin:8px 0 20px;color:#526170}}
+.report-summary{{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,220px),1fr));gap:12px;margin:0}}
+.report-summary>div{{padding:12px 14px;background:#fff;border:1px solid #dce6eb;border-radius:8px;min-width:0}}
+.report-summary dt{{font-size:11px;color:#526170;letter-spacing:.06em;text-transform:uppercase}}
+.report-summary dd{{margin:6px 0 0;font-size:14px;font-weight:500;overflow-wrap:anywhere}}
+.report-header .coding-note{{font-size:12px;margin:12px 0 0}}
 .detail h3{{font-size:14px;margin:20px 0 4px}}
 .notice{{padding:12px 16px;border:1px solid #d97706;border-radius:8px;background:#fff7ed}}
 .detail table{{font-size:12px}}
@@ -465,6 +485,18 @@ background:repeating-linear-gradient(to top,transparent 0,transparent calc(25% -
 .x-ticks{{display:grid;margin-top:8px;font:10px monospace;color:#526170;overflow-wrap:anywhere}}
 .x-ticks span{{text-align:center}}.x-title{{text-align:center;font-size:12px;color:#526170}}
 .numeric-ticks{{display:flex;justify-content:space-between;gap:4px;margin-top:8px;font:10px monospace;color:#526170}}
+.boxplots>p{{font-size:13px;color:#526170}}.box-figure figcaption{{font-size:14px;font-weight:600}}
+.box-scroll{{overflow-x:auto;max-width:100%}}.box-chart{{display:flex;gap:8px;min-width:max-content}}
+.box-y-title{{writing-mode:vertical-rl;transform:rotate(180deg);height:220px;text-align:center;font-size:12px;max-width:3rem;overflow-wrap:anywhere}}
+.box-y-ticks{{display:flex;flex-direction:column;justify-content:space-between;height:180px;
+margin-top:20px;text-align:right;font:11px monospace;color:#526170}}
+.box-groups{{display:flex;flex:1;gap:16px}}.box-group{{flex:1;border-bottom:1px solid #94a3b8;min-width:80px}}
+.box-traces{{display:flex;justify-content:center;gap:4px}}.box-slot{{width:80px;text-align:center}}
+.box-slot svg{{display:block;width:80px;height:220px;stroke:#167fa2;fill:none;stroke-width:1.5}}
+.box-slot rect{{fill:#deeff4}}.box-slot .box-median{{stroke:#202c38;stroke-width:2}}.box-slot circle{{fill:#167fa2}}
+.box-slot p,.box-level{{margin:4px 0;font:11px monospace;overflow-wrap:anywhere;text-align:center}}
+.box-slot small{{display:block;color:#526170}}.box-level{{font-weight:600;padding:8px 0}}
+.missing-box{{height:220px;display:flex;align-items:center;font-size:11px;color:#526170}}
 .sr-only{{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}}
 .methodology{{margin:24px 0;border:1px solid #b6d9e4;border-radius:12px;overflow:hidden}}
 .methodology header{{padding:20px;background:#eef8fb;border-bottom:1px solid #b6d9e4}}
@@ -476,10 +508,11 @@ background:repeating-linear-gradient(to top,transparent 0,transparent calc(25% -
 .method-step li{{font-size:13px;margin:8px 0}}.methodology details{{padding:16px;border-top:1px solid #dce6eb}}
 @media print{{body{{margin:0;max-width:none}}.table-scroll{{overflow:visible}}
 th,td{{min-width:0;overflow-wrap:anywhere}}.numeric-value{{white-space:normal}}tr{{break-inside:avoid}}}}</style></head>
-<body><h1>Statistical results: {text(summary["metric"])}</h1>
-{metric_context}
-<p>Status: {text(summary["status"])} · Execution: {text(summary.get("execution_status", "completed"))}</p>
+<body><header class="report-header"><p class="eyebrow">ASAREE · Statistical report</p>
+<h1>Statistical results: {text(summary["metric"])}</h1>
 <p>{text(summary["description"])}</p>
+{metric_context}
+</header>
 {listing(describe_report_findings(summary))}
 {distribution_section}
 {
@@ -504,8 +537,9 @@ Interaction tests assess whether a factor's effect depends on another factor's s
                 + [("result", f"Analytic result (adjusted p < {summary.get('alpha', 0.05):g})")],
                 dict(p_adjusted=test_methods.get("p_adjusted"), permutation_p_adjusted=test_methods.get("permutation")),
             )
+            + render_boxplots(boxplots, kind, summary["metric"], info.get("unit"))
             for kind, title in (("main", "Main-effect tests"), ("interaction", "Interaction tests"))
-            if any(row.get("kind") == kind for row in summary["tests"])
+            if any(row.get("kind") == kind for row in summary["tests"]) or (boxplots or {}).get(kind)
         )
     }
 <h2>Comparisons</h2>{

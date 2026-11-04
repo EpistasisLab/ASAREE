@@ -354,7 +354,7 @@ def test_metric_identities_come_from_declarations_and_producer_bindings():
     assert definitions["Explanation"]["value_type"] == "opaque"
 
 
-def test_html_escapes_custom_labels_and_never_embeds_images_or_scripts():
+def test_html_escapes_custom_labels_and_never_embeds_external_images_or_scripts():
     result = analyze(
         np.random.default_rng(5).normal(size=100).tolist(),
         "<script>alert(1)</script>",
@@ -363,9 +363,10 @@ def test_html_escapes_custom_labels_and_never_embeds_images_or_scripts():
     html = render_html(dict(id="example", created_at="demo", output=result))
     assert "&lt;script&gt;alert(1)&lt;/script&gt;" in html
     assert "<script>" not in html
-    assert "<svg" not in html and "<img" not in html
+    assert "<svg>" not in html and "<img" not in html
+    assert '<svg viewBox="0 0 80 220" role="img"' in html
     assert "&lt;img src=x onerror=&quot;alert(1)&quot;&gt;" in html
-    assert "Unit: &lt;svg&gt;" in html
+    assert "<dt>Unit</dt><dd>&lt;svg&gt;</dd>" in html
     assert "What ran and why" in html and "Analytic adjusted p" in html
     assert "demo-snapshot" in html
 

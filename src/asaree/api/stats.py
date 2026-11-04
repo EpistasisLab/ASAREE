@@ -137,8 +137,11 @@ async def report(experiment_id: uuid.UUID, analysis_id: uuid.UUID, user: Current
     saved = await detail(experiment_id, analysis_id, user, db)
     if saved["status"] not in {"completed", "incomplete"} or not saved["output"].get("summary"):
         raise HTTPException(409, "The analysis has not completed.")
+    analysis = await db.get(StatsAnalysis, analysis_id)
+    if analysis is None:
+        raise HTTPException(404, "Analysis not found")
     try:
-        html = render_html(saved)
+        html = render_html(saved, source=analysis.request["source"])
     except ValueError as exc:
         raise HTTPException(409, str(exc)) from exc
     return HTMLResponse(

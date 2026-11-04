@@ -95,7 +95,7 @@ function customMetricProducerDisplay(
   const agent = nodeLabel(binding.config.agent_node_id)
   if (binding.producer_id === AGENT_OUTPUT_PRODUCER_ID) return { label: agent, type: 'Agent' }
   if (binding.producer_id === 'asaree.python_script') {
-    return { label: `${agent}:${nodeLabel(binding.config.script_node_id)}`, type: 'Script' }
+    return { label: `${agent} › ${nodeLabel(binding.config.script_node_id)}`, type: 'Script' }
   }
   if (binding.producer_id === TOOL_STEP_PRODUCER_ID) return { label: nodeLabel(binding.config.node_id), type: 'Tool Step' }
   if (binding.producer_id === FEATURE_PIPELINE_PRODUCER_ID) return { label: 'DC → FTE → FS', type: 'Feature pipeline' }
@@ -105,7 +105,7 @@ function customMetricProducerDisplay(
   if (binding.producer_id === 'asaree.mcp_tool') {
     const toolName = typeof binding.config.tool_name === 'string' ? binding.config.tool_name : null
     return {
-      label: `${agent}:${nodeLabel(binding.config.mcp_node_id)}${toolName ? ` · ${toolName}` : ''}`,
+      label: `${agent} › ${nodeLabel(binding.config.mcp_node_id)}${toolName ? ` · ${toolName}` : ''}`,
       type: 'MCP Tool',
     }
   }

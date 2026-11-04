@@ -15,6 +15,7 @@ from asaree.models.experiment import ResearchExperiment
 from asaree.models.stats_analysis import StatsAnalysis
 from asaree.services.stats_distribution import report_distribution
 from asaree.services.stats_findings import describe_report_findings
+from asaree.services.stats_labels import present_summary
 from asaree.services.stats_source import StatsRequest, catalog, read_source
 from asaree.worker.enqueue import _get_pool
 
@@ -62,6 +63,9 @@ def summary(
     if detail:
         result["output"] = dict(analysis.output)
         if report := analysis.output.get("summary"):
+            report = present_summary(
+                report, analysis.request["config"].get("factors"), analysis.output.get("family"), analysis.output,
+            )
             result["output"]["summary"] = dict(report, findings=describe_report_findings(report))
             if distribution := report_distribution(
                 analysis.output, analysis.request["source"], analysis.request["config"],

@@ -1,3 +1,4 @@
+import { displayFactorName } from '@/lib/factorLabels'
 import { SamplingControls } from './SamplingControls'
 import { useState } from 'react'
 import { Check, LoaderCircle, PlugZap, Sparkles, Split, Trash2 } from 'lucide-react'
@@ -125,7 +126,7 @@ export function ModelNodeInspector({
         </p>
       </div>
       {Object.entries(bindings).map(([path, name]) => <div key={path} className="flex items-center justify-between gap-2 rounded-lg border px-3 py-2 text-xs">
-        <span className="font-mono">{path}: {name}</span>
+        <span className="font-mono">{path} → {displayFactorName(name)}</span>
         <Button variant="outline" size="sm" onClick={() => unbindFactor(path)}>Remove binding</Button>
       </div>)}
       <div className="grid grid-cols-2 gap-4">

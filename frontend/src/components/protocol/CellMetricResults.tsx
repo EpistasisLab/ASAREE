@@ -1,3 +1,4 @@
+import { displayCellLabel } from '@/lib/experiment'
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { experimentsApi, type ResultsScope } from '@/api/client'
@@ -45,10 +46,10 @@ function MetricCell({ cell, initialPage, pageSize, experimentId, scope, metric, 
   const page = offset === 0 ? initialPage : more.data?.cells[0]
   return <Card size="sm" className="min-w-0 gap-2 p-3">
     <div className="flex flex-wrap items-center justify-between gap-2">
-      <Button variant="ghost" size="xs" className="font-mono" onClick={() => onSelectCell(cell)}>Cell {cell.cell_number ?? cell.cell_label}</Button>
+      <Button variant="ghost" size="xs" className="font-mono" onClick={() => onSelectCell(cell)}>Cell {cell.cell_number ?? displayCellLabel(cell.factor_values, undefined, cell.cell_label)}</Button>
       {page && <span className="font-mono text-[11px] text-muted-foreground">{page.total > 0 ? `${offset + 1}–${offset + page.items.length} of ${page.total}` : '0'} executions</span>}
     </div>
-    <p className="break-words font-mono text-[11px] text-muted-foreground">{cell.cell_label}</p>
+    <p className="break-words font-mono text-[11px] text-muted-foreground">{displayCellLabel(cell.factor_values, undefined, cell.cell_label)}</p>
     {offset > 0 && more.isPending ? <p role="status" className="text-xs text-muted-foreground">Loading recorded measurements…</p>
       : more.error ? <div role="alert" className="text-xs text-destructive"><p>Could not load recorded measurements: {more.error.message}</p><Button size="xs" variant="outline" onClick={() => void more.refetch()}>Retry</Button></div>
         : !page?.items.length ? <p className="text-xs text-muted-foreground">No executions have been recorded for this cell in this version. Run the planned replicates to produce measurements.</p>

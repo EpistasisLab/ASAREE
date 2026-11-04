@@ -1,4 +1,9 @@
 import type { StatsSummary } from '@/types/stats'
+import { displayFactorName } from './factorLabels'
+
+export function statsTestFactors(test: StatsSummary['tests'][number]): string[] {
+  return (test.factors ?? test.effect.split(':')).map(displayFactorName)
+}
 
 export function primaryComparisonResult(effect: StatsSummary['effects'][number]): string {
   const low = effect.primary_ci_low
@@ -29,7 +34,7 @@ export function describeStatsFindings(tests: StatsSummary['tests'], alpha = .05)
     return p == null || !Number.isFinite(p) ? null : p < alpha
   }
   return tests.map(test => {
-    const factors = test.effect.split(':')
+    const factors = statsTestFactors(test)
     const subject = factors.length === 1 ? `${factors[0]} has an effect on this metric`
       : factors.length === 2 ? `the effect of ${factors[0]} changes across ${factors[1]} settings`
         : `the effects of ${factors.join(' and ')} depend on one another`

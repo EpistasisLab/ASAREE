@@ -24,7 +24,7 @@ describe('Results Cells list', () => {
     const select = vi.fn()
     render(<ResultsCellsList cells={[cell]} metric="total_tokens" attemptScope="latest" unit="replicate" onSelect={select} />)
     const table = within(screen.getByRole('list', { name: 'Cells' }))
-    expect(table.getByRole('button', { name: /Cell 7: model: a/ })).toBeInTheDocument()
+    expect(table.getByRole('button', { name: /Cell 7: model = a/ })).toBeInTheDocument()
     expect(table.getByText('3/3')).toBeInTheDocument()
     expect(table.getByLabelText('Completed')).toBeInTheDocument()
     expect(table.getByText('12.5K')).toHaveAttribute('title', '12,500 tokens')

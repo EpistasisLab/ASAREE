@@ -5,6 +5,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { statsApi } from '@/api/client'
 import type { StatsAnalysis } from '@/types/stats'
 import { ExperimentStatistics } from './ExperimentStatistics'
+import { StatisticsReport } from './StatisticsReport'
 
 vi.mock('@/components/AppHeader', () => ({ AppHeader: () => null }))
 
@@ -36,6 +37,24 @@ beforeEach(() => {
   })
 })
 afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals() })
+
+it('separates main effects from interactions and preserves complete factor names', () => {
+  const model = 'Azure AI Foundry:Model', prompt = 'PubMed Retrieval Agent:Prompt'
+  const report = saved.output!.summary!
+  const analysis: StatsAnalysis = { ...saved, output: { ...saved.output!, summary: { ...report, tests: [
+    { effect: model, factors: [model], p_adjusted: .01, result: 'Evidence of an effect' },
+    { effect: prompt, factors: [prompt], p_adjusted: .2, result: 'No clear evidence of an effect' },
+    { effect: `${model}:${prompt}`, factors: [model, prompt], p_adjusted: .3, result: 'No clear evidence of an effect' },
+  ] } } }
+  render(<StatisticsReport analysis={analysis} experiment="experiment" />)
+  const main = within(screen.getByRole('region', { name: 'Main-effect tests table' }))
+  expect(main.getByText('Azure AI Foundry › Model')).toBeVisible()
+  expect(main.getByText('PubMed Retrieval Agent › Prompt')).toBeVisible()
+  const interaction = within(screen.getByRole('region', { name: 'Interaction tests table' }))
+  expect(interaction.getByText('Azure AI Foundry › Model × PubMed Retrieval Agent › Prompt')).toBeVisible()
+  expect(main.getAllByRole('row')).toHaveLength(3)
+  expect(interaction.getAllByRole('row')).toHaveLength(2)
+})
 
 function mount(version: string | null = 'version-1') {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })

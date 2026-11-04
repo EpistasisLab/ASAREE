@@ -77,7 +77,7 @@ export interface StatsSummary {
   status: 'valid' | 'unreliable' | 'unavailable' | 'descriptive'
   description: string
   findings: string[]
-  tests: { effect: string; p_adjusted: number | null; result: string; method?: string; purpose?: string
+  tests: { effect: string; label?: string; factors?: string[]; kind?: 'main' | 'interaction'; p_adjusted: number | null; result: string; method?: string; purpose?: string
     permutation_p_adjusted?: number | null; permutation_method?: string | null
     permutation_status?: string; permutation_result?: string; resampling_name?: string
     resampling_label?: string }[]

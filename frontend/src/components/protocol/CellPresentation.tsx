@@ -10,7 +10,7 @@ export function CellCard({ conditions, cellNumber, replicateCount, expanded, onT
   progress?: ReactNode; badges?: ReactNode; actions?: ReactNode; metric?: ReactNode; children: ReactNode
   results?: boolean; selected?: boolean; listId: string; toggleLabel?: string; cellNumber?: number
 }) {
-  const summary = (results ? conditions : conditions.slice(0, 2)).join(' · ') || (results ? 'No varying factors' : 'Cell')
+  const summary = (results ? conditions : conditions.slice(0, 2)).join(' | ') || (results ? 'No varying factors' : 'Cell')
   return <CellFrame results={results} expanded={expanded}>
     <div className={`relative flex items-start gap-2 ${results ? '' : 'px-3 py-2'}`}>
       <button type="button" onClick={onToggle} aria-label={toggleLabel} aria-current={selected ? 'true' : undefined} aria-expanded={results ? undefined : expanded} aria-controls={results ? undefined : listId}

@@ -1,3 +1,4 @@
+import { displayFactorName } from '@/lib/factorLabels'
 import { personaFactorIssues } from '@/lib/personaFactors'
 import { subAgentFactorIssues } from '@/lib/subAgentFactors'
 import { sharedGroupIssues } from '@/lib/sharedFactors'
@@ -263,8 +264,8 @@ function FactorsEditor({
       {factors.map((factor, i) => (
         <div key={i} className="flex items-center gap-1.5 rounded-md border px-2.5 py-1.5">
           <div className="min-w-0 flex-1">
-            <p className="truncate text-sm font-medium" title={factor.name}>
-              {factor.name || '(unnamed factor)'}
+            <p className="truncate text-sm font-medium" title={displayFactorName(factor.name)}>
+              {displayFactorName(factor.name) || '(unnamed factor)'}
             </p>
             <p className="text-xs text-muted-foreground">
               {factor.levels.length} level{factor.levels.length === 1 ? '' : 's'}
@@ -858,7 +859,7 @@ export function DesignTab({
         )}
         {unboundFactors.length > 0 && (
           <p className="rounded-md border border-destructive/40 bg-destructive/10 px-2.5 py-2 text-xs text-destructive">
-            Unbound factor{unboundFactors.length === 1 ? '' : 's'}: {unboundFactors.join(', ')}. Rebind on the canvas or remove from this design.
+            Unbound factor{unboundFactors.length === 1 ? '' : 's'}: {unboundFactors.map(displayFactorName).join(', ')}. Rebind on the canvas or remove from this design.
           </p>
         )}
         {[...patternIssues, ...scriptIssues, ...toolIssues, ...subAgentIssues, ...skillIssues, ...personaIssues, ...datasetIssues, ...knowledgeIssues].map((issue) => <p key={issue} className="text-xs text-destructive">{issue}</p>)}

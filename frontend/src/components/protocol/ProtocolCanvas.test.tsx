@@ -891,9 +891,9 @@ describe('ProtocolCanvas connector adds', () => {
       expect((persisted?.nodes[0]?.data as AgentNodeData | undefined)?.config.prompt).toBe('Baseline task')
     })
     fireEvent.doubleClick(await screen.findByText('Writer'))
-    await user.click(await screen.findByText('Factor: Writer:Prompt'))
+    await user.click(await screen.findByText('Factor: Writer › Prompt'))
     expect(await screen.findByRole('heading', { name: 'Agent factor' })).toBeInTheDocument()
-    expect(screen.getByLabelText('Factor name')).toHaveValue('Writer:Prompt')
+    expect(screen.getByLabelText('Factor name')).toHaveValue('Writer › Prompt')
     await user.click(screen.getByRole('button', { name: 'This agent on/off' }))
     await user.click(screen.getByRole('button', { name: 'Save factor' }))
     await waitFor(() => {

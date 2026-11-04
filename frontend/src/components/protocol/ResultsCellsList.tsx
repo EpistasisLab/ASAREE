@@ -40,7 +40,7 @@ export function ResultsCellsList({ cells, metric, measurement, attemptScope, uni
           return <li key={cell.cell_id}>
             <CellCard results selected={cell.cell_id === selectedCellId} label={cell.cell_label}
               conditions={conditions.length ? conditions : [cell.cell_label]} cellNumber={cell.cell_number ?? startIndex + index + 1}
-              toggleLabel={`Cell ${cell.cell_number ?? startIndex + index + 1}: ${conditions.join(' · ') || cell.cell_label}`}
+              toggleLabel={`Cell ${cell.cell_number ?? startIndex + index + 1}: ${conditions.join(' | ') || cell.cell_label}`}
               replicateCount={cell.replicate_count ?? 0} expanded={false} listId={`results-${cell.cell_id}`} onToggle={() => onSelect(cell)}
               progress={<>
               <span className="inline-flex items-center gap-1.5 whitespace-nowrap font-mono tabular-nums"

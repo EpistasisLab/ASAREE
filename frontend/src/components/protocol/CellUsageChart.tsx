@@ -1,3 +1,4 @@
+import { displayCellLabel } from '@/lib/experiment'
 import { Card } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -110,7 +111,7 @@ export function CellUsageChart({ cells, metric, measurement, loading, error, att
                     const formatted = value === null ? 'Not reported' : format(value)
                     const exactValue = value !== null && (measurement?.unit === 'tokens' || !measurement && metric === 'total_tokens') ? value.toLocaleString('en-US') : formatted
                     const tooltipValue = value !== null && !measurement && metric === 'duration_seconds' ? exactDuration(value) : exactValue
-                    const tooltip = `${label} · ${cell.cell_label}\n${measurement?.label ?? labels[metric]}: ${tooltipValue}${measurement ? `\n${cell.metric_counts?.[measurement.key] ?? 0} measured replicates` : ''}`
+                    const tooltip = `${label} · ${displayCellLabel(cell.factor_values, undefined, cell.cell_label)}\n${measurement?.label ?? labels[metric]}: ${tooltipValue}${measurement ? `\n${cell.metric_counts?.[measurement.key] ?? 0} measured replicates` : ''}`
                     return <li key={cell.cell_id} className="min-w-16 flex-1 px-1 text-center">
                       <div className="relative flex h-44 flex-col justify-end">
                         <Button variant="ghost" aria-label={`Open ${label} details`} aria-pressed={selected} disabled={!onSelectCell} onClick={() => onSelectCell?.(cell)}

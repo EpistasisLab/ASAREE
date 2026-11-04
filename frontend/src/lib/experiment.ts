@@ -1,5 +1,7 @@
 import type { CellSummary, Experiment, Replicate } from '@/types/experiments'
 import { formatTokens } from './tokenFormatting'
+import { displayFactorName } from './factorLabels'
+export { displayFactorName } from './factorLabels'
 
 /** Anything carrying a cell's factor combination -- a replicate or a cell summary. */
 type FactorCarrier = { factor_values?: Record<string, unknown> | null }
@@ -86,7 +88,10 @@ export function displayFactorLevel(
   const storedLabel = factor?.level_labels
     ?.map((candidate) => candidate.trim())
     .find((candidate) => candidate && cellParts.includes(`${factorName}:${candidate}`))
-  return label || storedLabel || displayFactorValue(value)
+  const recordedLabel = !factor
+    ? cellParts.find(part => part.startsWith(`${factorName}:`))?.slice(factorName.length + 1)
+    : undefined
+  return label || storedLabel || recordedLabel || displayFactorValue(value)
 }
 
 export interface FactorSpec {
@@ -96,14 +101,22 @@ export interface FactorSpec {
 }
 
 export function displayFactorCondition(name: string, value: unknown, designSpec: Experiment['design_spec'] | undefined, cellLabel?: string): string {
-  const parts = name.split(':').map(part => part.trim()).filter(Boolean)
-  const field = parts.pop() ?? name
   const displayedLevel = displayFactorLevel(designSpec, name, value, cellLabel)
-  if (typeof value === 'boolean' && /enabled$/i.test(field) && displayedLevel === String(value)) {
-    const subject = field.replace(/\s*enabled$/i, '').trim()
-    return [...parts, subject].filter(Boolean).join(' · ') + `: ${value ? 'Enabled' : 'Disabled'}`
-  }
-  return [...parts, field].filter(Boolean).join(' · ') + `: ${displayedLevel}`
+  const level = typeof value === 'boolean' && displayedLevel === String(value)
+    ? value ? 'Enabled' : 'Disabled' : displayedLevel
+  return `${displayFactorName(name)} = ${level}`
+}
+
+export function displayCellLabel(
+  values: Record<string, unknown> | null | undefined,
+  designSpec?: Experiment['design_spec'],
+  storedLabel = '',
+): string {
+  const conditions = Object.entries(values ?? {}).map(([name, value]) =>
+    displayFactorCondition(name, value, designSpec, storedLabel))
+  // Legacy cells can lack factor values. Keep their opaque label intact;
+  // parsing it would confuse punctuation in names with structural separators.
+  return conditions.length ? conditions.join(' | ') : storedLabel
 }
 
 function getFactors(designSpec: Experiment['design_spec'] | undefined): FactorSpec[] | null {

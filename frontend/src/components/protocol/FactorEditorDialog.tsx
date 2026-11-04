@@ -1,3 +1,4 @@
+import { displayFactorName } from '@/lib/factorLabels'
 import { PersonaFactorEditor } from './PersonaFactorEditor'
 import type { ModelCapabilities } from '@/types/llmSettings'
 import { SamplingControls } from './SamplingControls'
@@ -772,9 +773,9 @@ function StandardFactorEditorDialog({
                 )}
                 {fieldGroups.map((group) => <details key={`${group.id}:${!!search.trim()}:${canvasAgentCount < 2}`} open={canvasAgentCount < 2 || !!search.trim()} className={PICKER_GROUP_CLASSNAME}>
                   <summary className="cursor-pointer rounded-t-md bg-muted/30 px-3 py-2 text-sm font-semibold">{group.label}<span className="ml-2 text-xs font-normal text-muted-foreground">{group.connectors.reduce((count, connector) => count + connector.components.reduce((total, component) => total + component.fields.length, 0), 0)} options</span></summary>
-                  <div className="space-y-3 p-2">{group.connectors.map((connector) => <section key={connector.label} aria-label={`${group.label}: ${connector.label}`}>
+                  <div className="space-y-3 p-2">{group.connectors.map((connector) => <section key={connector.label} aria-label={`${group.label} › ${connector.label}`}>
                     <h3 className="px-2 py-1 text-sm font-medium text-primary">{connector.label}</h3>
-                    <div className="ml-3 space-y-2 border-l border-border pl-2">{connector.components.map((component) => <section key={component.id} aria-label={`${group.label}: ${connector.label}: ${component.label}`}>
+                    <div className="ml-3 space-y-2 border-l border-border pl-2">{connector.components.map((component) => <section key={component.id} aria-label={`${group.label} › ${connector.label} › ${component.label}`}>
                     {connector.label !== 'Agent fields' && <h4 className="px-2 py-1 text-sm font-semibold text-chart-2">{component.label}</h4>}
                     <div className={connector.label === 'Agent fields' ? undefined : 'ml-3'}>{component.fields.map((field) => (
                   <button
@@ -801,7 +802,7 @@ function StandardFactorEditorDialog({
               <div className="space-y-1.5">
                 <div className="space-y-1.5">
                   <Label>Factor name</Label>
-                  <p className="rounded-md border border-dashed px-2.5 py-1.5 text-sm text-muted-foreground">{name}</p>
+                  <p className="rounded-md border border-dashed px-2.5 py-1.5 text-sm text-muted-foreground">{displayFactorName(name)}</p>
                   {pickableFields && (
                     <button
                       type="button"

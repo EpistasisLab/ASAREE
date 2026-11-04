@@ -1,3 +1,4 @@
+import { displayFactorName } from '@/lib/factorLabels'
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import type { Edge, Node } from '@xyflow/react'
@@ -186,7 +187,7 @@ function RunReplicateButton({
   const blockedTitle = regenerationRequired
     ? 'Design changed — review and regenerate before running this replicate.'
     : unboundFactors.length > 0
-      ? `Rebind or remove: ${unboundFactors.join(', ')}.`
+      ? `Rebind or remove: ${unboundFactors.map(displayFactorName).join(', ')}.`
       : bindingDiscrepancies.length > 0
         ? 'Canvas values and generated factor levels disagree. Resolve the warning in Runs before starting.'
         : undefined
@@ -263,7 +264,7 @@ export function RunsTab({ experimentId, designSpec, protocol, regenerationRequir
   // Same query (and cache entry) the browser below already polls.
   const summary = useExecutionSummary(experimentId, scope, !!protocol)
   return <>
-    {discrepancies.length > 0 && <div role="alert" className="m-3 flex gap-2 rounded border border-[color:var(--chart-4)]/50 p-3 text-xs"><AlertTriangle className="size-4" /><div><p className="font-medium">Canvas and generated runs disagree</p>{discrepancies.map(issue => <p key={`${issue.nodeId}:${issue.fieldPath}`}>{issue.nodeLabel} · {issue.factorName}: {issue.reason}</p>)}</div></div>}
+    {discrepancies.length > 0 && <div role="alert" className="m-3 flex gap-2 rounded border border-[color:var(--chart-4)]/50 p-3 text-xs"><AlertTriangle className="size-4" /><div><p className="font-medium">Canvas and generated runs disagree</p>{discrepancies.map(issue => <p key={`${issue.nodeId}:${issue.fieldPath}`}>{issue.nodeLabel} · {displayFactorName(issue.factorName)}: {issue.reason}</p>)}</div></div>}
     <ExecutionBrowser key={JSON.stringify(scope)} experimentId={experimentId} scope={scope} mode="runs"
       onSelect={selection => {
         if (onSelectResult) onSelectResult(selection)

@@ -2,6 +2,16 @@ import { describe, expect, it } from 'vitest'
 import { describeStatsFindings, primaryComparisonResult } from './statsFindings'
 
 describe('statistical findings use the recorded threshold and procedure', () => {
+  it('uses factor identities rather than splitting punctuation in names', () => {
+    const model = 'Azure AI Foundry:Model'
+    const prompt = 'PubMed Retrieval Agent:Prompt'
+    const findings = describeStatsFindings([
+      { effect: model, factors: [model], p_adjusted: .01, result: '' },
+      { effect: `${model}:${prompt}`, factors: [model, prompt], p_adjusted: .01, result: '' },
+    ])
+    expect(findings[0]).toContain('Azure AI Foundry › Model has an effect')
+    expect(findings[1]).toContain('the effect of Azure AI Foundry › Model changes across PubMed Retrieval Agent › Prompt settings')
+  })
   it('keeps primary conclusions fixed when an adjusted analytic p is significant', () => {
     const effect = { comparison: 'A vs B', estimate: .95, scale: 'ratio', ci_low: .8, ci_high: .99,
       p_adjusted: .001, result: 'Evidence of a difference', primary_status: 'completed',

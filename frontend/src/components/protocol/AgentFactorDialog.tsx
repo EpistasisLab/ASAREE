@@ -1,3 +1,4 @@
+import { FactorNameInput } from './FactorNameInput'
 import { useState } from 'react'
 import { ArrowDown, ArrowUp, Plus, Split, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -67,7 +68,7 @@ export function AgentFactorDialog({ node, factors, initialFieldPath, referenceSc
       <div className="space-y-4">
         <div className="space-y-2"><Label>Factor type</Label><div className="flex flex-wrap gap-2">{agentFactorFields.map((field) => <Button key={field.fieldPath} size="sm" variant={path === field.fieldPath ? 'default' : 'outline'} aria-pressed={path === field.fieldPath} disabled={saving} onClick={() => { setPath(field.fieldPath); setDraft(seed(field.fieldPath)); setError('') }}>{field.label}</Button>)}</div></div>
         <p className="text-xs text-muted-foreground">{boolean ? 'Enable or disable this Agent node. Disabled sequential agents pass upstream output through. Cells must keep an executable agent and every required lead, supervisor, or gated worker active.' : 'Replace this field for each cell while keeping this agent’s other settings and connections. An empty level uses the normal default for this field.'}</p>
-        <div className="space-y-2"><Label htmlFor="agent-factor-name">Factor name</Label><Input id="agent-factor-name" value={draft.name} disabled={saving} onChange={(event) => setDraft({ ...draft, name: event.target.value })} /></div>
+        <div className="space-y-2"><Label htmlFor="agent-factor-name">Factor name</Label><FactorNameInput id="agent-factor-name" value={draft.name} disabled={saving} onValueChange={(name) => setDraft({ ...draft, name })} /></div>
         <fieldset disabled={saving} className="max-h-96 space-y-2 overflow-y-auto">{draft.levels.map((level, index) => <div key={`${path}:${index}`} className="flex items-start gap-2 rounded-md border p-2">
           <div className="min-w-0 flex-1 space-y-2">
             <p className="font-mono text-xs">{boolean ? level ? 'Enabled' : 'Disabled' : `Level ${index + 1}${index === 0 ? ' · default test selection' : ''}`}</p>

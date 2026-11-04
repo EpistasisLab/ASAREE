@@ -1,3 +1,4 @@
+import { FactorNameInput } from './FactorNameInput'
 import { useState } from 'react'
 import { useDialogDraft } from './useDialogDraft'
 import { useQuery } from '@tanstack/react-query'
@@ -48,7 +49,7 @@ export function DatasetFactorEditor({ factor, open, onOpenChange, onSave, onRemo
       </DialogHeader>
       <div className="space-y-3">
         <Label htmlFor="dataset-factor-name">Factor name</Label>
-        <Input id="dataset-factor-name" value={draft.name} disabled={saving} onChange={(event) => setDraft({ ...draft, name: event.target.value })} />
+        <FactorNameInput id="dataset-factor-name" value={draft.name} disabled={saving} onValueChange={(name) => setDraft({ ...draft, name })} />
         {draft.levels.length < 2 && <p className="text-xs text-destructive">Incomplete: connect at least two different datasets before generating cells.</p>}
         <div className="max-h-96 space-y-2 overflow-y-auto">
           {draft.levels.map((level, index) => {

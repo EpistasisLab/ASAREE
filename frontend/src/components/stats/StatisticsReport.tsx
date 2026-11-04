@@ -4,7 +4,7 @@ import { statsApi } from '@/api/client'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader } from '@/components/ui/card'
 import type { StatsAnalysis } from '@/types/stats'
-import { describeStatsReportFindings, primaryComparisonResult } from '@/lib/statsFindings'
+import { describeStatsReportFindings, primaryComparisonResult, statsTestFactors } from '@/lib/statsFindings'
 import { AnalysisMethods } from './AnalysisMethods'
 
 const distributionNames: Record<string, string> = {
@@ -34,6 +34,10 @@ export function StatisticsReport({ analysis, experiment }: { analysis: StatsAnal
   const resampled = !!report.resampling
   const findings = describeStatsReportFindings(report)
   const primary = report.primary_analysis === 'parametric_bootstrap_intervals'
+  const testGroups = [
+    { title: 'Main-effect tests', tests: report.tests.filter(test => statsTestFactors(test).length === 1) },
+    { title: 'Interaction tests', tests: report.tests.filter(test => statsTestFactors(test).length > 1) },
+  ]
   const distribution = report.distribution
   const bins = distribution?.plot?.bins ?? []
   const tickStep = Math.max(1, Math.ceil(Math.max(1, ...bins.map(bin => bin.count)) / 4))
@@ -123,16 +127,17 @@ export function StatisticsReport({ analysis, experiment }: { analysis: StatsAnal
           </div>)}
         </dl>
       </section>}
-      {!!report.tests.length && <div className="max-w-full overflow-x-auto" tabIndex={0} role="region" aria-label="Statistical tests table"><table className="w-full text-left text-sm [&_th]:min-w-36 [&_td]:min-w-36 [&_th]:max-w-96 [&_td]:max-w-96 [&_th]:break-normal [&_td]:break-words [&_.font-mono]:whitespace-nowrap">
-        <caption className="mb-2 text-left font-medium">{primary ? 'Secondary statistical tests' : 'Statistical tests'}</caption>
+      {!!report.tests.length && <p className="text-xs text-muted-foreground">Main-effect tests assess each factor averaged over the other factors. Interaction tests assess whether a factor’s effect depends on another factor’s setting. {primary && 'These omnibus tests are secondary; the comparisons below provide the primary bootstrap intervals.'}</p>}
+      {testGroups.filter(group => group.tests.length).map(group => <div key={group.title} className="max-w-full overflow-x-auto" tabIndex={0} role="region" aria-label={`${group.title} table`}><table className="w-full text-left text-sm [&_th]:min-w-36 [&_td]:min-w-36 [&_th]:max-w-96 [&_td]:max-w-96 [&_th]:break-normal [&_td]:break-words [&_.font-mono]:whitespace-nowrap">
+        <caption className="mb-2 text-left font-medium">{group.title}{primary ? ' · Secondary analysis' : ''}</caption>
         <thead><tr>{['Effect', resampled ? 'Analytic adjusted p' : 'Adjusted p-value', ...(resampled ? ['Resampling adjusted p'] : []), 'Analytic result'].map(title => <th scope="col" key={title} className="border-b border-border p-3">{title}</th>)}</tr></thead>
-        <tbody>{report.tests.map((row, i) => <tr key={i}>
-          <td className="border-b border-border p-3">{row.effect}{row.method && <span className="mt-1 block text-xs text-muted-foreground">{row.method}</span>}</td>
+        <tbody>{group.tests.map((row, i) => <tr key={i}>
+          <td className="border-b border-border p-3">{row.label ?? statsTestFactors(row).join(' × ')}{row.method && <span className="mt-1 block text-xs text-muted-foreground">{row.method}</span>}</td>
           <td className="border-b border-border p-3 font-mono">{value(row.p_adjusted, true)}</td>
           {resampled && <td className="border-b border-border p-3"><span className="font-mono">{value(row.permutation_p_adjusted ?? null, true)}</span><span className="mt-1 block text-xs text-muted-foreground">{row.permutation_p_adjusted == null ? row.permutation_status : row.permutation_result}</span>{row.permutation_p_adjusted != null && <span className="mt-1 block text-xs text-muted-foreground">{row.resampling_label}</span>}</td>}
           <td className="border-b border-border p-3">{row.result}</td>
         </tr>)}</tbody>
-      </table></div>}
+      </table></div>)}
       {resampled && !!report.tests.length && <p className="text-xs text-muted-foreground">Resampling procedures are named per row. Some test a different null hypothesis from the analytic test. Agreement does not establish validity.</p>}
       {!!report.effects.length && <div className="max-w-full overflow-x-auto" tabIndex={0} role="region" aria-label="Comparisons table"><table className="w-full text-left text-sm [&_th]:min-w-36 [&_td]:min-w-36 [&_th]:max-w-96 [&_td]:max-w-96 [&_th]:break-normal [&_td]:break-words [&_.font-mono]:whitespace-nowrap">
         <caption className="mb-2 text-left font-medium">Comparisons · 95% confidence intervals</caption>

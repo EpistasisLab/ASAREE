@@ -16,6 +16,8 @@ import re
 import numpy as np
 from statsmodels.stats.multitest import multipletests
 
+from asaree.services.stats_labels import display_factor_name
+from asaree.services.stats_labels import term_factors as decode_term_factors
 from asaree.services.stats_specification import design_specification, specification_section
 from asaree.stats.analysis import analyze
 
@@ -68,7 +70,7 @@ def averaged_phrase(others, levels):
     """Which settings a quantity averages over, and with what weight."""
     if not others:
         return "No other factors to average over."
-    parts = [f"{name} ({', '.join(levels[name])})" for name in others]
+    parts = [f"{display_factor_name(name)} ({', '.join(levels[name])})" for name in others]
     return (
         f"Averaged with equal weight over {join_names(parts)}: every combination counts once, "
         "regardless of how many runs it has."
@@ -77,6 +79,9 @@ def averaged_phrase(others, levels):
 
 def factor_test_text(factors, other_factors, levels, family, metric):
     """Null hypothesis, question and interpretation for one model term, in that model's scale."""
+    factors = [display_factor_name(name) for name in factors]
+    other_factors = [display_factor_name(name) for name in other_factors]
+    levels = {display_factor_name(name): values for name, values in levels.items()}
     link = LINK_SCALES.get(family, ("custom", "model scale"))[0]
     named = INTERACTION_SIGN.join(factors)
     over = f", averaged with equal weight over {join_names(other_factors)}," if other_factors else ""
@@ -130,14 +135,14 @@ def factor_test_text(factors, other_factors, levels, family, metric):
 
 def comparison_text(row, family, levels, metric, unit):
     """Exact target, null and interpretation for one comparison row."""
-    factors, pairs = row.get("factors") or [], row.get("levels") or []
+    factors, pairs = [display_factor_name(name) for name in row.get("factors") or []], row.get("levels") or []
     scale = row.get("scale", "difference")
     ratio = scale.startswith("ratio")
     op = "÷" if ratio else "−"
     others = row.get("averaged_over") or []
     if len(factors) == 1:
         (factor,), ((left, right),) = factors, pairs
-        label = f"{factor}: {left} vs {right}"
+        label = f"{factor} = {left} vs {right}"
         target = f"Mean predicted {metric} at {factor} = {left} {op} mean predicted {metric} at {factor} = {right}."
         null = "ratio = 1" if ratio else "difference = 0"
         interpretation = (
@@ -1099,8 +1104,9 @@ def build_summary(output, source, config, plan, family, warnings, model_selectio
         analytic_term_p = [row.get("p_holm") for row in term_rows]
     available_tests = sum(number(p) for p in analytic_term_p)
     for row, p in zip(term_rows, analytic_term_p, strict=True):
-        term = label(row.get("term", row.get("hypothesis", "")))
-        term_factors = term.split(":")
+        raw_term = row.get("term", row.get("hypothesis", ""))
+        term_factors = decode_term_factors(raw_term, factors)
+        term = label(raw_term)
         others = [f for f in factors if f not in term_factors]
         question, null, interpretation = factor_test_text(term_factors, others, levels, family, metric)
         if specialized:
@@ -1124,7 +1130,9 @@ def build_summary(output, source, config, plan, family, warnings, model_selectio
         tests.append(
             dict(
                 effect=term,
-                label=INTERACTION_SIGN.join(term_factors),
+                label=INTERACTION_SIGN.join(display_factor_name(name) for name in term_factors),
+                factors=term_factors,
+                kind="main" if len(term_factors) == 1 else "interaction",
                 p_adjusted=p if number(p) else None,
                 statistic=row.get("statistic", row.get("wald_hc3_chi2"))
                 if number(row.get("statistic", row.get("wald_hc3_chi2")))

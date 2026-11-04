@@ -64,7 +64,7 @@ export function StatisticsReport({ analysis, experiment }: { analysis: StatsAnal
       setDownloading(false)
     }
   }
-  return <Card>
+  return <Card className="min-w-0">
     <CardHeader>
       <div className="flex justify-start p-3 mb-2">
         <Button variant="outline" size="sm" onClick={() => void download()} disabled={downloading}>
@@ -75,7 +75,7 @@ export function StatisticsReport({ analysis, experiment }: { analysis: StatsAnal
       {metricInfo.unit && <p className="text-sm text-muted-foreground">Unit: {metricInfo.unit}</p>}
       {metricInfo.coding.map((line, i) => <p key={i} className="text-sm text-muted-foreground">{line}</p>)}
     </CardHeader>
-    <CardContent className="space-y-5">
+    <CardContent className="min-w-0 space-y-5">
       <p className="text-sm text-muted-foreground">{report.description}</p>
       {report.execution_status === 'incomplete' && <p role="alert" className="text-sm text-destructive">Analysis incomplete. Interrupted procedures supply no inference.</p>}
       {!!findings.length && <ul aria-label="Key findings" className="list-disc space-y-3 pl-5 text-sm">
@@ -123,7 +123,7 @@ export function StatisticsReport({ analysis, experiment }: { analysis: StatsAnal
           </div>)}
         </dl>
       </section>}
-      {!!report.tests.length && <div className="overflow-x-auto"><table className="w-full text-left text-sm">
+      {!!report.tests.length && <div className="max-w-full overflow-x-auto" tabIndex={0} role="region" aria-label="Statistical tests table"><table className="w-full text-left text-sm [&_th]:min-w-36 [&_td]:min-w-36 [&_th]:max-w-96 [&_td]:max-w-96 [&_th]:break-normal [&_td]:break-words [&_.font-mono]:whitespace-nowrap">
         <caption className="mb-2 text-left font-medium">{primary ? 'Secondary statistical tests' : 'Statistical tests'}</caption>
         <thead><tr>{['Effect', resampled ? 'Analytic adjusted p' : 'Adjusted p-value', ...(resampled ? ['Resampling adjusted p'] : []), 'Analytic result'].map(title => <th scope="col" key={title} className="border-b border-border p-3">{title}</th>)}</tr></thead>
         <tbody>{report.tests.map((row, i) => <tr key={i}>
@@ -134,7 +134,7 @@ export function StatisticsReport({ analysis, experiment }: { analysis: StatsAnal
         </tr>)}</tbody>
       </table></div>}
       {resampled && !!report.tests.length && <p className="text-xs text-muted-foreground">Resampling procedures are named per row. Some test a different null hypothesis from the analytic test. Agreement does not establish validity.</p>}
-      {!!report.effects.length && <div className="overflow-x-auto"><table className="w-full text-left text-sm">
+      {!!report.effects.length && <div className="max-w-full overflow-x-auto" tabIndex={0} role="region" aria-label="Comparisons table"><table className="w-full text-left text-sm [&_th]:min-w-36 [&_td]:min-w-36 [&_th]:max-w-96 [&_td]:max-w-96 [&_th]:break-normal [&_td]:break-words [&_.font-mono]:whitespace-nowrap">
         <caption className="mb-2 text-left font-medium">Comparisons · 95% confidence intervals</caption>
         <thead><tr>{['Comparison', 'Effect', ...(primary ? [`Primary parametric-bootstrap ${Math.round((report.confidence_level ?? .95) * 100)}% interval`, 'Sensitivity: analytic 95% interval'] : [resampled ? 'Analytic 95% interval' : '95% interval', ...(resampled ? ['Bootstrap 95% interval'] : [])]), primary ? 'Sensitivity: analytic adjusted p' : 'Analytic adjusted p', primary ? 'Primary interval result' : 'Result'].map(title => <th scope="col" key={title} className="border-b border-border p-3">{title}</th>)}</tr></thead>
         <tbody>{report.effects.map((row, i) => <tr key={i}>

@@ -112,14 +112,14 @@ def model_fit_panel(summary, family, text):
     )
     diagnostics = fit.get("diagnostics") or []
     diagnostic_table = (
-        "<table><caption>Diagnostics for the selected model</caption><thead><tr><th scope='col'>Diagnostic</th>"
+        '<div class="table-scroll" tabindex="0" role="region" aria-label="Model diagnostics"><table><caption>Diagnostics for the selected model</caption><thead><tr><th scope="col">Diagnostic</th>'
         "<th scope='col'>Value</th><th scope='col'>Reading</th></tr></thead><tbody>"
         + "".join(
             f"<tr><td>{text(row['label'])}</td><td>{text(display(row.get('value')))}</td>"
             f"<td>{text(row.get('note'))}</td></tr>"
             for row in diagnostics
         )
-        + "</tbody></table>"
+        + "</tbody></table></div>"
         if diagnostics
         else ""
     )
@@ -132,9 +132,9 @@ def model_fit_panel(summary, family, text):
         + "".join(f"<div><dt>{text(label)}</dt><dd>{text(value)}</dd></div>" for label, value in facts)
         + "</dl>"
         + (f"<p>{text(fit['rule'])}</p>" if fit.get("rule") else "")
-        + "<table><caption>Candidate models</caption><thead><tr><th scope='col'>Distribution</th>"
+        + '<div class="table-scroll" tabindex="0" role="region" aria-label="Candidate models"><table><caption>Candidate models</caption><thead><tr><th scope="col">Distribution</th>'
         "<th scope='col'>AIC</th><th scope='col'>ΔAIC vs best usable</th><th scope='col'>Status</th>"
-        f"<th scope='col'>Exclusion reason</th></tr></thead><tbody>{rows}</tbody></table>"
+        f"<th scope='col'>Exclusion reason</th></tr></thead><tbody>{rows}</tbody></table></div>"
         + (
             f"<p>Likelihood basis for the selected model: {text(fit['likelihood_basis'])}.</p>"
             if fit.get("likelihood_basis")
@@ -174,6 +174,8 @@ def render_html(analysis: dict) -> str:
 
         def cell(row, key):
             content = escape(display(row.get(key), key in {"p_adjusted", "permutation_p_adjusted"}))
+            if key in {"estimate", "p_adjusted", "permutation_p_adjusted", "interval", "bootstrap_interval", "primary_interval", "value"}:
+                content = f'<span class="numeric-value">{content}</span>'
             if key == "p_adjusted":
                 if row.get(key) is None and row.get("unavailable_reason"):
                     content = "Unavailable" + small(row["unavailable_reason"])
@@ -204,7 +206,7 @@ def render_html(analysis: dict) -> str:
 
         body = "".join("<tr>" + "".join(cell(row, key) for key, _ in columns) + "</tr>" for row in rows)
         caption = f"<caption>{text(caption)}</caption>" if caption else ""
-        return f"<table>{caption}<thead><tr>{head}</tr></thead><tbody>{body}</tbody></table>"
+        return f'<div class="table-scroll" tabindex="0" role="region" aria-label="Statistical results"><table>{caption}<thead><tr>{head}</tr></thead><tbody>{body}</tbody></table></div>'
 
     inference_reason = summary.get("inference_reason")
 
@@ -219,7 +221,7 @@ def render_html(analysis: dict) -> str:
         body = "".join(
             "<tr>" + "".join(f"<td>{text(row.get(key))}</td>" for key, _ in columns) + "</tr>" for row in rows
         )
-        return f"<table><thead><tr>{head}</tr></thead><tbody>{body}</tbody></table>"
+        return f'<div class="table-scroll" tabindex="0" role="region" aria-label="Technical details"><table><thead><tr>{head}</tr></thead><tbody>{body}</tbody></table></div>'
 
     effects = [
         {
@@ -422,8 +424,10 @@ def render_html(analysis: dict) -> str:
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src 'none'">
 <title>ASAREE statistics — {text(summary["metric"])}</title>
 <style>body{{font:16px/1.6 system-ui,sans-serif;color:#202c38;max-width:1100px;margin:40px auto;padding:0 24px}}
-h1,h2{{line-height:1.25}}table{{border-collapse:collapse;width:100%;font-size:14px;margin:16px 0}}
-th,td{{border-bottom:1px solid #cbd5e1;text-align:left;padding:10px;vertical-align:top;overflow-wrap:anywhere}}
+.table-scroll{{max-width:100%;overflow-x:auto;margin:16px 0}}
+.numeric-value{{white-space:nowrap;font-family:monospace}}
+h1,h2{{line-height:1.25}}table{{border-collapse:collapse;width:100%;font-size:14px;margin:0}}
+th,td{{border-bottom:1px solid #cbd5e1;text-align:left;padding:10px;vertical-align:top;min-width:9rem;max-width:24rem;overflow-wrap:break-word}}
 th{{background:#eff3f6}}pre{{white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px}}
 .test-method{{display:block;margin-top:4px;color:#526170;font-size:12px}}
 .column-method{{display:block;margin-top:4px;color:#526170;font-size:11px;font-weight:normal}}
@@ -455,7 +459,7 @@ background:repeating-linear-gradient(to top,transparent 0,transparent calc(25% -
 .method-step{{padding:16px;border:1px solid #dce6eb;border-radius:8px;min-width:0;overflow-wrap:anywhere}}
 .method-step h3{{font-size:15px}}.method-step h4{{font-size:13px;margin:12px 0 4px}}
 .method-step li{{font-size:13px;margin:8px 0}}.methodology details{{padding:16px;border-top:1px solid #dce6eb}}
-@media print{{body{{margin:0;max-width:none}}tr{{break-inside:avoid}}}}</style></head>
+@media print{{body{{margin:0;max-width:none}}.table-scroll{{overflow:visible}}th,td{{min-width:0;overflow-wrap:anywhere}}.numeric-value{{white-space:normal}}tr{{break-inside:avoid}}}}</style></head>
 <body><h1>Statistical results: {text(summary["metric"])}</h1>
 {metric_context}
 <p>Status: {text(summary["status"])} · Execution: {text(summary.get("execution_status", "completed"))}</p>

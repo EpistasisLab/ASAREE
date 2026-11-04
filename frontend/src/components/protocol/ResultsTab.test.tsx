@@ -13,6 +13,7 @@ vi.mock('@/api/client', async importOriginal => {
   const actual = await importOriginal<typeof import('@/api/client')>()
   return { ...actual, experimentsApi: { ...actual.experimentsApi,
     getExecutionSummary: vi.fn(), listExecutionCells: vi.fn(), listExecutions: vi.fn(), getExecutionFactorOptions: vi.fn(),
+    getCellMetricObservations: vi.fn(),
     listExecutionAttempts: vi.fn(), getExecutionAttempt: vi.fn(), getRunResults: vi.fn(), getExecutionCell: vi.fn(), getExecutionNeighbors: vi.fn(), getUsageDistribution: vi.fn(),
   } }
 })
@@ -55,6 +56,30 @@ beforeEach(() => {
 afterEach(() => { vi.clearAllMocks(); vi.useRealTimers() })
 
 describe('bounded Results reads', () => {
+  it('shows selected hash values and unavailable numeric-metric reasons in the Results panel', async () => {
+    vi.mocked(experimentsApi.getExecutionSummary).mockResolvedValue({ ...summary,
+      metric_labels: { hash: 'Prompt SHA-256', errors: 'Tool error rate' },
+      metric_types: { errors: 'number' }, metric_aggregations: { errors: 'mean' },
+    })
+    vi.mocked(experimentsApi.getCellMetricObservations).mockImplementation(async (_id, _scope, metricKey) => ({
+      cells: [{ cell_id: cell.cell_id, total: 1, items: [{
+        slot_id: slot.slot_id, replicate_label: slot.replicate_label, replicate_number: 1, row_index: null,
+        execution_status: 'completed', status: metricKey === 'hash' ? 'measured' : 'unavailable',
+        value_preview: metricKey === 'hash' ? '"hash-from-published-prompt"' : 'null', value_truncated: false,
+        reason: metricKey === 'hash' ? null : 'Tool error rate is undefined because no tool calls were attempted.',
+        exclusion_reason: null,
+      }] }], offset: 0, limit: 20,
+    }))
+    mount(<ResultsTab experimentId="experiment" experimentName="Measurements" experiment={experiment} versionId="v1" onSelectResult={vi.fn()} />)
+    const picker = await screen.findByRole('combobox', { name: 'Metric by cell' })
+    fireEvent.change(picker, { target: { value: 'metric:hash' } })
+    expect(await screen.findByText('hash-from-published-prompt')).toBeVisible()
+    expect(screen.getByText('See recorded values')).toBeVisible()
+    fireEvent.change(picker, { target: { value: 'metric:errors' } })
+    expect(await screen.findByText('Tool error rate is undefined because no tool calls were attempted.')).toBeVisible()
+    expect(experimentsApi.getCellMetricObservations).toHaveBeenLastCalledWith('experiment', { protocol_id: undefined, protocol_revision_id: 'v1' }, 'errors', [cell.cell_id], 0, expect.any(AbortSignal))
+  })
+
   it('clears the selected chart bar when the cell inspector closes', async () => {
     function ResultsWithInspector() {
       const [selection, setSelection] = useState<ResultsSelection | null>(null)

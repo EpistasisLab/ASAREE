@@ -51,7 +51,7 @@ export interface ExecutionSummary {
   metric_types: Record<string, 'number' | 'boolean'>
   metric_labels?: Record<string, string>
   metric_units?: Record<string, string | null>
-  metric_aggregations: Record<string, 'mean' | 'sum'>
+  metric_aggregations: Record<string, 'mean' | 'sum' | 'none'>
   metric_directions: Record<string, MeasurementDirection>
   /** Historical API fields; never select a metric or affect ordering. */
   primary_metric?: string | null; primary_metric_direction?: string | null
@@ -68,6 +68,16 @@ export interface ExecutionCell {
   usage?: UsageSummary; metric_values?: Record<string, number>; metric_counts?: Record<string, number>
   all_attempt_usage?: UsageSummary | null
   completed_replicate_count?: number | null
+}
+export interface CellMetricObservation {
+  slot_id: string; replicate_label: string; replicate_number: number; row_index: number | null
+  execution_status: string; status: string
+  value_preview: string | null; value_truncated: boolean
+  reason: string | null; exclusion_reason: string | null
+}
+export interface CellMetricObservationPage {
+  cells: Array<{ cell_id: string; total: number; items: CellMetricObservation[] }>
+  offset: number; limit: number
 }
 export interface ExecutionSlot {
   slot_id: string; cell_id: string; cell_label: string; factor_values: Record<string, unknown>

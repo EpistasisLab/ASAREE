@@ -6,7 +6,7 @@ import type { ExecutionCell, UsageSummary } from '@/types/executionResults'
 import { formatTokens } from '@/lib/tokenFormatting'
 
 import { usageMetricLabels, type UsageMetric } from '@/lib/resultUsage'
-import { cellMetricValue, formatCellMetric, metricAggregationLabel, type ResultMetric } from '@/lib/resultMetrics'
+import { cellMetricValue, formatCellMetric, hasNumericCellAggregation, metricAggregationLabel, type ResultMetric } from '@/lib/resultMetrics'
 
 type DurationUnit = 's' | 'min' | 'hr'
 
@@ -69,9 +69,9 @@ export function CellUsageChart({ cells, metric, measurement, loading, error, att
       </div>
       {!measurement && metric === 'total_tokens' && <p className="mt-1 text-[11px] text-muted-foreground">{tokenScale.label}</p>}
       {!measurement && metric === 'duration_seconds' && <p className="mt-1 text-[11px] text-muted-foreground">Execution time ({durationUnit})</p>}
-      {measurement?.aggregation && measurement.valueType && <p className="mt-1 text-[11px] text-muted-foreground">{metricAggregationLabel(measurement)} across measured replicates in each cell.</p>}
+      {measurement && hasNumericCellAggregation(measurement) && <p className="mt-1 text-[11px] text-muted-foreground">{metricAggregationLabel(measurement)} across measured replicates in each cell.</p>}
     </div>
-    {measurement && (!measurement.aggregation || !measurement.valueType) ? <p className="text-xs text-muted-foreground">This metric has no numeric cell aggregation. Open a cell’s replicate details to inspect its recorded measurements.</p>
+    {measurement && !hasNumericCellAggregation(measurement) ? <p className="text-xs text-muted-foreground">This metric has no numeric cell aggregation. Its recorded values and any missing-result reasons are listed by cell below.</p>
       : loading ? <p role="status" className="text-xs text-muted-foreground">Loading cell usage…</p>
       : error ? <p role="alert" className="text-xs text-destructive">{error}</p>
         : cells.length === 0 ? <p className="text-xs text-muted-foreground">No cells to display.</p>
@@ -91,7 +91,7 @@ export function CellUsageChart({ cells, metric, measurement, loading, error, att
                     const value = cellValue(cell)
                     const label = `Cell ${cell.cell_number ?? index + 1}`
                     const formatted = value === null ? 'Not reported' : format(value)
-                    const exactValue = value !== null && !measurement && metric === 'total_tokens' ? value.toLocaleString('en-US') : formatted
+                    const exactValue = value !== null && (measurement?.unit === 'tokens' || !measurement && metric === 'total_tokens') ? value.toLocaleString('en-US') : formatted
                     const tooltipValue = value !== null && !measurement && metric === 'duration_seconds' ? exactDuration(value) : exactValue
                     const tooltip = `${label} · ${cell.cell_label}\n${measurement?.label ?? labels[metric]}: ${tooltipValue}${measurement ? `\n${cell.metric_counts?.[measurement.key] ?? 0} measured replicates` : ''}`
                     return <li key={cell.cell_id} className="min-w-16 flex-1 px-1 text-center">
@@ -115,6 +115,6 @@ export function CellUsageChart({ cells, metric, measurement, loading, error, att
             </div>
           </div>}
     {pagination}
-    {!loading && !error && cells.length > 0 && <p className="text-[11px] text-muted-foreground">{measurement ? '— = no usable measurements; missing values are not zero.' : '— = usage not reported.'}</p>}
+    {!loading && !error && cells.length > 0 && (!measurement || hasNumericCellAggregation(measurement)) && <p className="text-[11px] text-muted-foreground">{measurement ? '— = no usable numeric measurements; see the recorded results below for each execution’s reason. Missing values are not zero.' : '— = usage not reported.'}</p>}
   </Card>
 }

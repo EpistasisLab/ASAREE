@@ -18,6 +18,61 @@ const cells: ExecutionCell[] = [
 ]
 
 describe('Results usage charts', () => {
+  it.each(['Input tokens', 'Output tokens', 'Total tokens'])('abbreviates millions in selected %s while keeping exact tooltip counts', (label) => {
+    render(<ResultsProgress summary={{ ...summary, metric_labels: { selected: label },
+      metric_types: { selected: 'number' }, metric_units: { selected: 'tokens' }, metric_aggregations: { selected: 'sum' },
+    }} cells={[{ ...cells[0], metric_values: { selected: 1_250_000 }, metric_counts: { selected: 1 } }]} cellsLoading={false} />)
+    const chart = within(screen.getByRole('region', { name: `${label} by cell` }))
+    expect(chart.getByText('1.25M tokens')).toBeVisible()
+    expect(chart.getByRole('img', { name: 'Cell 7: 1,250,000' })).toHaveAttribute('title', expect.stringContaining('1,250,000'))
+  })
+
+  it('offers only selected experiment metrics, without duplicate operational usage summaries', () => {
+    render(<ResultsProgress summary={{ ...summary, metric_labels: {
+      tokens: 'Total tokens', cost: 'Cost', duration: 'Duration', outcome: 'Custom outcome',
+    } }} cells={cells} cellsLoading={false} />)
+    const picker = screen.getByRole('combobox', { name: 'Metric by cell' })
+    const options = within(picker).getAllByRole('option').filter(option => !option.hasAttribute('disabled'))
+    expect(options.map(option => option.getAttribute('value'))).toEqual(['metric:cost', 'metric:outcome', 'metric:duration', 'metric:tokens'])
+    expect(options.map(option => option.textContent)).toEqual(['Cost', 'Custom outcome', 'Duration', 'Total tokens'])
+    expect(within(picker).queryByText('Select an experiment metric')).not.toBeInTheDocument()
+    expect(within(picker).queryByRole('group')).not.toBeInTheDocument()
+    expect(picker).toHaveValue('metric:cost')
+    expect(within(picker).queryByRole('group', { name: 'Operational usage summaries' })).not.toBeInTheDocument()
+    fireEvent.change(picker, { target: { value: 'metric:cost' } })
+    expect(picker).toHaveValue('metric:cost')
+    fireEvent.click(screen.getByRole('button', { name: 'Show tokens so far by cell' }))
+    expect(picker).toHaveValue('')
+    expect(screen.getByRole('region', { name: 'Tokens by cell' })).toBeVisible()
+  })
+
+  it('disables the metric dropdown when the experiment has no selected metrics', () => {
+    render(<ResultsProgress summary={summary} cells={cells} cellsLoading={false} />)
+    expect(screen.getByRole('combobox', { name: 'Metric by cell' })).toBeDisabled()
+    expect(screen.getByRole('option', { name: 'No experiment metrics selected' })).toBeInTheDocument()
+  })
+
+  it('lists every selected built-in and custom metric even when no results exist', () => {
+    render(<ResultsProgress summary={{ ...summary, design_spec: { metrics: [
+      { id: 'tokens', name: 'Total tokens', kind: 'runtime', catalogKey: 'total_tokens' },
+      { id: 'hash', name: 'Prompt SHA-256', kind: 'runtime', catalogKey: 'prompt_sha256', valueType: 'opaque', aggregation: 'none' },
+      { id: 'custom', name: 'Custom outcome', kind: 'custom' },
+    ] }, metric_labels: { total_tokens: 'Total tokens', hash: 'Prompt SHA-256', custom: 'Custom outcome' } }} cells={[]} cellsLoading={false} />)
+    const group = within(screen.getByRole('combobox', { name: 'Metric by cell' }))
+    expect(group.getAllByRole('option')).toHaveLength(3)
+    expect(group.getByRole('option', { name: 'Prompt SHA-256' })).toBeEnabled()
+    expect(group.getByRole('option', { name: 'Custom outcome' })).toBeEnabled()
+  })
+
+  it('lists selected metrics in row mode and displays individual outcomes without aggregation', () => {
+    render(<ResultsProgress summary={{ ...summary, unit: 'row', metric_labels: { outcome: 'Row outcome' } }}
+      cells={cells} cellsLoading={false} metricResults={<p>Recorded row values</p>} />)
+    fireEvent.change(screen.getByRole('combobox', { name: 'Metric by cell' }), { target: { value: 'metric:outcome' } })
+    expect(screen.getByText('Recorded row values')).toBeVisible()
+    expect(screen.getByText(/Row outcomes are listed individually without cell aggregation/)).toBeVisible()
+    expect(screen.queryByRole('region', { name: 'Row outcome by cell' })).not.toBeInTheDocument()
+  })
+
   it('selects a published custom metric in the existing chart and preserves zero and missing values', () => {
     render(<ResultsProgress summary={{ ...summary,
       metric_labels: { score: 'Custom score', note: 'Explanation' }, metric_types: { score: 'number' },

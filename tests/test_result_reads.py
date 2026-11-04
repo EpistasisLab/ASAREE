@@ -46,6 +46,8 @@ from asaree.services.result_reads import (
     decode_cursor,
     encode_cursor,
     execution_search_selection,
+    metric_observation_reason,
+    metric_observations_query,
     page_size,
     parent_predicates,
     read_attempt_detail,
@@ -56,6 +58,7 @@ from asaree.services.result_reads import (
     read_evidence,
     read_execution_neighbors,
     read_executions,
+    read_metric_observations,
     read_summary,
     read_usage_distribution,
     resolve_result_scope,
@@ -437,6 +440,67 @@ def test_result_metrics_include_published_custom_metrics_and_preserve_their_iden
     assert "WHEN 'note'" not in sql
 
 
+def test_metric_observation_query_bounds_evidence_and_uses_latest_scoped_slots():
+    sql = str(metric_observations_query(scope(), 'prompt-hash', [uuid.UUID(int=9)], offset=20, limit=20).compile(
+        dialect=postgresql.dialect(), compile_kwargs={"literal_binds": True},
+    ))
+    assert 'row_number() OVER (PARTITION BY metric_slots.cell_id' in sql
+    assert 'ranked_metric_slots.position > 20' in sql
+    assert 'ranked_metric_slots.position <= 40' in sql
+    assert "= 'prompt-hash'" in sql
+    assert 'left(' in sql and '4096' in sql
+    assert 'protocol_runs.protocol_revision_id' in sql
+    assert 'protocol_runs.design_revision_id' in sql
+    assert 'factorial_cells.experiment_id' in sql
+    assert 'protocol_runs.conversation' not in sql
+    assert 'agent_runs' not in sql
+
+
+@pytest.mark.parametrize(('changes', 'reason'), [
+    ({'status': 'measured'}, None),
+    ({'status': 'unavailable', 'error': 'No tool calls were attempted.'}, 'No tool calls were attempted.'),
+    ({'execution_status': 'not_started', 'run_id': None}, 'This execution has not started'),
+    ({'execution_status': 'running'}, 'This execution is still in progress'),
+    ({'execution_status': 'failed', 'execution_error': 'Provider disconnected.'}, 'Provider disconnected.'),
+    ({'evaluation_state': 'failed', 'evaluation_error': 'Producer crashed.'}, 'Producer crashed.'),
+    ({'evaluation_state': 'running'}, 'Metric evaluation is still in progress.'),
+    ({'status': 'timed_out'}, 'The metric producer timed out.'),
+    ({'status': 'not_applicable'}, 'This metric does not apply'),
+    ({}, 'the stored result provides no reason'),
+])
+def test_metric_observation_missing_reasons(changes, reason):
+    row = {'status': None, 'error': None, 'execution_status': 'completed', 'run_id': uuid.UUID(int=1),
+           'evaluation_state': 'completed', 'evaluation_error': None, 'execution_error': None, **changes}
+    actual = metric_observation_reason(row)
+    assert actual is None if reason is None else reason in actual
+
+
+async def test_metric_observation_reads_keep_values_reasons_and_exclusions():
+    selected = scope(measurement_plan={'metrics': [{'id': 'score', 'name': 'Score'}], 'producers': [], 'inputs': []})
+    cell_id = uuid.UUID(int=9)
+    base = {'cell_id': cell_id, 'total': 2, 'replicate_label': 'replicate-1', 'replicate_number': 1,
+            'row_index': None, 'run_id': uuid.UUID(int=10), 'execution_status': 'completed',
+            'truncated': False, 'evaluation_state': 'completed', 'value_truncated': False,
+            'evaluation_error': None, 'execution_error': None}
+    db = AsyncMock()
+    result = MagicMock()
+    result.mappings.return_value.all.return_value = [
+        {**base, 'slot_id': uuid.UUID(int=11), 'status': 'measured', 'value_preview': '0', 'error': None},
+        {**base, 'slot_id': uuid.UUID(int=12), 'status': 'unavailable', 'value_preview': 'null',
+         'error': 'No tool calls were attempted.', 'truncated': True},
+    ]
+    db.execute.return_value = result
+    page = await read_metric_observations(db, selected, metric_key='score', cell_ids=[cell_id])
+    first, second = page['cells'][0]['items']
+    assert first['value_preview'] == '0' and first['reason'] is None
+    assert second['reason'] == 'No tool calls were attempted.'
+    assert 'iteration limit' in second['exclusion_reason']
+    with pytest.raises(ValueError, match='not declared'):
+        await read_metric_observations(db, selected, metric_key='other', cell_ids=[cell_id])
+    with pytest.raises(ValueError, match='between 1 and 20'):
+        await read_metric_observations(db, selected, metric_key='score', cell_ids=[uuid.uuid4() for _ in range(21)])
+
+
 def test_cursor_binds_scope_kind_and_filters():
     selected = scope()
     filters = {"cell_id": "first"}
@@ -517,6 +581,52 @@ async def results_db():
             yield db, selected, cell, user
         await transaction.rollback()
     await engine.dispose()
+
+
+async def test_metric_observation_pages_project_latest_values_and_errors_from_postgres(results_db):
+    from dataclasses import replace
+
+    db, selected, cell, user = results_db
+    selected = replace(selected, measurement_plan={
+        'metrics': [{'id': 'selected', 'name': 'Selected metric'}], 'producers': [], 'inputs': [],
+    })
+    now = datetime.now(UTC)
+    for number in range(1, 5):
+        parent = FactorialReplicateResult(cell_id=cell.id, replicate_number=number,
+                                         replicate_label=f'metric-replicate-{number}')
+        db.add(parent)
+        await db.flush()
+        if number == 4:
+            continue
+        if number == 1:
+            db.add(ProtocolRun(protocol_id=selected.protocol_id, owner_id=user.id,
+                protocol_revision_id=selected.protocol_revision_id, design_revision_id=selected.design_revision_id,
+                replicate_result_id=parent.id, replicate_label=parent.replicate_label, status='failed',
+                created_at=now - timedelta(days=1), attempt_result={'measurement': {'observations': [
+                    {'metric_id': 'selected', 'metric_name': 'Selected metric', 'status': 'measured', 'value': 99},
+                ]}}))
+        observation = {'metric_id': 'selected', 'metric_name': 'Selected metric',
+                       'status': 'unavailable' if number == 3 else 'measured',
+                       'value': 0 if number == 1 else {'text': 'structured result'} if number == 2 else None}
+        if number == 3:
+            observation['error'] = 'No tool calls were attempted.'
+        db.add(ProtocolRun(protocol_id=selected.protocol_id, owner_id=user.id,
+            protocol_revision_id=selected.protocol_revision_id, design_revision_id=selected.design_revision_id,
+            replicate_result_id=parent.id, replicate_label=parent.replicate_label, status='completed',
+            created_at=now, attempt_result={'evaluation_state': 'completed', 'measurement': {
+                'observations': [observation],
+            }}))
+    await db.flush()
+    first = await read_metric_observations(db, selected, metric_key='selected', cell_ids=[cell.id], limit=2)
+    assert first['cells'][0]['total'] == 4
+    values = first['cells'][0]['items']
+    assert json.loads(values[0]['value_preview']) == 0
+    assert json.loads(values[1]['value_preview']) == {'text': 'structured result'}
+    second = await read_metric_observations(db, selected, metric_key='selected', cell_ids=[cell.id], offset=2, limit=2)
+    missing, unstarted = second['cells'][0]['items']
+    assert missing['reason'] == 'No tool calls were attempted.'
+    assert unstarted['status'] == 'not_recorded'
+    assert 'has not started' in unstarted['reason']
 
 
 @pytest.mark.parametrize("row_mode", [False, True])

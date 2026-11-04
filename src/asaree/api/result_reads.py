@@ -152,6 +152,22 @@ async def factor_options(db: DbSession, scope: Scope) -> dict[str, Any]:
     return await _read(result_reads.read_factor_options, db, scope)
 
 
+@router.get('/metric-observations')
+async def metric_observations(
+    db: DbSession, scope: Scope,
+    metric_key: Annotated[str, Query(min_length=1, max_length=200)],
+    cell_ids: Annotated[str, Query(min_length=1, max_length=1000)],
+    offset: Annotated[int, Query(ge=0)] = 0,
+    limit: Limit = result_reads.PAGE_SIZE,
+) -> dict[str, Any]:
+    try:
+        identifiers = list(dict.fromkeys(uuid.UUID(value) for value in cell_ids.split(',')))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail="Invalid cell IDs.") from exc
+    return await _read(result_reads.read_metric_observations, db, scope, metric_key=metric_key,
+                       cell_ids=identifiers, offset=offset, limit=limit)
+
+
 @router.get("/slots/{slot_id}/neighbors")
 async def neighbors(slot_id: uuid.UUID, db: DbSession, scope: Scope) -> dict[str, Any]:
     return await _read(result_reads.read_execution_neighbors, db, scope, slot_id=slot_id)

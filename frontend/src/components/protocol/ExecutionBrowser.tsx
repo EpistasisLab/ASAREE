@@ -14,6 +14,7 @@ import type { Experiment } from '@/types/experiments'
 import type { ResultsSelection } from './ResultsTab'
 import { ResultsPanel } from './ResultsPanel'
 import { ResultsProgress } from './ResultsProgress'
+import { CellMetricResults } from './CellMetricResults'
 import { ResultsCellsTable } from './ResultsCellsTable'
 import { formatUsageDistributionValue, type UsageMetric } from '@/lib/resultUsage'
 import { ResultsMetadata } from './ResultsContext'
@@ -102,8 +103,9 @@ export function ExecutionBrowser({ experimentId, scope, experiment, mode, onSele
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set())
   const [filters, setFilters] = useState<ExecutionFilters>(emptyExecutionFilters)
   const [attemptScope, setAttemptScope] = useState<'latest' | 'all'>('latest')
-  const [metric, setMetric] = useState<string>('total_tokens')
-  const measurement = summary.data && selectedResultMetrics(summary.data).find(item => `metric:${item.key}` === metric)
+  const [metric, setMetric] = useState<string>('')
+  const measurements = summary.data ? selectedResultMetrics(summary.data) : []
+  const measurement = metric ? measurements.find(item => `metric:${item.key}` === metric) : measurements[0]
   const usageMetric: UsageMetric = metric === 'cost_usd' || metric === 'duration_seconds' ? metric : 'total_tokens'
   const [internalSelectedCellId, setSelectedCellId] = useState<string>()
   const selectedCellId = controlledSelectedCellId === undefined ? internalSelectedCellId : controlledSelectedCellId ?? undefined
@@ -179,6 +181,9 @@ export function ExecutionBrowser({ experimentId, scope, experiment, mode, onSele
   return mode === 'results' && experiment
     ? <ResultsPanel experimentId={experimentId} experimentName={experiment.name} scope={scope}
       progress={summary.data?.ready && <ResultsProgress summary={summary.data} cells={cells.data?.items ?? []}
+        metricResults={measurement && <CellMetricResults cells={cells.data?.items ?? []} experimentId={experimentId}
+          scope={scope} metric={measurement} generation={summary.data.generation} onSelectCell={selectCell}
+          cellsLoading={cells.isPending} cellsError={cells.error?.message} />}
         selectedMetric={metric} onMetricChange={setMetric} onSelectCell={selectCell} selectedCellId={selectedCellId}
         cellsLoading={cells.isPending} cellsError={cells.error?.message} attemptScope={attemptScope} onAttemptScopeChange={setAttemptScope}
         chartPagination={!!cells.data?.items.length && <div className="flex flex-wrap items-center justify-end gap-2">

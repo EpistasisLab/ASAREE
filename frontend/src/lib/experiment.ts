@@ -1,4 +1,5 @@
 import type { CellSummary, Experiment, Replicate } from '@/types/experiments'
+import { formatTokens } from './tokenFormatting'
 
 /** Anything carrying a cell's factor combination -- a replicate or a cell summary. */
 type FactorCarrier = { factor_values?: Record<string, unknown> | null }
@@ -315,6 +316,7 @@ export function pickMetricColumns(experiment: Experiment | undefined, cells: Cel
  * trimmed, unit suffix appended, non-numbers rendered as an em dash. */
 export function formatMetricValue(key: string, value: unknown): string {
   if (typeof value !== 'number') return '—'
+  if (key.endsWith('_tokens') && value >= 1_000_000) return formatTokens(value)
   // Explicitly use a grouped, readable display for large score/token-like
   // custom metrics.  The Results detail panel surfaces these values in a
   // compact grid where an ungrouped `12500` is needlessly hard to scan.

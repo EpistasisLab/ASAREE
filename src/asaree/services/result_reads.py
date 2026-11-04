@@ -943,6 +943,113 @@ async def read_factor_options(db: AsyncSession, scope: ResultScope) -> dict[str,
     return {'factors': options, 'truncated': len(rows) > 1000}
 
 
+def metric_observations_query(
+    scope: ResultScope, metric_id: str, cell_ids: list[uuid.UUID], *, offset: int, limit: int,
+) -> Any:
+    """Page slots per cell before projecting one bounded observation from evidence.
+
+    The slot query supplies publication scope and latest-attempt identity. Never
+    load full attempt documents or infer an unavailable value from usage totals.
+    """
+    slots = slot_query(scope).subquery("metric_slots")
+    ordering = (slots.c.replicate_number, func.coalesce(slots.c.row_index, -1), slots.c.slot_id)
+    ranked = select(
+        slots.c.cell_id, slots.c.slot_id, slots.c.replicate_label, slots.c.replicate_number,
+        slots.c.row_index, slots.c.run_id, slots.c.status.label("execution_status"),
+        slots.c.result["truncated"].as_boolean().label("truncated"),
+        slots.c.result["evaluation_state"].astext.label("evaluation_state"),
+        func.count().over(partition_by=slots.c.cell_id).label("total"),
+        func.row_number().over(partition_by=slots.c.cell_id, order_by=ordering).label("position"),
+    ).where(slots.c.cell_id.in_(cell_ids)).subquery("ranked_metric_slots")
+    page = select(ranked).where(ranked.c.position > offset, ranked.c.position <= offset + limit).subquery("metric_page")
+    document = ProtocolRun.attempt_result["measurement"]["observations"]
+    observations = func.jsonb_array_elements(case(
+        (func.jsonb_typeof(document) == "array", document), else_=cast(literal("[]"), JSONB),
+    )).table_valued("value").lateral("metric_observations")
+    observation = cast(observations.c.value, JSONB)
+    selected = select(observation.label("observation")).select_from(observations).where(
+        observation["metric_id"].astext == metric_id,
+    ).limit(1).correlate(ProtocolRun).lateral("selected_observation")
+    value = cast(selected.c.observation["value"], Text)
+    return select(
+        page,
+        selected.c.observation["status"].astext.label("status"),
+        func.left(value, 4096).label("value_preview"),
+        (func.length(value) > 4096).label("value_truncated"),
+        func.left(selected.c.observation["error"].astext, 4096).label("error"),
+        func.left(ProtocolRun.attempt_result["metric_evaluation"]["error"].astext, 4096).label("evaluation_error"),
+        func.left(ProtocolRun.error, 4096).label("execution_error"),
+    ).select_from(page).outerjoin(ProtocolRun, ProtocolRun.id == page.c.run_id).outerjoin(
+        selected, true(),
+    ).order_by(page.c.cell_id, page.c.position)
+
+
+def metric_observation_reason(row: Any) -> str | None:
+    if row["status"] == "measured":
+        return None
+    if row["error"]:
+        return row["error"]
+    if row["status"]:
+        return {
+            "unavailable": "The producer reported this metric as unavailable without a reason.",
+            "failed": "The metric producer failed without recording an error.",
+            "timed_out": "The metric producer timed out.",
+            "cancelled": "Metric evaluation was cancelled.",
+            "not_applicable": "This metric does not apply to this execution.",
+        }.get(row["status"], "No measurement was recorded.")
+    if row["evaluation_state"] == "failed":
+        return row["evaluation_error"] or "Metric evaluation failed without recording an error."
+    if row["execution_status"] == "not_started":
+        return "This execution has not started; no measurement has been recorded."
+    if row["run_id"] is None:
+        return "No attempt evidence is recorded for this execution; the selected metric has no recorded observation."
+    if row["execution_status"] in {"pending", "queued", "running", "finalizing"}:
+        return "This execution is still in progress; the measurement has not been recorded yet."
+    if row["execution_status"] in {"failed", "cancelled", "limit_reached"}:
+        return row["execution_error"] or {
+            "failed": "This execution failed before recording the metric.",
+            "cancelled": "This execution was cancelled before recording the metric.",
+            "limit_reached": "This execution reached its iteration limit before recording the metric.",
+        }[row["execution_status"]]
+    if row["evaluation_state"] in {"pending", "queued", "running"}:
+        return "Metric evaluation is still in progress."
+    return "No observation was recorded for this selected metric in this attempt; the stored result provides no reason."
+
+
+async def read_metric_observations(
+    db: AsyncSession, scope: ResultScope, *, metric_key: str, cell_ids: list[uuid.UUID],
+    offset: int = 0, limit: int = PAGE_SIZE,
+) -> dict[str, Any]:
+    definitions = {metric["key"]: identifier for identifier, metric in result_metrics(scope).items()}
+    if metric_key not in definitions:
+        raise ValueError("The selected metric is not declared in this experiment version.")
+    if not cell_ids or len(cell_ids) > PAGE_SIZE or offset < 0:
+        raise ValueError("Select between 1 and 20 cells and a nonnegative offset.")
+    page_size(limit)
+    rows = (await db.execute(metric_observations_query(
+        scope, definitions[metric_key], cell_ids, offset=offset, limit=limit,
+    ))).mappings().all()
+    cells = {str(identifier): {"cell_id": str(identifier), "items": [], "total": 0} for identifier in cell_ids}
+    for row in rows:
+        cell = cells[str(row["cell_id"])]
+        cell["total"] = row["total"]
+        cell["items"].append({
+            "slot_id": str(row["slot_id"]), "replicate_label": row["replicate_label"],
+            "replicate_number": row["replicate_number"], "row_index": row["row_index"],
+            "execution_status": row["execution_status"], "status": row["status"] or "not_recorded",
+            "value_preview": row["value_preview"], "value_truncated": bool(row["value_truncated"]),
+            "reason": metric_observation_reason(row),
+            "exclusion_reason": (
+                None if scope.unit == "row" else
+                "Excluded from cell aggregation because this attempt reached its iteration limit."
+                if row["truncated"] or row["execution_status"] == "limit_reached"
+                else "Excluded from cell aggregation because this attempt did not complete."
+                if row["execution_status"] != "completed" else None
+            ),
+        })
+    return {"cells": list(cells.values()), "offset": offset, "limit": limit}
+
+
 async def read_execution_neighbors(db: AsyncSession, scope: ResultScope, *, slot_id: uuid.UUID) -> dict[str, Any]:
     """Adjacent inspectable results within the selected cell, across list pages."""
     slots = slot_query(scope).subquery("slots")

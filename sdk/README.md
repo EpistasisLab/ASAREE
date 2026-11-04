@@ -60,6 +60,41 @@ for replicate in replicates:
 results = client.experiments.get_results(experiment.id)
 ```
 
+### Runnable statistics demo
+
+From the repository root, install this checkout's SDK and create the demo:
+
+```bash
+python -m pip install -e ./sdk
+export ASAREE_BASE_URL="https://your-asaree-host"
+export ASAREE_API_KEY="your-test-user-token"
+python scripts/create_stats_demo.py --provider openai --model YOUR_CONFIGURED_MODEL
+```
+
+Choose a tool-capable model already configured in that user's Profile. Other
+providers are supported through `--provider`. If the frontend has a different
+origin, supply `--gui-url`; the script prints the experiment's canvas link.
+
+This creates a synthetic 20-ticket benchmark, a two-stage classification/scoring
+canvas, four cells (minimal/rubric prompt × clean/noisy input), and 15 whole-dataset
+replicates per cell. It publishes the experiment without launching any runs.
+Built-in metrics are Cost, Duration, and Total tokens. Custom metrics are
+`accuracy`, `misclassified_count`, and `passed` (at least 17/20 correct).
+
+The answer key is only available to the scoring stage. That agent executes the
+supplied Python scoring function with the classifier's predictions, then reports
+the printed JSON; custom measurements project fields from its final output.
+This handoff is model-mediated: inspect a GUI Test Run to confirm the scorer
+executed the supplied code and returned its stdout faithfully. Runtime totals
+include both agents. Results may be constant, especially with capable models;
+statistically significant differences are not guaranteed.
+
+Use `--dry-run` to inspect the definition without credentials or network access,
+`--replicates N` to change the replication, or `--name` to create another copy.
+An existing active experiment with the same name is refused. Resource IDs are
+printed as creation progresses so an interrupted setup can be inspected in the GUI.
+After running the experiment, open **Results → Statistics → Analyze all metrics**.
+
 For a refreshable account session instead of an API key:
 
 ```python

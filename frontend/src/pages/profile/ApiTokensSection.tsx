@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Copy, Check, Trash2 } from 'lucide-react'
+import { Trash2 } from 'lucide-react'
+import { CopyButton } from './CopyButton'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -99,18 +100,6 @@ function CreateTokenDialog({ onCreated }: { onCreated: (token: string) => void }
 }
 
 function NewTokenReveal({ token, onDismiss }: { token: string; onDismiss: () => void }) {
-  const [copied, setCopied] = useState(false)
-
-  async function copy() {
-    try {
-      await navigator.clipboard.writeText(token)
-      setCopied(true)
-      setTimeout(() => setCopied(false), 2000)
-    } catch {
-      // Clipboard API blocked (e.g. insecure context) — the token is still selectable text.
-    }
-  }
-
   return (
     <Alert className="mb-4">
       <AlertDescription className="space-y-2">
@@ -119,9 +108,7 @@ function NewTokenReveal({ token, onDismiss }: { token: string; onDismiss: () => 
         </p>
         <div className="flex items-center gap-2">
           <code className="flex-1 select-all overflow-x-auto rounded bg-muted px-2 py-1.5 text-xs">{token}</code>
-          <Button type="button" size="icon" variant="outline" onClick={copy} aria-label="Copy token">
-            {copied ? <Check className="size-4" /> : <Copy className="size-4" />}
-          </Button>
+          <CopyButton text={token} label="Copy token" />
         </div>
         <Button type="button" variant="link" className="h-auto p-0" onClick={onDismiss}>
           Done

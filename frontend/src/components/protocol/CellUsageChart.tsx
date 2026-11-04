@@ -86,7 +86,7 @@ export function CellUsageChart({ cells, metric, measurement, loading, error, att
       </div>
       {measurement && hasNumericCellAggregation(measurement) && <p className="mt-1 text-[11px] text-muted-foreground">{metricAggregationLabel(measurement)} across measured replicates in each cell.</p>}
     </div>
-    {measurement && !hasNumericCellAggregation(measurement) ? <p className="text-xs text-muted-foreground">This metric has no numeric cell aggregation. Its recorded values and any missing-result reasons are listed by cell below.</p>
+      {measurement && !hasNumericCellAggregation(measurement) ? <p className="text-xs text-muted-foreground">This metric has no numeric cell aggregation. Open a cell below to inspect its recorded values and any missing-result reasons.</p>
       : loading ? <p role="status" className="text-xs text-muted-foreground">Loading cell usage…</p>
       : error ? <p role="alert" className="text-xs text-destructive">{error}</p>
         : cells.length === 0 ? <p className="text-xs text-muted-foreground">No cells to display.</p>
@@ -134,6 +134,6 @@ export function CellUsageChart({ cells, metric, measurement, loading, error, att
             <p className="text-center text-[11px] text-muted-foreground" aria-label="X-axis: Cell">Cell</p>
           </div>}
     {pagination}
-    {!loading && !error && cells.length > 0 && (!measurement || hasNumericCellAggregation(measurement)) && <p className="text-[11px] text-muted-foreground">{measurement ? '— = no usable numeric measurements; see the recorded results below for each execution’s reason. Missing values are not zero.' : '— = usage not reported.'}</p>}
+    {!loading && !error && cells.length > 0 && (!measurement || hasNumericCellAggregation(measurement)) && <p className="text-[11px] text-muted-foreground">{measurement ? '— = no usable numeric measurements; open the cell details for each execution’s reason. Missing values are not zero.' : '— = usage not reported.'}</p>}
   </Card>
 }

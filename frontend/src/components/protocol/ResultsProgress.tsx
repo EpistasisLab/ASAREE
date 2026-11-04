@@ -7,13 +7,12 @@ import { CellUsageChart } from './CellUsageChart'
 import { experimentResultStatus, formatUsageValue, usageMetricLabels, type UsageMetric } from '@/lib/resultUsage'
 import { selectedResultMetrics } from '@/lib/resultMetrics'
 
-export function ResultsProgress({ summary, cells, cellsLoading, cellsError, attemptScope = 'latest', onAttemptScopeChange, chartPagination, selectedMetric, onMetricChange, onSelectCell, selectedCellId, metricResults }: {
+export function ResultsProgress({ summary, cells, cellsLoading, cellsError, attemptScope = 'latest', onAttemptScopeChange, chartPagination, selectedMetric, onMetricChange, onSelectCell, selectedCellId }: {
   summary: ExecutionSummary; cells: ExecutionCell[]; cellsLoading: boolean; cellsError?: string
   attemptScope?: 'latest' | 'all'; onAttemptScopeChange?: (scope: 'latest' | 'all') => void; chartPagination?: ReactNode
   selectedMetric?: string; onMetricChange?: (metric: string) => void
   onSelectCell?: (cell: ExecutionCell) => void
   selectedCellId?: string
-  metricResults?: ReactNode
 }) {
   const [internalMetric, setInternalMetric] = useState<string>('')
   const measurements = selectedResultMetrics(summary)
@@ -78,8 +77,7 @@ export function ResultsProgress({ summary, cells, cellsLoading, cellsError, atte
         {measurements.map(item => <option key={item.key} value={`metric:${item.key}`}>{item.label}</option>)}
       </select>
     </label>
-    {measurement && <p className="text-[11px] text-muted-foreground">Selected metrics show the latest attempt for each {summary.unit === 'row' ? 'row execution. Row outcomes are listed individually without cell aggregation' : 'replicate. Numeric cell summaries use completed attempts that did not reach their iteration limit'}. Recorded values and reasons for missing results are listed by cell below. The attempt toggle above applies only to operational usage summaries. Missing measurements are excluded, not treated as zero.</p>}
+    {measurement && <p className="text-[11px] text-muted-foreground">Selected metrics show the latest attempt for each {summary.unit === 'row' ? 'row execution. Row outcomes are listed individually without cell aggregation' : 'replicate. Numeric cell summaries use completed attempts that did not reach their iteration limit'}. Open a cell below to inspect its recorded values and reasons for missing results. The attempt toggle above applies only to operational usage summaries. Missing measurements are excluded, not treated as zero.</p>}
     {(!measurement || summary.unit === 'replicate') && <CellUsageChart cells={cells} metric={usageMetric} measurement={measurement} loading={cellsLoading} error={cellsError} attemptScope={attemptScope} pagination={chartPagination} completed={completedExperiment} onSelectCell={onSelectCell} selectedCellId={selectedCellId} />}
-    {measurement && metricResults}
   </section>
 }

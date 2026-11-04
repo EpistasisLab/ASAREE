@@ -65,28 +65,26 @@ describe('bounded Results reads', () => {
     expect(failure).toHaveTextContent('Reviewer failed: Provider quota exceeded.')
   })
 
-  it('shows selected hash values and unavailable numeric-metric reasons in the Results panel', async () => {
+  it('uses the same compact cell list for numeric and nonnumeric reports', async () => {
+    const select = vi.fn()
     vi.mocked(experimentsApi.getExecutionSummary).mockResolvedValue({ ...summary,
       metric_labels: { hash: 'Prompt SHA-256', errors: 'Tool error rate' },
       metric_types: { errors: 'number' }, metric_aggregations: { errors: 'mean' },
     })
-    vi.mocked(experimentsApi.getCellMetricObservations).mockImplementation(async (_id, _scope, metricKey) => ({
-      cells: [{ cell_id: cell.cell_id, total: 1, items: [{
-        slot_id: slot.slot_id, replicate_label: slot.replicate_label, replicate_number: 1, row_index: null,
-        execution_status: 'completed', status: metricKey === 'hash' ? 'measured' : 'unavailable',
-        value_preview: metricKey === 'hash' ? '"hash-from-published-prompt"' : 'null', value_truncated: false,
-        reason: metricKey === 'hash' ? null : 'Tool error rate is undefined because no tool calls were attempted.',
-        exclusion_reason: null,
-      }] }], offset: 0, limit: 20,
-    }))
-    mount(<ResultsTab experimentId="experiment" experimentName="Measurements" experiment={experiment} versionId="v1" onSelectResult={vi.fn()} />)
+    mount(<ResultsTab experimentId="experiment" experimentName="Measurements" experiment={experiment} versionId="v1" onSelectResult={select} />)
     const picker = await screen.findByRole('combobox', { name: 'Metric by cell' })
     fireEvent.change(picker, { target: { value: 'metric:hash' } })
-    expect(await screen.findByText('hash-from-published-prompt')).toBeVisible()
-    expect(screen.getByText('See recorded values')).toBeVisible()
+    const list = within(screen.getByRole('list', { name: 'Cells' }))
+    fireEvent.click(list.getByRole('button', { name: /Cell 1: model: a/ }))
+    expect(select).toHaveBeenLastCalledWith({ type: 'cell', cellId: cell.cell_id, cellLabel: cell.cell_label,
+      scope: { protocol_id: undefined, protocol_revision_id: 'v1' } })
     fireEvent.change(picker, { target: { value: 'metric:errors' } })
-    expect(await screen.findByText('Tool error rate is undefined because no tool calls were attempted.')).toBeVisible()
-    expect(experimentsApi.getCellMetricObservations).toHaveBeenLastCalledWith('experiment', { protocol_id: undefined, protocol_revision_id: 'v1' }, 'errors', [cell.cell_id], 0, expect.any(AbortSignal))
+    fireEvent.click(list.getByRole('button', { name: /Cell 1: model: a/ }))
+    expect(select).toHaveBeenCalledTimes(2)
+    fireEvent.click(screen.getByRole('button', { name: 'Open Cell 1 details' }))
+    expect(select.mock.calls[2]).toEqual(select.mock.calls[1])
+    expect(screen.queryByRole('table', { name: 'Cells' })).not.toBeInTheDocument()
+    expect(experimentsApi.getCellMetricObservations).not.toHaveBeenCalled()
   })
 
   it('clears the selected chart bar when the cell inspector closes', async () => {
@@ -198,13 +196,13 @@ describe('bounded Results reads', () => {
     expect(latestButton).toHaveAttribute('aria-pressed', 'true')
     expect(within(screen.getByRole('button', { name: 'Show total tokens by cell' })).getByText('200')).toBeInTheDocument()
     expect(await screen.findByRole('img', { name: 'Cell 1: 200' })).toBeInTheDocument()
-    const table = within(screen.getByRole('table', { name: 'Cells' }))
-    expect(table.getByRole('columnheader', { name: 'Tokens' })).toBeInTheDocument()
+    const table = within(screen.getByRole('list', { name: 'Cells' }))
+    expect(table.getByText('Tokens:')).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Show final cost by cell' }))
-    expect(table.getByRole('columnheader', { name: 'Cost' })).toBeInTheDocument()
+    expect(table.getByText('Cost:')).toBeInTheDocument()
     expect(table.getByText('$0.02')).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Show total execution time by cell' }))
-    expect(table.getByRole('columnheader', { name: 'Duration' })).toBeInTheDocument()
+    expect(table.getByText('Duration:')).toBeInTheDocument()
     expect(table.getByText('1.0 min')).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Show total tokens by cell' }))
     fireEvent.click(screen.getByRole('button', { name: 'All attempts' }))
@@ -222,8 +220,9 @@ describe('bounded Results reads', () => {
     mount(<ExecutionBrowser experimentId="experiment" scope={{ protocol_revision_id: 'v1' }} mode={mode} onSelect={select} />)
     const toggle = await screen.findByRole('button', { name: /model: a|^Cell 1$/ })
     expect(within(toggle).getByText('Cell 1:')).toBeInTheDocument()
-    expect(within(toggle).queryByText('15786 replicates')).not.toBeInTheDocument()
-    if (mode === 'runs') expect(screen.getByText('15786 replicates')).toBeInTheDocument()
+    if (mode === 'runs') expect(within(toggle).queryByText('15786 replicates')).not.toBeInTheDocument()
+    else expect(within(toggle).getByText('15786 replicates')).toBeInTheDocument()
+    expect(screen.getByText('15786 replicates')).toBeInTheDocument()
     fireEvent.click(toggle)
     if (mode === 'results') {
       expect(toggle).not.toHaveAttribute('aria-expanded')
@@ -240,7 +239,7 @@ describe('bounded Results reads', () => {
     expect(select).toHaveBeenCalledTimes(mode === 'results' ? 2 : 0)
   })
 
-  it('shows replicate progress in the Results table and opens details', async () => {
+  it('shows replicate progress in the Results list and opens details', async () => {
     vi.mocked(experimentsApi.getExecutionSummary).mockResolvedValue({ ...summary, cell_count: 1,
       cell_result_counts: { ready: 0, needs_attention: 1, awaiting_results: 0 } })
     vi.mocked(experimentsApi.listExecutionCells).mockResolvedValue({ items: [{ ...cell, result_status: 'needs_attention' }], total: 1, next_cursor: null })
@@ -312,7 +311,7 @@ describe('bounded Results reads', () => {
     expect(screen.getByRole('button', { name: 'Download CSV' })).toBeInTheDocument()
     expect(screen.queryByLabelText('Cell status counts')).not.toBeInTheDocument()
     expect(screen.queryByText('15786/15786 complete')).not.toBeInTheDocument()
-    expect(screen.getByRole('table', { name: 'Cells' })).toBeInTheDocument()
+    expect(screen.getByRole('list', { name: 'Cells' })).toBeInTheDocument()
     fireEvent.change(screen.getByRole('searchbox'), { target: { value: 'model' } })
     await waitFor(() => expect(experimentsApi.listExecutionCells).toHaveBeenLastCalledWith('experiment', expect.anything(),
       { cursor: undefined, limit: 10, search: 'model', status: undefined }, expect.any(AbortSignal)))

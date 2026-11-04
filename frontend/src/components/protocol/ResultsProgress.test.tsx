@@ -67,11 +67,11 @@ describe('Results usage charts', () => {
     expect(group.getByRole('option', { name: 'Custom outcome' })).toBeEnabled()
   })
 
-  it('lists selected metrics in row mode and displays individual outcomes without aggregation', () => {
+  it('lists selected metrics in row mode and directs users to cell details without aggregation', () => {
     render(<ResultsProgress summary={{ ...summary, unit: 'row', metric_labels: { outcome: 'Row outcome' } }}
-      cells={cells} cellsLoading={false} metricResults={<p>Recorded row values</p>} />)
+      cells={cells} cellsLoading={false} />)
     fireEvent.change(screen.getByRole('combobox', { name: 'Metric by cell' }), { target: { value: 'metric:outcome' } })
-    expect(screen.getByText('Recorded row values')).toBeVisible()
+    expect(screen.getByText(/Open a cell below to inspect its recorded values/)).toBeVisible()
     expect(screen.getByText(/Row outcomes are listed individually without cell aggregation/)).toBeVisible()
     expect(screen.queryByRole('region', { name: 'Row outcome by cell' })).not.toBeInTheDocument()
   })

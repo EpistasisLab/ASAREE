@@ -14,8 +14,7 @@ import type { Experiment } from '@/types/experiments'
 import type { ResultsSelection } from './ResultsTab'
 import { ResultsPanel } from './ResultsPanel'
 import { ResultsProgress } from './ResultsProgress'
-import { CellMetricResults } from './CellMetricResults'
-import { ResultsCellsTable } from './ResultsCellsTable'
+import { ResultsCellsList } from './ResultsCellsList'
 import { formatUsageDistributionValue, type UsageMetric } from '@/lib/resultUsage'
 import { ResultsMetadata } from './ResultsContext'
 import { CellCard, ReplicateRow, ReplicateStatus } from './CellPresentation'
@@ -131,10 +130,10 @@ export function ExecutionBrowser({ experimentId, scope, experiment, mode, onSele
     {cells.isPending ? <Skeleton className="h-20" /> : cells.error && !cells.data ? <p role="alert" className="text-xs text-destructive">{cells.error.message}</p> : <>
       <CursorControls next={cells.data?.next_cursor} back={pager.back} onNext={pager.next} onBack={pager.previous} busy={cells.isFetching} pageIndex={pager.pageIndex} count={cells.data?.items.length} total={cells.data?.total} recordLabel="cells" />
       {!cells.data?.items.length && <p className="text-xs text-muted-foreground">{hasExecutionFilters(filters) ? 'No cells match these filters.' : 'No generated cells in this version.'}</p>}
-      {mode === 'results' ? !!cells.data?.items.length && <ResultsCellsTable cells={cells.data.items} metric={usageMetric} measurement={measurement || undefined}
+      {mode === 'results' ? !!cells.data?.items.length && <ResultsCellsList cells={cells.data.items} metric={usageMetric} measurement={measurement || undefined}
         designSpec={summary.data?.design_spec ?? experiment?.design_spec}
         attemptScope={attemptScope} unit={summary.data?.unit ?? 'replicate'} startIndex={pager.pageIndex * EXECUTION_PAGE_SIZE}
-        onSelect={selectCell} />
+        onSelect={selectCell} selectedCellId={selectedCellId} />
         : cells.data?.items.map(cell => <CellCard key={cell.cell_id} label={cell.cell_label}
         cellNumber={cell.cell_number}
         conditions={Object.entries(cell.factor_values).map(([name, value]) => displayFactorCondition(name, value, summary.data?.design_spec ?? experiment?.design_spec, cell.cell_label))}
@@ -181,9 +180,6 @@ export function ExecutionBrowser({ experimentId, scope, experiment, mode, onSele
   return mode === 'results' && experiment
     ? <ResultsPanel experimentId={experimentId} experimentName={experiment.name} scope={scope}
       progress={summary.data?.ready && <ResultsProgress summary={summary.data} cells={cells.data?.items ?? []}
-        metricResults={measurement && <CellMetricResults cells={cells.data?.items ?? []} experimentId={experimentId}
-          scope={scope} metric={measurement} generation={summary.data.generation} onSelectCell={selectCell}
-          cellsLoading={cells.isPending} cellsError={cells.error?.message} />}
         selectedMetric={metric} onMetricChange={setMetric} onSelectCell={selectCell} selectedCellId={selectedCellId}
         cellsLoading={cells.isPending} cellsError={cells.error?.message} attemptScope={attemptScope} onAttemptScopeChange={setAttemptScope}
         chartPagination={!!cells.data?.items.length && <div className="flex flex-wrap items-center justify-end gap-2">

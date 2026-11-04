@@ -183,10 +183,10 @@ describe('bounded Results reads', () => {
     expect(screen.queryByRole('button', { name: 'Clear range' })).not.toBeInTheDocument()
   })
 
-  it('switches totals and cell bars between latest and all attempts', async () => {
+  it('switches cell bars and list usage between latest and all attempts', async () => {
     const latest = { cost_usd: 0.02, total_tokens: 200, duration_seconds: 60, input_tokens: null, output_tokens: null, agent_run_count: null }
     const all = { ...latest, total_tokens: 500, cost_usd: 0.05, duration_seconds: 120 }
-    vi.mocked(experimentsApi.getExecutionSummary).mockResolvedValue({ ...summary, usage: latest, all_attempt_usage: all })
+    vi.mocked(experimentsApi.getExecutionSummary).mockResolvedValue({ ...summary, metric_labels: {}, usage: latest, all_attempt_usage: all })
     vi.mocked(experimentsApi.listExecutionCells).mockImplementation(async (_id, _scope, params) => ({
       items: [{ ...cell, cell_number: 1, usage: latest, ...(params?.include_all_attempt_usage ? { all_attempt_usage: all } : {}) }],
       next_cursor: null, total: 1,
@@ -194,25 +194,19 @@ describe('bounded Results reads', () => {
     mount(<ResultsTab experimentId="experiment" experimentName="Measurements" experiment={experiment} onSelectResult={vi.fn()} />)
     const latestButton = await screen.findByRole('button', { name: 'Latest attempts' })
     expect(latestButton).toHaveAttribute('aria-pressed', 'true')
-    expect(within(screen.getByRole('button', { name: 'Show total tokens by cell' })).getByText('200')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /^Show .* by cell$/ })).not.toBeInTheDocument()
     expect(await screen.findByRole('img', { name: 'Cell 1: 200' })).toBeInTheDocument()
     const table = within(screen.getByRole('list', { name: 'Cells' }))
     expect(table.getByText('Tokens:')).toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', { name: 'Show final cost by cell' }))
-    expect(table.getByText('Cost:')).toBeInTheDocument()
-    expect(table.getByText('$0.02')).toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', { name: 'Show total execution time by cell' }))
-    expect(table.getByText('Duration:')).toBeInTheDocument()
-    expect(table.getByText('1.0 min')).toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', { name: 'Show total tokens by cell' }))
+    expect(table.getByText('200')).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'All attempts' }))
     expect(await screen.findByRole('img', { name: 'Cell 1: 500' })).toBeInTheDocument()
-    expect(within(screen.getByRole('button', { name: 'Show total tokens by cell' })).getByText('500')).toBeInTheDocument()
+    expect(within(screen.getByRole('list', { name: 'Cells' })).getByText('500')).toBeInTheDocument()
     expect(screen.getByText('Includes previous attempts and retries.')).toBeInTheDocument()
     expect(screen.getByText('Cells 1–1 of 1')).toBeInTheDocument()
     fireEvent.click(latestButton)
     expect(await screen.findByRole('img', { name: 'Cell 1: 200' })).toBeInTheDocument()
-    expect(within(screen.getByRole('button', { name: 'Show total tokens by cell' })).getByText('200')).toBeInTheDocument()
+    expect(within(screen.getByRole('list', { name: 'Cells' })).getByText('200')).toBeInTheDocument()
   })
 
   it.each(['runs', 'results'] as const)('expands a %s cell and opens the inspector only in Results', async mode => {

@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ChevronRight } from 'lucide-react'
 import { statsApi } from '@/api/client'
 import { Button } from '@/components/ui/button'
+import { Badge } from '@/components/ui/badge'
 import { StatisticsReport } from './StatisticsReport'
 import type { StatsAnalysis, StatsMetricSource } from '@/types/stats'
 
@@ -87,6 +88,17 @@ function ReportRow({ experiment, metric, analysis, sourceFingerprint }: {
     : analysis.status === 'failed' ? 'Analysis failed' : analysis.status === 'incomplete' ? 'Analysis incomplete'
     : analysis.report_status === 'descriptive' ? 'Descriptive only'
     : analysis.report_status === 'valid' ? 'Report ready' : 'Report unavailable'
+  const statusColor = {
+    'Needs measurements': 'text-[color:var(--chart-4)]',
+    'Not analyzed': 'text-muted-foreground',
+    'Queued': 'text-[color:var(--chart-4)]',
+    'Analyzing': 'text-primary',
+    'Analysis failed': 'text-destructive',
+    'Analysis incomplete': 'text-[color:var(--chart-4)]',
+    'Descriptive only': 'text-primary',
+    'Report ready': 'text-[color:var(--chart-3)]',
+    'Report unavailable': 'text-[color:var(--chart-4)]',
+  }[status]
   const outdated = finished && sourceFingerprint && analysis.fingerprint !== sourceFingerprint
   const valid = analysis?.report_status === 'valid' || analysis?.report_status === 'descriptive'
   const reason = analysis?.error || (finished && !valid && !outdated && metric.availability_reason)
@@ -99,7 +111,10 @@ function ReportRow({ experiment, metric, analysis, sourceFingerprint }: {
       <ChevronRight aria-hidden="true" className={`size-3.5 shrink-0 transition-transform ${open ? 'rotate-90' : ''}`} />
       <span className="min-w-0 flex-1 space-y-1">
         <span className="block break-words text-[0.95625rem] font-semibold">{metric.name}</span>
-        <span className="block text-muted-foreground">{status}{outdated ? ' · Results changed' : ''}</span>
+        <span className="flex flex-wrap gap-1.5">
+          <Badge variant="outline" className={`border-current ${statusColor}`}>{status}</Badge>
+          {outdated && <Badge variant="outline" className="border-[color:var(--chart-4)]/40 text-[color:var(--chart-4)]">Results changed</Badge>}
+        </span>
         {metric.n_usable != null && <span className="block font-mono text-muted-foreground">Current: {metric.n_usable} usable measurements · least-measured observed cell: {metric.minimum_per_cell ?? 0}</span>}
         {metric.n_usable == null && <span className="block font-mono text-muted-foreground">{metric.n} recorded measurements</span>}
         {reason && <span className="block break-words text-muted-foreground">{reason}</span>}

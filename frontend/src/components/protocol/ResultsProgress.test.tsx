@@ -44,9 +44,7 @@ describe('Results usage charts', () => {
     expect(within(picker).queryByRole('group', { name: 'Operational usage summaries' })).not.toBeInTheDocument()
     fireEvent.change(picker, { target: { value: 'metric:cost' } })
     expect(picker).toHaveValue('metric:cost')
-    fireEvent.click(screen.getByRole('button', { name: 'Show tokens so far by cell' }))
-    expect(picker).toHaveValue('')
-    expect(screen.getByRole('region', { name: 'Tokens by cell' })).toBeVisible()
+    expect(screen.queryByRole('button', { name: /^Show .* by cell$/ })).not.toBeInTheDocument()
   })
 
   it('disables the metric dropdown when the experiment has no selected metrics', () => {
@@ -95,30 +93,24 @@ describe('Results usage charts', () => {
     expect(screen.queryByRole('img')).not.toBeInTheDocument()
   })
 
-  it('switches tile and chart labels when the experiment completes', () => {
-    const view = render(<ResultsProgress summary={summary} cells={cells} cellsLoading={false} />)
-    expect(screen.getByRole('button', { name: 'Show tokens so far by cell' })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Show cost so far by cell' })).toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', { name: 'Show accumulated execution time by cell' }))
+  it('switches chart labels when the experiment completes without usage buttons', () => {
+    const view = render(<ResultsProgress summary={summary} cells={cells} cellsLoading={false} selectedMetric="duration_seconds" />)
+    expect(screen.queryByRole('button', { name: /^Show .* by cell$/ })).not.toBeInTheDocument()
     expect(screen.getByRole('region', { name: 'Accumulated execution time by cell' })).toBeInTheDocument()
     expect(screen.getByText('Partial data')).toBeInTheDocument()
-    view.rerender(<ResultsProgress summary={{ ...summary, counts: { completed: 2 } }} cells={cells} cellsLoading={false} />)
-    expect(screen.getByRole('button', { name: 'Show total tokens by cell' })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Show final cost by cell' })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Show total execution time by cell' })).toHaveAttribute('aria-pressed', 'true')
+    view.rerender(<ResultsProgress summary={{ ...summary, counts: { completed: 2 } }} cells={cells} cellsLoading={false} selectedMetric="duration_seconds" />)
+    expect(screen.queryByRole('button', { name: /^Show .* by cell$/ })).not.toBeInTheDocument()
     expect(screen.getByRole('region', { name: 'Total execution time by cell' })).toBeInTheDocument()
     expect(screen.queryByText('Partial data')).not.toBeInTheDocument()
   })
 
-  it('switches between cell metrics using the tiles and keeps stable cell numbers', () => {
-    render(<ResultsProgress summary={summary} cells={cells} cellsLoading={false} />)
+  it('keeps stable cell numbers across operational charts', () => {
+    const view = render(<CellUsageChart metric="total_tokens" cells={cells} loading={false} />)
     expect(screen.getByRole('region', { name: 'Tokens by cell' })).toBeInTheDocument()
     expect(screen.getByRole('img', { name: 'Cell 7: 1,200' })).toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', { name: 'Show cost so far by cell' }))
-    expect(screen.getByRole('button', { name: 'Show cost so far by cell' })).toHaveAttribute('aria-pressed', 'true')
-    expect(screen.getByRole('button', { name: 'Show tokens so far by cell' })).toHaveAttribute('aria-pressed', 'false')
+    view.rerender(<CellUsageChart metric="cost_usd" cells={cells} loading={false} />)
     expect(within(screen.getByRole('region', { name: 'Cost by cell' })).getByRole('img', { name: 'Cell 7: $0.03' })).toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', { name: 'Show accumulated execution time by cell' }))
+    view.rerender(<CellUsageChart metric="duration_seconds" cells={cells} loading={false} />)
     expect(screen.getByRole('img', { name: 'Cell 7: 65 s' })).toBeInTheDocument()
     expect(screen.getByRole('img', { name: 'Cell 8: Not reported' })).toBeInTheDocument()
   })
@@ -160,7 +152,6 @@ describe('Results usage charts', () => {
     const usage = { ...cells[0].usage!, total_tokens: tokens }
     render(<ResultsProgress summary={{ ...summary, usage }} cells={[{ ...cells[0], usage }]} cellsLoading={false} />)
     const exact = tokens.toLocaleString('en-US')
-    expect(within(screen.getByRole('button', { name: 'Show tokens so far by cell' })).getByText(compact)).toHaveAttribute('title', `${exact} tokens`)
     const chart = within(screen.getByRole('region', { name: 'Tokens by cell' }))
     expect(chart.getByText(axisLabel)).toBeInTheDocument()
     expect(chart.getByRole('img', { name: `Cell 7: ${exact}` })).toHaveAttribute('title', `Cell 7 · model=a\nTokens so far: ${exact}`)

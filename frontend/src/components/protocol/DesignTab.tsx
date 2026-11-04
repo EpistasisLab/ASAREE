@@ -47,6 +47,7 @@ import {
   type DesignMetric,
   type Experiment,
   type MeasurementPlan,
+  type MetricRecommendationMetadata,
 } from '@/types/experiments'
 
 const AUTOSAVE_DELAY_MS = 800
@@ -331,6 +332,7 @@ export function DesignTab({
   const [randomizationSeed, setRandomizationSeed] = useState<number | null>(experiment.design_spec?.randomization_seed ?? null)
   const [metrics, setMetrics] = useState<DesignMetric[]>(() => normalizeDesignMetrics(experiment.design_spec?.metrics))
   const [measurementPlan, setMeasurementPlan] = useState<MeasurementPlan | null>(experiment.measurement_plan)
+  const [metricRecommendations, setMetricRecommendations] = useState(experiment.metric_recommendations ?? null)
   const [coordinationSlug, setCoordinationSlug] = useState<CoordinationStrategySlug>(
     experiment.design_spec?.coordination_strategy?.slug ?? 'sequential',
   )
@@ -338,7 +340,7 @@ export function DesignTab({
   const [pendingStrategy, setPendingStrategy] = useState<{ slug: CoordinationStrategySlug; issues: string[] } | null>(
     null,
   )
-  const metadataDraft: MetadataDraft = { hypothesis, randomizationSeed, metrics, measurementPlan, coordinationSlug }
+  const metadataDraft: MetadataDraft = { hypothesis, randomizationSeed, metrics, measurementPlan, metricRecommendations, coordinationSlug }
   const metadataDraftKey = JSON.stringify(metadataDraft)
   const matrixDraftKey = JSON.stringify({ factors, replicates })
   const latestMetadataDraftKey = useRef(metadataDraftKey)
@@ -391,6 +393,7 @@ export function DesignTab({
     setRandomizationSeed(experiment.design_spec?.randomization_seed ?? null)
     setMetrics(normalizeDesignMetrics(experiment.design_spec?.metrics))
     setMeasurementPlan(experiment.measurement_plan)
+    setMetricRecommendations(experiment.metric_recommendations ?? null)
     setCoordinationSlug(experiment.design_spec?.coordination_strategy?.slug ?? 'sequential')
     seededMetadataRef.current = designMetadataOf(experiment)
   }, [experiment])
@@ -540,6 +543,7 @@ export function DesignTab({
   async function applyMetrics(
     nextMetrics: DesignMetric[],
     nextPlan: MeasurementPlan | null,
+    nextRecommendations: MetricRecommendationMetadata | null = metricRecommendations,
   ) {
     // Cancel a not-yet-started metadata debounce and enqueue this transaction
     // after any write already in flight. Otherwise an older autosave response
@@ -551,6 +555,7 @@ export function DesignTab({
       randomizationSeed,
       metrics: nextMetrics,
       measurementPlan: nextPlan,
+      metricRecommendations: nextRecommendations,
       coordinationSlug,
     }, seededMetadataRef.current)
     let updated: Experiment
@@ -567,10 +572,11 @@ export function DesignTab({
     // This transaction owns this snapshot. Mark it as already saved
     // before updating local state so the surrounding metadata autosave cannot
     // emit a duplicate PATCH while the refreshed experiment propagates.
-    const nextMetadataKey = JSON.stringify({ hypothesis, randomizationSeed, metrics: nextMetrics, measurementPlan: nextPlan, coordinationSlug })
+    const nextMetadataKey = JSON.stringify({ hypothesis, randomizationSeed, metrics: nextMetrics, measurementPlan: nextPlan, metricRecommendations: nextRecommendations, coordinationSlug })
     lastScheduledMetadataSaveKeyRef.current = `${nextMetadataKey}:${matrixDraftKey}`
     setMetrics(nextMetrics)
     setMeasurementPlan(nextPlan)
+    setMetricRecommendations(nextRecommendations)
     queryClient.setQueryData(['experiments', experiment.id], updated)
     queryClient.invalidateQueries({ queryKey: ['experiments'] })
     queryClient.invalidateQueries({ queryKey: ['experiments', experiment.id, 'design-impact'] })
@@ -811,7 +817,7 @@ export function DesignTab({
             created from Script or MCP Tool nodes.
           </InfoTooltip>
         </Label>
-        <MetricsEditor experimentId={experiment.id} protocolId={protocolId} metrics={metrics} measurementPlan={measurementPlan} graph={graphQuery.data as ProtocolGraph | undefined} onChange={(nextMetrics, nextPlan) => { setMetrics(nextMetrics); setMeasurementPlan(nextPlan) }} onApplyMetrics={applyMetrics} disabled={isLocked} />
+        <MetricsEditor experimentId={experiment.id} protocolId={protocolId} metrics={metrics} measurementPlan={measurementPlan} metricRecommendations={metricRecommendations} graph={graphQuery.data as ProtocolGraph | undefined} onChange={(nextMetrics, nextPlan) => { setMetrics(nextMetrics); setMeasurementPlan(nextPlan) }} onApplyMetrics={applyMetrics} disabled={isLocked} />
       </div>
 
       <div className="space-y-1.5 rounded-md border bg-muted/30 px-3 py-2">

@@ -5,7 +5,7 @@ import { useState } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { experimentsApi } from '@/api/client'
 import { METRIC_CATALOG } from '@/lib/metricCatalog'
-import type { DesignMetric, MeasurementPlan } from '@/types/experiments'
+import type { DesignMetric, MeasurementPlan, MetricRecommendationMetadata } from '@/types/experiments'
 import type { ProtocolGraph } from '@/types/protocols'
 import { MetricsEditor } from './MetricsEditor'
 
@@ -82,7 +82,7 @@ describe('built-in metric canvas availability', () => {
     }
   })
 
-  it('unselects a built-in metric when removing its required canvas node makes it unavailable', async () => {
+  it('defaults existing experiments to available metrics, preserves opt-outs, and reselects after availability returns', async () => {
     const user = userEvent.setup()
     const costMetric: DesignMetric = {
       id: 'metric-cost',
@@ -105,6 +105,7 @@ describe('built-in metric canvas availability', () => {
       nodes: [
         { id: 'writer', type: 'agent', position: { x: 0, y: 0 }, data: { label: 'Writer', active: true, config: {} } },
         { id: 'tools', type: 'mcp_tool', position: { x: 0, y: 0 }, data: { label: 'Tools', config: { server_id: 'server-1', tool_names: ['search'], enabled: true } } },
+        { id: 'critic', type: 'critic_gate', position: { x: 0, y: 0 }, data: { label: 'Critic', config: {} } },
       ],
       edges: [{ id: 'tools-writer', source: 'tools', target: 'writer', targetHandle: 'tool' }],
     } as unknown as ProtocolGraph
@@ -114,17 +115,22 @@ describe('built-in metric canvas availability', () => {
       const [graph, setGraph] = useState<ProtocolGraph>(graphWithTool)
       const [metrics, setMetrics] = useState<DesignMetric[]>([costMetric])
       const [plan, setPlan] = useState<MeasurementPlan | null>(measurementPlan)
+      const [recommendations, setRecommendations] = useState<MetricRecommendationMetadata | null>(null)
       return <>
         <button type="button" onClick={() => setGraph({ nodes: [], edges: [] } as ProtocolGraph)}>Remove tool node</button>
+        <button type="button" onClick={() => setGraph(graphWithTool)}>Restore nodes</button>
         <MetricsEditor
           experimentId="experiment-1"
           metrics={metrics}
           measurementPlan={plan}
+          metricRecommendations={recommendations}
           graph={graph}
-          onChange={(nextMetrics, nextPlan) => {
-            saved(nextMetrics, nextPlan)
+          onChange={vi.fn()}
+          onApplyMetrics={async (nextMetrics, nextPlan, nextRecommendations) => {
+            saved(nextMetrics, nextPlan, nextRecommendations)
             setMetrics(nextMetrics)
             setPlan(nextPlan)
+            setRecommendations(nextRecommendations ?? null)
           }}
         />
       </>
@@ -136,8 +142,8 @@ describe('built-in metric canvas availability', () => {
     await waitFor(() => expect(screen.getByText('Built-in metrics loaded.')).toBeInTheDocument())
 
     const toolCalls = screen.getByRole('checkbox', { name: /^Tool calls/ })
-    await user.click(toolCalls)
     expect(toolCalls).toBeChecked()
+    expect(screen.getByRole('checkbox', { name: /^Critic approvals/ })).toBeChecked()
     await waitFor(() => expect(saved).toHaveBeenCalledTimes(1))
     const selectedPlan = saved.mock.lastCall?.[1] as MeasurementPlan | undefined
     expect(selectedPlan?.producers[0]?.outputs).toHaveProperty('tool_calls')
@@ -149,5 +155,48 @@ describe('built-in metric canvas availability', () => {
     await waitFor(() => expect(saved).toHaveBeenCalledTimes(2))
     const unselectedPlan = saved.mock.lastCall?.[1] as MeasurementPlan | undefined
     expect(unselectedPlan?.producers[0]?.outputs).not.toHaveProperty('tool_calls')
+    expect(screen.getByRole('checkbox', { name: /^Critic approvals/ })).not.toBeChecked()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Restore nodes', hidden: true }))
+    await waitFor(() => expect(toolCalls).toBeChecked())
+    expect(screen.getByRole('checkbox', { name: /^Critic approvals/ })).toBeChecked()
+    await waitFor(() => expect(saved).toHaveBeenCalledTimes(3))
+
+    await user.click(toolCalls)
+    await waitFor(() => expect(saved).toHaveBeenCalledTimes(4))
+    expect(saved.mock.lastCall?.[2]).toMatchObject({ intentionally_removed_keys: ['tool_calls'] })
+    await user.click(screen.getByRole('button', { name: 'Close' }))
+    await user.click(screen.getByRole('button', { name: 'Manage metrics' }))
+    expect(screen.getByRole('checkbox', { name: /^Tool calls/ })).not.toBeChecked()
+
+    // Availability is also reconciled while the dialog is closed.
+    await user.click(screen.getByRole('button', { name: 'Close' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Remove tool node' }))
+    await waitFor(() => expect(saved).toHaveBeenCalledTimes(5))
+    fireEvent.click(screen.getByRole('button', { name: 'Restore nodes' }))
+    await waitFor(() => expect(saved).toHaveBeenCalledTimes(6))
+    await user.click(screen.getByRole('button', { name: 'Manage metrics' }))
+    expect(screen.getByRole('checkbox', { name: /^Tool calls/ })).toBeChecked()
+  }, 10_000)
+
+  it('restores saved manual opt-outs and leaves unsupported built-ins unchecked', async () => {
+    vi.mocked(experimentsApi.getMeasurementCapabilities).mockResolvedValue({
+      outputs: { 'asaree.runtime': ['cost_usd', 'duration_seconds'] },
+    })
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    render(<QueryClientProvider client={client}><MetricsEditor
+      experimentId="experiment-1"
+      metrics={[]}
+      measurementPlan={null}
+      metricRecommendations={{ applied_version: 1, dismissed_version: null, intentionally_removed_keys: ['cost_usd'] }}
+      graph={{ nodes: [], edges: [] } as ProtocolGraph}
+      onChange={vi.fn()}
+    /></QueryClientProvider>)
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Add metrics' }))
+    await waitFor(() => expect(screen.getByText('Built-in metrics loaded.')).toBeInTheDocument())
+    expect(screen.getByRole('checkbox', { name: /^Cost/ })).not.toBeChecked()
+    expect(screen.getByRole('checkbox', { name: /^Duration/ })).toBeChecked()
+    expect(screen.getByRole('checkbox', { name: /^Total tokens/ })).not.toBeChecked()
+    expect(screen.getByRole('checkbox', { name: /^Total tokens/ })).toHaveAttribute('aria-disabled', 'true')
   })
 })

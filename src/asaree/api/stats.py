@@ -15,6 +15,7 @@ from asaree.models.experiment import ResearchExperiment
 from asaree.models.stats_analysis import StatsAnalysis
 from asaree.services.stats_distribution import report_distribution
 from asaree.services.stats_findings import describe_report_findings
+from asaree.services.stats_labels import present_summary
 from asaree.services.stats_source import StatsRequest, catalog, read_source
 from asaree.worker.enqueue import _get_pool
 
@@ -44,7 +45,10 @@ async def replace_automatic_reports(
     await db.execute(delete(StatsAnalysis).where(*scope).execution_options(synchronize_session=False))
 
 
-def summary(analysis: StatsAnalysis, *, detail: bool = False, report_status: str | None = None) -> dict:
+def summary(
+    analysis: StatsAnalysis, *, detail: bool = False,
+    report_status: str | None = None, report_warnings: list[str] | None = None,
+) -> dict:
     result = dict(
         id=str(analysis.id),
         status=analysis.status,
@@ -54,10 +58,14 @@ def summary(analysis: StatsAnalysis, *, detail: bool = False, report_status: str
         fingerprint=analysis.request["source"]["fingerprint"],
         design_revision=analysis.request["source"]["design_revision"],
         report_status=report_status,
+        report_warnings=report_warnings or [],
     )
     if detail:
         result["output"] = dict(analysis.output)
         if report := analysis.output.get("summary"):
+            report = present_summary(
+                report, analysis.request["config"].get("factors"), analysis.output.get("family"), analysis.output,
+            )
             result["output"]["summary"] = dict(report, findings=describe_report_findings(report))
             if distribution := report_distribution(
                 analysis.output, analysis.request["source"], analysis.request["config"],
@@ -85,7 +93,10 @@ async def history(
 ) -> list[dict]:
     await _get_owned_experiment(db, experiment_id, user)
     statement = (
-        select(StatsAnalysis, StatsAnalysis.output["summary"]["status"].as_string())
+        select(
+            StatsAnalysis, StatsAnalysis.output["summary"]["status"].as_string(),
+            StatsAnalysis.output["summary"]["warnings"],
+        )
         .options(defer(StatsAnalysis.output))
         .where(StatsAnalysis.experiment_id == experiment_id, AUTOMATIC)
     )
@@ -100,7 +111,7 @@ async def history(
             .limit(100)
         )
     ).all()
-    return [summary(a, report_status=report_status) for a, report_status in analyses]
+    return [summary(a, report_status=status, report_warnings=warnings) for a, status, warnings in analyses]
 
 
 @router.get("/{experiment_id}/analyses/{analysis_id}")
@@ -126,8 +137,11 @@ async def report(experiment_id: uuid.UUID, analysis_id: uuid.UUID, user: Current
     saved = await detail(experiment_id, analysis_id, user, db)
     if saved["status"] not in {"completed", "incomplete"} or not saved["output"].get("summary"):
         raise HTTPException(409, "The analysis has not completed.")
+    analysis = await db.get(StatsAnalysis, analysis_id)
+    if analysis is None:
+        raise HTTPException(404, "Analysis not found")
     try:
-        html = render_html(saved)
+        html = render_html(saved, source=analysis.request["source"])
     except ValueError as exc:
         raise HTTPException(409, str(exc)) from exc
     return HTMLResponse(

@@ -1,3 +1,4 @@
+import { displayFactorName } from '@/lib/factorLabels'
 import { useCallback, useState, type ReactNode } from 'react'
 import { useEdges, useNodes } from '@xyflow/react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
@@ -163,7 +164,7 @@ export function FactorBindableField({
     return children(
       <Badge variant="outline" className="gap-1">
         <button type="button" onClick={() => requestEditFactor(boundFactorName)} className="cursor-pointer underline-offset-2 hover:underline">
-          Factor: {boundFactorName}
+          Factor: {displayFactorName(boundFactorName)}
         </button>
         <button type="button" onClick={onUnbind} aria-label="Remove factor binding" className="cursor-pointer hover:text-destructive">
           <X className="size-3" />
@@ -260,7 +261,7 @@ export function FactorBindableField({
       <PopoverContent className="space-y-3">
         <div className="space-y-1.5">
           <Label>Factor name</Label>
-          <p className="rounded-md border border-dashed px-2.5 py-1.5 text-sm text-muted-foreground">{factorName}</p>
+          <p className="rounded-md border border-dashed px-2.5 py-1.5 text-sm text-muted-foreground">{displayFactorName(factorName)}</p>
         </div>
         {levelType === 'boolean' ? (
           <p className="text-xs text-muted-foreground">Levels: false, true</p>

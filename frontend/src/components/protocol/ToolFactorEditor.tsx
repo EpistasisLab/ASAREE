@@ -1,3 +1,4 @@
+import { FactorNameInput } from './FactorNameInput'
 import { useState } from 'react'
 import { useDialogDraft } from './useDialogDraft'
 import { ArrowDown, ArrowUp } from 'lucide-react'
@@ -48,7 +49,7 @@ export function ToolFactorEditor({ graph, factor, open, onOpenChange, onSave, on
       </DialogHeader>
       <div className="space-y-3">
         <Label htmlFor="tool-factor-name">Factor name</Label>
-        <Input id="tool-factor-name" value={draft.name} disabled={saving} onChange={(event) => setDraft({ ...draft, name: event.target.value })} />
+        <FactorNameInput id="tool-factor-name" value={draft.name} disabled={saving} onValueChange={(name) => setDraft({ ...draft, name })} />
         {draft.levels.length < 2 && <p className="text-xs text-destructive">Incomplete: connect at least two different tools before generating cells.</p>}
         <div className="max-h-96 space-y-2 overflow-y-auto">
           {draft.levels.map((level, index) => {

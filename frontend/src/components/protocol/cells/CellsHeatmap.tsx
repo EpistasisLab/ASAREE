@@ -1,3 +1,4 @@
+import { displayFactorName } from '@/lib/factorLabels'
 import { Fragment, useMemo, useState } from 'react'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import {
@@ -89,8 +90,8 @@ export function CellsHeatmap({ experiment, cells }: { experiment: Experiment; ce
     <div className="space-y-3 @lg:space-y-4">
       <div className="flex flex-col gap-2 @lg:flex-row @lg:items-center @lg:justify-between">
         <span className="text-sm font-semibold text-foreground">
-          {rowFactor.name}
-          {colFactor.name ? ` × ${colFactor.name}` : ''}
+          {displayFactorName(rowFactor.name)}
+          {colFactor.name ? ` × ${displayFactorName(colFactor.name)}` : ''}
         </span>
         <div className="flex items-center gap-2 text-xs text-muted-foreground">
           {availableMetrics.length > 1 && (
@@ -131,7 +132,7 @@ export function CellsHeatmap({ experiment, cells }: { experiment: Experiment; ce
           <div key={fi} className="space-y-1.5">
             {facetFactor && (
               <p className="font-mono text-xs text-muted-foreground">
-                {facetFactor.name} = {displayFactorLevel(experiment.design_spec, facetFactor.name, facetLevel)}
+                {displayFactorName(facetFactor.name)} = {displayFactorLevel(experiment.design_spec, facetFactor.name, facetLevel)}
               </p>
             )}
             {/* The grid scrolls sideways rather than being squeezed. It used
@@ -165,11 +166,11 @@ export function CellsHeatmap({ experiment, cells }: { experiment: Experiment; ce
                   className="truncate text-center text-xs font-semibold tracking-wide text-muted-foreground uppercase"
                   style={{ gridColumn: '2 / -1' }}
                 >
-                  {colFactor.name}
+                  {displayFactorName(colFactor.name)}
                 </div>
                 <div className="flex items-center overflow-hidden pr-2 text-xs font-semibold tracking-wide text-muted-foreground uppercase">
-                  <span className="truncate" title={rowFactor.name}>
-                    {rowFactor.name}
+                  <span className="truncate" title={displayFactorName(rowFactor.name)}>
+                    {displayFactorName(rowFactor.name)}
                   </span>
                 </div>
                 {colFactor.name

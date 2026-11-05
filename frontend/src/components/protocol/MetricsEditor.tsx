@@ -29,7 +29,7 @@ import {
 } from '@/lib/measurementPlan'
 import { METRIC_CATALOG, makeCatalogMetric, makeCustomMetric, normalizeDesignMetrics, type MetricCatalogEntry } from '@/lib/metricCatalog'
 import type { ProtocolGraph } from '@/types/protocols'
-import type { DesignMetric, MeasurementPlan } from '@/types/experiments'
+import type { DesignMetric, MeasurementPlan, MetricRecommendationMetadata } from '@/types/experiments'
 import { CustomMetricFlow, MetricNodeLabel, type MetricNodeDisplay } from './CustomMetricDialogs'
 import { NodeInspectorDialog } from './NodeInspectorDialog'
 import { useDialogAutosave } from './useDialogAutosave'
@@ -42,6 +42,18 @@ const CRITIC_METRIC_KEYS = new Set([
   'critic_rejections_full',
   'revision_rounds',
 ])
+
+function canvasMetricAvailability(graph: ProtocolGraph | undefined) {
+  const hasValidTool = contextualMetricSuggestions(graph).some((suggestion) => suggestion.key === 'tool_error_rate')
+  const hasCriticGate = graph?.nodes.some((node) => node.type === 'critic_gate') ?? false
+  return {
+    hasValidTool,
+    hasCriticGate,
+    cannotProduce: (key: string) =>
+      ((key === 'tool_calls' || key === 'tool_error_rate') && !hasValidTool)
+      || (CRITIC_METRIC_KEYS.has(key) && !hasCriticGate),
+  }
+}
 
 function synchronizeMeasurementPlanMetrics(plan: MeasurementPlan | null, metrics: DesignMetric[]) {
   if (!plan) return null
@@ -83,7 +95,7 @@ function customMetricProducerDisplay(
   const agent = nodeLabel(binding.config.agent_node_id)
   if (binding.producer_id === AGENT_OUTPUT_PRODUCER_ID) return { label: agent, type: 'Agent' }
   if (binding.producer_id === 'asaree.python_script') {
-    return { label: `${agent}:${nodeLabel(binding.config.script_node_id)}`, type: 'Script' }
+    return { label: `${agent} › ${nodeLabel(binding.config.script_node_id)}`, type: 'Script' }
   }
   if (binding.producer_id === TOOL_STEP_PRODUCER_ID) return { label: nodeLabel(binding.config.node_id), type: 'Tool Step' }
   if (binding.producer_id === FEATURE_PIPELINE_PRODUCER_ID) return { label: 'DC → FTE → FS', type: 'Feature pipeline' }
@@ -93,7 +105,7 @@ function customMetricProducerDisplay(
   if (binding.producer_id === 'asaree.mcp_tool') {
     const toolName = typeof binding.config.tool_name === 'string' ? binding.config.tool_name : null
     return {
-      label: `${agent}:${nodeLabel(binding.config.mcp_node_id)}${toolName ? ` · ${toolName}` : ''}`,
+      label: `${agent} › ${nodeLabel(binding.config.mcp_node_id)}${toolName ? ` · ${toolName}` : ''}`,
       type: 'MCP Tool',
     }
   }
@@ -159,8 +171,7 @@ function MetricsDialog({
   const [customMetricDirty, setCustomMetricDirty] = useState(false)
   const [customMetricPendingDelete, setCustomMetricPendingDelete] = useState<DesignMetric>()
   const wasOpenRef = useRef(false)
-  const previousUnavailableBuiltInKeysRef = useRef<Set<string> | null>(null)
-  const newlyUnavailableBuiltInKeysRef = useRef(new Set<string>())
+  const previousAvailableBuiltInKeysRef = useRef(new Set<string>())
   const draftSignature = [...draftKeys].sort().join('\u0000')
   const savedSignature = [...selectedKeySet].sort().join('\u0000')
   const dirty = draftSignature !== savedSignature || customChanges.length > 0 || customMetricDirty || customMetricIds.join('\u0000') !== initialCustomMetricSignature
@@ -176,12 +187,7 @@ function MetricsDialog({
   const hasAgentMetricCandidate = agentOutputSourceOptions(graph).some((source) => !source.disabledReason)
   const hasToolStepMetricCandidate = toolStepSourceOptions(graph).some((source) => !source.disabledReason)
   const hasNodeRuntimeMetricCandidate = nodeRuntimeSourceOptions(graph).some((source) => !source.disabledReason)
-  const canvasMetricKeys = new Set(contextualMetricSuggestions(graph).map((suggestion) => suggestion.key))
-  const hasValidTool = canvasMetricKeys.has('tool_error_rate')
-  const hasCriticGate = graph?.nodes.some((node) => node.type === 'critic_gate') ?? false
-  const canvasCannotProduce = (key: string) =>
-    ((key === 'tool_calls' || key === 'tool_error_rate') && !hasValidTool)
-    || (CRITIC_METRIC_KEYS.has(key) && !hasCriticGate)
+  const { hasValidTool, hasCriticGate, cannotProduce: canvasCannotProduce } = canvasMetricAvailability(graph)
   const unavailableBuiltInKeys = capabilitiesLoading || capabilitiesUnavailable
     ? []
     : builtInEntries.flatMap((entry) => {
@@ -221,7 +227,7 @@ function MetricsDialog({
     customChanges,
     customMetricIds,
   })
-  const autosaveDraft = dirty && !customMetricDraft && !customMetricDirty && !applyDependsOnUnresolvedCapabilities
+  const autosaveDraft = open && !disabled && !capabilitiesLoading && !capabilitiesUnavailable && dirty && !customMetricDraft && !customMetricDirty && !applyDependsOnUnresolvedCapabilities
     ? { selectedKeys: [...draftKeys], customChanges, customMetricIds }
     : null
   const metricAutosave = useDialogAutosave({
@@ -241,13 +247,14 @@ function MetricsDialog({
   useEffect(() => {
     if (!open) {
       wasOpenRef.current = false
+      previousAvailableBuiltInKeysRef.current = new Set()
       return
     }
     if (wasOpenRef.current) return
     wasOpenRef.current = true
-    // A default selection (nothing saved yet) must not pre-check a metric this
-    // canvas can't produce -- it would save a metric that can never report.
-    // A saved selection is shown as-is, so it can still be unchecked.
+    previousAvailableBuiltInKeysRef.current = new Set(
+      builtInEntries.filter((entry) => supportedBuiltInKeys.has(entry.key) && !canvasCannotProduce(entry.key)).map((entry) => entry.key),
+    )
     setDraftKeys(new Set(initialDraftSignature === undefined
       ? initialDraftKeySet
       : [...initialDraftKeySet].filter((key) => !canvasCannotProduce(key))))
@@ -258,31 +265,23 @@ function MetricsDialog({
     setCustomMetricDirty(false)
     setCustomMetricPendingDelete(undefined)
     setCustomMetricDraft(undefined)
-    // Seeds once per open (wasOpenRef); canvas availability changing while the
-    // dialog is open is handled by the newly-unavailable effect below.
+    // Seed once per open; availability transitions below preserve manual edits.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, initialDraftKeySet, metrics, initialCustomMetricIds, initialCustomMetricSignature])
 
   useEffect(() => {
-    if (capabilitiesLoading || capabilitiesUnavailable) return
+    if (!open || capabilitiesLoading || capabilitiesUnavailable) return
     const unavailable = new Set(unavailableBuiltInKeySignature ? unavailableBuiltInKeySignature.split('\u0000') : [])
-    const previous = previousUnavailableBuiltInKeysRef.current
-    if (previous) {
-      for (const key of unavailable) {
-        if (!previous.has(key)) newlyUnavailableBuiltInKeysRef.current.add(key)
-      }
-      for (const key of previous) {
-        if (!unavailable.has(key)) newlyUnavailableBuiltInKeysRef.current.delete(key)
-      }
-    }
-    previousUnavailableBuiltInKeysRef.current = unavailable
-    if (!open || newlyUnavailableBuiltInKeysRef.current.size === 0) return
-    const newlyUnavailable = new Set(newlyUnavailableBuiltInKeysRef.current)
-    newlyUnavailableBuiltInKeysRef.current.clear()
+    const available = new Set(catalogBuiltIns.filter((entry) => !unavailable.has(entry.key)).map((entry) => entry.key))
+    const previous = previousAvailableBuiltInKeysRef.current
+    previousAvailableBuiltInKeysRef.current = available
     setDraftKeys((current) => {
-      const next = new Set([...current].filter((key) => !newlyUnavailable.has(key)))
-      return next.size === current.size ? current : next
+      const next = new Set([...current].filter((key) => !unavailable.has(key)))
+      for (const key of available) if (!previous.has(key)) next.add(key)
+      return next.size === current.size && [...next].every((key) => current.has(key)) ? current : next
     })
+    // Catalog metadata is static; availability is represented by its signature.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, capabilitiesLoading, capabilitiesUnavailable, unavailableBuiltInKeySignature])
 
   function toggle(key: string, checked: boolean) {
@@ -338,7 +337,7 @@ function MetricsDialog({
           <section className="space-y-3 border-b p-4 md:overflow-y-auto md:border-r md:border-b-0" aria-labelledby="metric-section-built-in">
             <div>
               <h3 id="metric-section-built-in" className="text-sm font-semibold">Built-in metrics</h3>
-              <p className="mt-1 text-xs text-muted-foreground">ASAREE captures these automatically during runs.</p>
+              <p className="mt-1 text-xs text-muted-foreground">Available metrics are selected automatically. You can uncheck any you don't need.</p>
             </div>
             <div className="rounded-md border px-3 py-2 text-xs" role="status" aria-live="polite">
               {capabilitiesLoading && <span className="text-muted-foreground">Checking built-in metric availability…</span>}
@@ -448,6 +447,7 @@ export function MetricsEditor({
   experimentId,
   metrics,
   measurementPlan,
+  metricRecommendations,
   graph,
   protocolId,
   onChange,
@@ -458,12 +458,15 @@ export function MetricsEditor({
   protocolId?: string
   metrics: DesignMetric[]
   measurementPlan: MeasurementPlan | null
+  metricRecommendations?: MetricRecommendationMetadata | null
   graph: ProtocolGraph | undefined
   onChange: (metrics: DesignMetric[], measurementPlan: MeasurementPlan | null) => void
-  onApplyMetrics?: (metrics: DesignMetric[], measurementPlan: MeasurementPlan | null) => Promise<void>
+  onApplyMetrics?: (metrics: DesignMetric[], measurementPlan: MeasurementPlan | null, recommendations?: MetricRecommendationMetadata | null) => Promise<void>
   disabled?: boolean
 }) {
   const [metricsDialogOpen, setMetricsDialogOpen] = useState(false)
+  const [recommendations, setRecommendations] = useState(metricRecommendations ?? null)
+  useEffect(() => { setRecommendations(metricRecommendations ?? null) }, [metricRecommendations])
   const normalized = useMemo(() => normalizeDesignMetrics(metrics), [metrics])
   const capabilitiesQuery = useQuery({
     queryKey: ['experiments', experimentId, 'measurement-capabilities'],
@@ -480,6 +483,28 @@ export function MetricsEditor({
     : []
   const catalogBuiltIns = METRIC_CATALOG.filter((entry) => entry.kind === 'runtime')
   const supportedBuiltInKeys = new Set(discoveredOutputs?.['asaree.runtime'] ?? [])
+  const availability = canvasMetricAvailability(graph)
+  const availableBuiltInKeys = new Set(catalogBuiltIns
+    .filter((entry) => supportedBuiltInKeys.has(entry.key) && !availability.cannotProduce(entry.key))
+    .map((entry) => entry.key))
+  const removedKeys = (recommendations?.intentionally_removed_keys ?? []).filter((key) => availableBuiltInKeys.has(key))
+  const defaultBuiltInKeys = [...availableBuiltInKeys].filter((key) => !removedKeys.includes(key))
+
+  function selectionRecommendations(selectedKeys: Set<string>): MetricRecommendationMetadata {
+    return {
+      applied_version: null,
+      dismissed_version: null,
+      ...recommendations,
+      intentionally_removed_keys: [...availableBuiltInKeys].filter((key) => !selectedKeys.has(key)).sort(),
+    }
+  }
+
+  async function saveMetrics(nextMetrics: DesignMetric[], nextPlan: MeasurementPlan | null, selectedKeys: Set<string>) {
+    const nextRecommendations = selectionRecommendations(selectedKeys)
+    if (onApplyMetrics) await onApplyMetrics(nextMetrics, nextPlan, nextRecommendations)
+    else onChange(nextMetrics, nextPlan)
+    setRecommendations(nextRecommendations)
+  }
   const validationQuery = useQuery({
     queryKey: ['experiments', experimentId, 'measurement-plan-validation', measurementPlan, normalized, graph],
     queryFn: () => experimentsApi.validateMeasurementPlan(experimentId!, {
@@ -550,8 +575,24 @@ export function MetricsEditor({
     return { metrics: nextMetrics, measurementPlan: nextPlan }
   }
 
+  const automaticSelectionChanged = savedBuiltInKeys.length !== defaultBuiltInKeys.length
+    || defaultBuiltInKeys.some((key) => !savedBuiltInKeys.includes(key))
+    || removedKeys.length !== (recommendations?.intentionally_removed_keys.length ?? 0)
+  const automaticSelection = useDialogAutosave({
+    draft: !metricsDialogOpen && !disabled && graph && capabilitiesQuery.isSuccess && automaticSelectionChanged
+      ? defaultBuiltInKeys
+      : null,
+    signature: JSON.stringify({ selected: defaultBuiltInKeys, removedKeys }),
+    onSave: async (keys) => {
+      const selected = new Set(keys)
+      const draft = builtInDraft(selected)
+      await saveMetrics(draft.metrics, draft.measurementPlan, selected)
+    },
+  })
+
   return (
     <div className="@container/metrics space-y-2">
+      {automaticSelection.status === 'error' && <p role="alert" className="text-xs text-destructive">Could not save automatic metric selections. Open Manage metrics to retry.</p>}
       {normalized.length === 0 && <p className="rounded-md border border-dashed px-3 py-2 text-sm text-muted-foreground">No metrics selected yet.</p>}
       {unresolvedMetrics.length > 0 && <div className="rounded-md border border-[color:var(--chart-4)]/40 bg-[color:var(--chart-4)]/5 px-3 py-2 text-xs text-[color:var(--chart-4)]"><p className="font-medium">Measurement plan needs attention</p><p className="mt-1">{unresolvedMetrics.length} metric {unresolvedMetrics.length === 1 ? 'needs' : 'need'} repair or removal.</p></div>}
       {validationQuery.isFetching && <p className="text-xs text-muted-foreground">Checking measurement-plan readiness…</p>}
@@ -572,9 +613,7 @@ export function MetricsEditor({
         catalogBuiltIns={catalogBuiltIns}
         supportedBuiltInKeys={supportedBuiltInKeys}
         selectedKeys={savedBuiltInKeys}
-        initialDraftKeys={savedBuiltInKeys.length === 0 && normalized.length === 0
-          ? catalogBuiltIns.map((entry) => entry.key)
-          : undefined}
+        initialDraftKeys={defaultBuiltInKeys}
         capabilitiesLoading={capabilitiesQuery.isPending}
         capabilitiesUnavailable={!experimentId || capabilitiesQuery.isError}
         disabled={disabled}
@@ -608,8 +647,7 @@ export function MetricsEditor({
             metrics: normalizedDraftMetrics,
             measurementPlan: synchronizeMeasurementPlanMetrics(draft.measurementPlan, normalizedDraftMetrics),
           }
-          if (onApplyMetrics) await onApplyMetrics(draft.metrics, draft.measurementPlan)
-          else onChange(draft.metrics, draft.measurementPlan)
+          await saveMetrics(draft.metrics, draft.measurementPlan, selectedKeys)
         }}
       />
     </div>

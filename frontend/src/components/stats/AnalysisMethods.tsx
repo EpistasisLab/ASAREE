@@ -1,3 +1,4 @@
+import { displayFactorName } from '@/lib/factorLabels'
 import { Activity, ChevronDown, FlaskConical, ListChecks, ShieldCheck } from 'lucide-react'
 import type { ReactNode } from 'react'
 import type { StatsAnalysis, StatsSummary } from '@/types/stats'
@@ -50,7 +51,7 @@ export function AnalysisMethods({ analysis, report, modelName }: {
       <MethodStep number="01" title="Regression Model Selection" icon={<Activity className="size-3.5" />}>
         <p className="break-words text-base font-semibold">{modelName}</p>
         {report.methods[0] && <p className="text-xs leading-relaxed text-muted-foreground">{report.methods[0]}</p>}
-        {!!factorNames.length && <div className="flex flex-wrap gap-1.5">{factorNames.map(name => <span key={name} className="max-w-full break-words rounded border border-border bg-muted/40 px-2 py-1 text-[10px]">{name}</span>)}</div>}
+        {!!factorNames.length && <div className="flex flex-wrap gap-1.5">{factorNames.map(name => <span key={name} className="max-w-full break-words rounded border border-border bg-muted/40 px-2 py-1 text-[10px]">{displayFactorName(name)}</span>)}</div>}
       </MethodStep>
       <MethodStep number="02" title="Tests and comparisons" icon={<ListChecks className="size-3.5" />}>
         {[{ title: 'Factor tests', rows: tests }, { title: 'Comparisons', rows: comparisons }].map(({ title, rows }) => <div key={title} className="space-y-1.5">

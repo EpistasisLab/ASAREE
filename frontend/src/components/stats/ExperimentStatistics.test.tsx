@@ -1,10 +1,11 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { statsApi } from '@/api/client'
 import type { StatsAnalysis } from '@/types/stats'
 import { ExperimentStatistics } from './ExperimentStatistics'
+import { StatisticsReport } from './StatisticsReport'
 
 vi.mock('@/components/AppHeader', () => ({ AppHeader: () => null }))
 
@@ -37,12 +38,75 @@ beforeEach(() => {
 })
 afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals() })
 
+it('separates main effects from interactions and preserves complete factor names', () => {
+  const model = 'Azure AI Foundry:Model', prompt = 'PubMed Retrieval Agent:Prompt'
+  const report = saved.output!.summary!
+  const analysis: StatsAnalysis = { ...saved, output: { ...saved.output!, summary: { ...report, tests: [
+    { effect: model, factors: [model], p_adjusted: .01, result: 'Evidence of an effect' },
+    { effect: prompt, factors: [prompt], p_adjusted: .2, result: 'No clear evidence of an effect' },
+    { effect: `${model}:${prompt}`, factors: [model, prompt], p_adjusted: .3, result: 'No clear evidence of an effect' },
+  ] } } }
+  render(<StatisticsReport analysis={analysis} experiment="experiment" />)
+  const main = within(screen.getByRole('region', { name: 'Main-effect tests table' }))
+  expect(main.getByText('Azure AI Foundry › Model')).toBeVisible()
+  expect(main.getByText('PubMed Retrieval Agent › Prompt')).toBeVisible()
+  const interaction = within(screen.getByRole('region', { name: 'Interaction tests table' }))
+  expect(interaction.getByText('Azure AI Foundry › Model × PubMed Retrieval Agent › Prompt')).toBeVisible()
+  expect(main.getAllByRole('row')).toHaveLength(3)
+  expect(interaction.getAllByRole('row')).toHaveLength(2)
+})
+
 function mount(version: string | null = 'version-1') {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   render(<QueryClientProvider client={client}><MemoryRouter initialEntries={['/experiments/experiment/protocol?tab=results&results=statistics']}>
     <ExperimentStatistics experiment="experiment" version={version} />
   </MemoryRouter></QueryClientProvider>)
+  return client
 }
+
+it('lists every selected metric before analysis and states the measurement requirements', async () => {
+  vi.mocked(statsApi.source).mockResolvedValue({
+    factors: [], metrics: [
+      { name: 'Cost', n: 6, n_usable: 6, minimum_per_cell: 3 },
+      { name: 'Accuracy', n: 4, n_usable: 4, minimum_per_cell: 2,
+        availability_reason: 'Not enough measurements: 4 usable; at least 5 overall are needed for model fitting.' },
+      { name: 'Quality', n: 0, availability_reason: 'No measured values are available for this metric.' },
+    ], n_replicates: 6, n_measured_replicates: 6,
+    design_revision: 1, fingerprint: 'current', excluded_row_replicates: 0,
+  })
+  mount()
+  expect(await screen.findByRole('button', { name: /Cost.*Not analyzed/ })).toBeVisible()
+  expect(screen.getByRole('button', { name: /Accuracy.*Needs measurements/ })).toHaveTextContent('4 usable measurements')
+  expect(screen.getByRole('button', { name: /Quality/ })).toHaveTextContent('No measured values')
+  expect(screen.getByText('5 usable measurements overall')).toBeVisible()
+  expect(screen.getByText('3 per observed cell')).toBeVisible()
+  expect(screen.getByText(/Missing measurements are excluded, not treated as zero/)).toBeVisible()
+})
+
+it('detects changed results after a source refresh and clears the notice for an updated report', async () => {
+  const current = { factors: [], metrics: [{ name: 'Duration', n: 10 }], n_replicates: 10,
+    n_measured_replicates: 10, design_revision: 1, fingerprint: saved.fingerprint, excluded_row_replicates: 0 }
+  vi.mocked(statsApi.source).mockResolvedValue(current)
+  vi.mocked(statsApi.history).mockResolvedValue([saved])
+  const client = mount()
+  await screen.findByRole('button', { name: /Duration.*Report ready/ })
+  expect(screen.queryByText(/New or changed results/)).not.toBeInTheDocument()
+  vi.mocked(statsApi.source).mockResolvedValue({ ...current, fingerprint: 'new-results' })
+  await act(() => client.invalidateQueries({ queryKey: ['statistics-source'] }))
+  expect(await screen.findByText(/New or changed results.*Rerun analysis/)).toBeVisible()
+  vi.mocked(statsApi.history).mockResolvedValue([{ ...saved, fingerprint: 'new-results' }])
+  await act(() => client.invalidateQueries({ queryKey: ['automatic-statistics'] }))
+  await waitFor(() => expect(screen.queryByText(/New or changed results/)).not.toBeInTheDocument())
+})
+
+it('keeps saved unavailable reasons visible even before opening a metric', async () => {
+  const get = vi.spyOn(statsApi, 'get')
+  vi.mocked(statsApi.history).mockResolvedValue([{ ...saved, report_status: 'unavailable',
+    report_warnings: ['The metric contains structured values; no scalar analysis is appropriate.'] }])
+  mount()
+  expect(await screen.findByRole('button', { name: /Duration/ })).toHaveTextContent('structured values')
+  expect(get).not.toHaveBeenCalled()
+})
 
 it('analyzes all metrics without asking users to select statistical settings', async () => {
   const automatic = vi.spyOn(statsApi, 'automatic').mockResolvedValue([])
@@ -89,7 +153,7 @@ it('shows concise statistics and a report download', async () => {
   fireEvent.click(screen.getByRole('button', { name: /Duration/ }))
   expect(await screen.findByText('Treatment: A vs B')).toBeInTheDocument()
   expect(screen.getByText('0.6 to 0.9')).toBeInTheDocument()
-  expect(screen.getByRole('button', { name: 'Download HTML report' })).toBeInTheDocument()
+  expect(screen.getByRole('button', { name: 'Download HTML report' })).toBeEnabled()
   expect(screen.queryByRole('img')).not.toBeInTheDocument()
   expect(screen.getByText('What ran and why')).toBeInTheDocument()
   expect(screen.getByText('Elapsed time for one run.')).toBeInTheDocument()
@@ -134,14 +198,25 @@ it('renders the primary interval result even when a stored analytic result is si
   expect(screen.getByText(/primary parametric-bootstrap interval found no clear evidence/)).toBeInTheDocument()
 })
 
-it('shows descriptive-only reports without suggesting a regression model was fitted', async () => {
-  const descriptive: StatsAnalysis = { ...saved, report_status: 'descriptive', output: { ...saved.output!, family: 'descriptive',
-    summary: { ...saved.output!.summary!, status: 'descriptive', tests: [], effects: [] } } }
-  vi.spyOn(statsApi, 'history').mockResolvedValue([descriptive])
-  vi.spyOn(statsApi, 'get').mockResolvedValue(descriptive)
+it.each(['descriptive', 'unavailable', 'unreliable', 'valid'] as const)('shows only the reason and disables HTML downloads for %s metrics without inference', async status => {
+  const reason = 'All measured outcomes are identical. Tests and uncertainty cannot be estimated.'
+  const analysis: StatsAnalysis = { ...saved, report_status: status, report_warnings: [reason], output: { ...saved.output!,
+    summary: { ...saved.output!.summary!, status, inference_reason: status === 'valid' ? reason : null,
+      warnings: status === 'valid' ? ['Additional technical detail'] : [reason, 'Additional technical detail'] } } }
+  vi.spyOn(statsApi, 'history').mockResolvedValue([analysis])
+  vi.spyOn(statsApi, 'get').mockResolvedValue(analysis)
+  const download = vi.spyOn(statsApi, 'report')
   mount()
   fireEvent.click(await screen.findByRole('button', { name: /Duration/ }))
-  expect(await screen.findByText('Descriptive only. No uncertainty or statistical conclusions are estimated.')).toBeInTheDocument()
+  expect(await screen.findByText('Inference unavailable.')).toBeVisible()
+  expect(screen.getAllByText(reason).some(element => element.tagName === 'P')).toBe(true)
+  expect(screen.getByRole('button', { name: 'Download HTML report' })).toBeDisabled()
+  fireEvent.click(screen.getByRole('button', { name: 'Download HTML report' }))
+  expect(download).not.toHaveBeenCalled()
+  expect(screen.queryByRole('region', { name: 'Metric distribution' })).not.toBeInTheDocument()
+  expect(screen.queryByRole('region', { name: 'Comparisons table' })).not.toBeInTheDocument()
+  expect(screen.queryByText('What ran and why')).not.toBeInTheDocument()
+  expect(screen.queryByText('Additional technical detail')).not.toBeInTheDocument()
   expect(screen.queryByText(/Selected regression model distribution/)).not.toBeInTheDocument()
 })
 
@@ -158,15 +233,18 @@ it('keeps completed analytic results visible while marking interrupted resamplin
   expect(screen.getByText('Evidence of an effect')).toBeInTheDocument()
 })
 
-it('hides reports without valid conclusions', async () => {
+it('lists unavailable metrics and explains why without showing statistical conclusions', async () => {
   const unavailable = { ...saved, report_status: 'unavailable' as const, output: { ...saved.output!, summary: { ...saved.output!.summary!,
     status: 'unavailable' as const, tests: [], effects: [], warnings: ['Free text has no established statistical ordering.'] } } }
   vi.spyOn(statsApi, 'history').mockResolvedValue([unavailable, { ...unavailable, id: 'unreliable', report_status: 'unreliable' }])
   vi.spyOn(statsApi, 'get').mockResolvedValue(unavailable)
   mount()
   expect(await screen.findByText(/No statistical reports are available/)).toBeInTheDocument()
-  expect(screen.queryByRole('button', { name: /Duration/ })).not.toBeInTheDocument()
+  const row = await screen.findByRole('button', { name: /Duration/ })
+  expect(row).toHaveTextContent('Report unavailable')
   expect(statsApi.get).not.toHaveBeenCalled()
+  fireEvent.click(row)
+  expect(await screen.findByText('Free text has no established statistical ordering.', { selector: 'p' })).toBeVisible()
   expect(screen.queryByText('Evidence of an effect')).not.toBeInTheDocument()
 })
 
@@ -336,6 +414,7 @@ it('keeps analytic results visible when resampling is unavailable', async () => 
   expect(screen.getByText('0.6 to 0.9')).toBeInTheDocument()
   expect(screen.getByText('Too many failed refits')).toBeInTheDocument()
   expect(screen.getAllByText('Unavailable')).toHaveLength(2)
+  expect(screen.getByRole('button', { name: 'Download HTML report' })).toBeEnabled()
 })
 
 it('does not invent a definition for a metric whose description is missing', async () => {

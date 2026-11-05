@@ -16,13 +16,20 @@ export interface StatsConfig {
 }
 export interface StatsSource {
   factors: { name: string; levels: string[] }[]
-  metrics: { name: string; n: number }[]
+  metrics: StatsMetricSource[]
   n_replicates: number
   n_measured_replicates?: number
   protocol_revision_id?: string | null
   design_revision: number | null
   fingerprint: string
   excluded_row_replicates: number
+}
+export interface StatsMetricSource {
+  name: string
+  n: number
+  n_usable?: number | null
+  minimum_per_cell?: number | null
+  availability_reason?: string | null
 }
 export interface StatsAnalysis {
   id: string
@@ -34,6 +41,7 @@ export interface StatsAnalysis {
   design_revision: number | null
   source?: StatsSource
   report_status?: StatsSummary['status'] | null
+  report_warnings?: string[]
   output?: {
     family: string
     n_observations: number
@@ -65,11 +73,12 @@ export interface StatsSummary {
   version: number
   alpha?: number
   execution_status?: 'completed' | 'incomplete'
+  inference_reason?: string | null
   metric: string
   status: 'valid' | 'unreliable' | 'unavailable' | 'descriptive'
   description: string
   findings: string[]
-  tests: { effect: string; p_adjusted: number | null; result: string; method?: string; purpose?: string
+  tests: { effect: string; label?: string; factors?: string[]; kind?: 'main' | 'interaction'; p_adjusted: number | null; result: string; method?: string; purpose?: string
     permutation_p_adjusted?: number | null; permutation_method?: string | null
     permutation_status?: string; permutation_result?: string; resampling_name?: string
     resampling_label?: string }[]

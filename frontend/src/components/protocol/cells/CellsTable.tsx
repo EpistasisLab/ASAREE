@@ -1,3 +1,4 @@
+import { displayCellLabel, displayFactorName } from '@/lib/experiment'
 import { useMemo, useState } from 'react'
 import { ArrowDown, ArrowUp, ChevronLeft, ChevronRight, ChevronsUpDown } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
@@ -108,7 +109,7 @@ export function CellsTable({ experiment, cells }: { experiment: Experiment; cell
             <tr>
               <SortableCellHead label="Cell" sortKey="cell_label" sort={sort} onSort={handleSort} />
               {factors.map((f) => (
-                <SortableCellHead key={f.name} label={f.name} sortKey={`factor:${f.name}`} sort={sort} onSort={handleSort} />
+                <SortableCellHead key={f.name} label={displayFactorName(f.name)} sortKey={`factor:${f.name}`} sort={sort} onSort={handleSort} />
               ))}
               {metricColumns.map((m) => (
                 <SortableCellHead key={m} label={formatMetricLabel(m)} sortKey={`metric:${m}`} sort={sort} onSort={handleSort} />
@@ -120,8 +121,8 @@ export function CellsTable({ experiment, cells }: { experiment: Experiment; cell
           <tbody>
             {paged.map((cell, i) => (
               <tr key={cell.cell_id} className={i % 2 === 1 ? 'bg-muted/20' : ''}>
-                <td className="max-w-40 truncate px-2 py-1.5 font-mono font-medium" title={cell.cell_label}>
-                  {cell.cell_label}
+                <td className="max-w-40 truncate px-2 py-1.5 font-mono font-medium" title={displayCellLabel(cell.factor_values, experiment.design_spec, cell.cell_label)}>
+                  {displayCellLabel(cell.factor_values, experiment.design_spec, cell.cell_label)}
                 </td>
                 {factors.map((f) => (
                   <td key={f.name} className="max-w-32 truncate px-2 py-1.5 font-mono text-muted-foreground">

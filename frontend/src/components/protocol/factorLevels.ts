@@ -233,7 +233,8 @@ export function seedStructuredLevels(currentValue: unknown, type: LevelType): un
 // agent-traced label for a connector node (see bindableFields.ts's
 // agentTracedLabel, e.g. "Research Agent:Anthropic"), or just the agent's
 // own label when the field lives on the agent itself (e.g. System prompt),
-// so this always ends up fully qualified down to the owning agent.
+// so this always ends up fully qualified down to the owning agent. This is
+// the stored identity; render it through displayFactorName for the › hierarchy.
 export function computeFactorName(nodeLabel: string, fieldLabel: string, existingNames: string[]): string {
   const base = `${nodeLabel}:${fieldLabel}`
   if (!existingNames.includes(base)) return base

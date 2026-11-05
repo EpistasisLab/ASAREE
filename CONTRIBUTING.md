@@ -57,8 +57,9 @@ The provider-operations integration was first tested against Motoro commit
 `227311f683e6be629ac4e7b2cc93a1ed1323d084`
 ([EpistasisLab/motoro#15](https://github.com/EpistasisLab/motoro/pull/15)). Motoro
 subsequently released those changes in `v0.14.0`. The current provider-driven
-sampling integration pins Motoro release tag `v0.15.0`
-(`f1e7ea8b47b5d81581ffaf57dc595554dc6b21aa`). For future
+sampling integration pins Motoro release tag `v0.15.1`
+(`805fa51455642b01c1fb9aff52fabd28ebfbb6b8`), which also fixes native
+effort fields for Azure-hosted Claude. For future
 integrations, **release Motoro first** and complete this sequence before ASAREE's
 production release:
 

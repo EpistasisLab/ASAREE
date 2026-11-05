@@ -88,9 +88,9 @@ function MetricNodePicker({ value, display, choices, graph, onChange }: {
         {groups.size === 0 && <p className="p-3 text-sm text-muted-foreground">No matching nodes.</p>}
         {[...groups.entries()].sort(([, a], [, b]) => a.label.localeCompare(b.label)).map(([id, group]) => <details key={`${id}:${!!search.trim()}:${expandGroups}`} open={expandGroups || !!search.trim()} className={PICKER_GROUP_CLASSNAME}>
           <summary className="cursor-pointer bg-muted/30 px-3 py-2 text-sm font-semibold">{group.label}</summary>
-          <div className="space-y-3 p-2">{[...group.connectors.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([connector, categories]) => <section key={connector} aria-label={`${group.label}: ${connector}`}>
+          <div className="space-y-3 p-2">{[...group.connectors.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([connector, categories]) => <section key={connector} aria-label={`${group.label} › ${connector}`}>
             <h3 className="px-2 py-1 text-sm font-medium text-primary">{connector}</h3>
-            <div className="ml-3 space-y-2 border-l border-border pl-2">{[...categories.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([category, options]) => <section key={category} aria-label={`${group.label}: ${connector}: ${category}`}>
+            <div className="ml-3 space-y-2 border-l border-border pl-2">{[...categories.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([category, options]) => <section key={category} aria-label={`${group.label} › ${connector} › ${category}`}>
             {connector === 'Tools' && <h4 className="px-2 py-1 text-sm font-semibold text-chart-2">{category}</h4>}
             <div className={connector === 'Tools' ? 'ml-3' : undefined}>{options.sort((a, b) => a.display.label.localeCompare(b.display.label)).map(choice => <button key={choice.value} type="button" role="option" aria-selected={value === choice.value} disabled={!!choice.reason}
               aria-label={`${choice.display.label}, ${choice.display.type}${choice.reason ? `, ${choice.reason}` : ''}`}
@@ -233,11 +233,11 @@ export function CustomMetricFlow({ metric, binding, graph, protocolId, existingM
   // Keep the connection path recognizable without making the node type look
   // like another colon-delimited part of the user-defined name.
   const pythonNodeDisplay = (source: (typeof pythonSources)[number]): MetricNodeDisplay => ({
-    label: `${sourceAgentLabel(source.agentNodeId)}:${sourceNodeLabel(source.scriptNodeId)}`,
+    label: `${sourceAgentLabel(source.agentNodeId)} › ${sourceNodeLabel(source.scriptNodeId)}`,
     type: 'Script',
   })
   const mcpNodeDisplay = (source: McpToolSourceOption): MetricNodeDisplay => ({
-    label: `${sourceAgentLabel(source.agentNodeId)}:${sourceNodeLabel(source.mcpNodeId)}`,
+    label: `${sourceAgentLabel(source.agentNodeId)} › ${sourceNodeLabel(source.mcpNodeId)}`,
     type: 'MCP Tool',
   })
   const agentNodeDisplay = (source: (typeof agentSources)[number]): MetricNodeDisplay => ({

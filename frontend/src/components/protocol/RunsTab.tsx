@@ -295,6 +295,14 @@ export function RunsTab({ experimentId, designSpec, protocol, regenerationRequir
   const summary = useExecutionSummary(experimentId, scope, !!protocol)
   return <>
     {discrepancies.length > 0 && <div role="alert" className="m-3 flex gap-2 rounded border border-[color:var(--chart-4)]/50 p-3 text-xs"><AlertTriangle className="size-4" /><div><p className="font-medium">Canvas and generated runs disagree</p>{discrepancies.map(issue => <p key={`${issue.nodeId}:${issue.fieldPath}`}>{issue.nodeLabel} · {displayFactorName(issue.factorName)}: {issue.reason}</p>)}</div></div>}
+    {/* Publishing resets the version browser below. Keep the batch controller
+        outside that reset so its publish-and-run request survives publication. */}
+    <div className="flex flex-wrap items-center justify-end gap-2 px-3 pt-3">
+      <span className="text-xs text-muted-foreground">Total cells: <span className="font-mono tabular-nums">{summary.data?.cell_count?.toLocaleString() ?? '—'}</span></span>
+      <RunAllCellsButton protocol={protocol} experimentId={experimentId}
+        label={summary.data?.ready && allExecutionsFinished(summary.data.counts, summary.data.expected ?? summary.data.total) ? 'Re-run all cells' : 'Run all cells'}
+        regenerationRequired={regenerationRequired} unboundFactors={unboundFactors} bindingDiscrepancies={discrepancies} />
+    </div>
     <ExecutionBrowser key={JSON.stringify(scope)} experimentId={experimentId} scope={scope} mode="runs"
       onSelect={selection => {
         if (onSelectResult) onSelectResult(selection)
@@ -302,9 +310,6 @@ export function RunsTab({ experimentId, designSpec, protocol, regenerationRequir
         else if (selection.type === 'replicate') onViewResult(selection.replicateLabel)
       }}
       controls={<StopAllButton protocol={protocol} experimentId={experimentId} active={!!summary.data?.has_active} />}
-      batchControls={<><span className="text-xs text-muted-foreground">Total cells: <span className="font-mono tabular-nums">{summary.data?.cell_count?.toLocaleString() ?? '—'}</span></span><RunAllCellsButton protocol={protocol} experimentId={experimentId}
-        label={summary.data?.ready && allExecutionsFinished(summary.data.counts, summary.data.expected ?? summary.data.total) ? 'Re-run all cells' : 'Run all cells'}
-        regenerationRequired={regenerationRequired} unboundFactors={unboundFactors} bindingDiscrepancies={discrepancies} /></>}
       cellActions={cell => <><RunAllCellsButton protocol={protocol} experimentId={experimentId} cellId={cell.cell_id}
         label={allExecutionsFinished(cell.counts, cell.total) ? 'Re-run cell' : 'Run cell'}
         compact regenerationRequired={regenerationRequired} unboundFactors={unboundFactors} bindingDiscrepancies={discrepancies} /><StopAllButton protocol={protocol} experimentId={experimentId} cellId={cell.cell_id} active={ACTIVE_STATUSES.some(status => (cell.counts?.[status] ?? 0) > 0)} /></>}

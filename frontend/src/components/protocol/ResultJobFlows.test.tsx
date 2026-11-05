@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { experimentsApi, protocolsApi } from '@/api/client'
 import type { Protocol } from '@/types/protocols'
 import type { ExecutionSlot, ResultJob } from '@/types/executionResults'
-import { RunAllCellsButton } from './RunsTab'
+import { RunAllCellsButton, RunsTab } from './RunsTab'
 import { ResultsPanel } from './ResultsPanel'
 import { protocolForExperimentQueryKey } from '@/lib/protocolGraph'
 
@@ -16,7 +16,7 @@ vi.mock('./ExperimentDefinitionDownload', () => ({ ExperimentDefinitionDownload:
 const row: ExecutionSlot = { slot_id: 'stable-slot', cell_id: 'cell', cell_label: 'model=a', factor_values: {},
   replicate_id: 'parent', replicate_label: 'ambiguous-label', replicate_number: 1, row_result_id: null, row_index: null,
   dataset_id: null, raw_sha256: null, run_id: 'attempt', status: 'completed', updated_at: null, error: null, result: {}, usage: null }
-vi.mock('./ExecutionBrowser', () => ({ ExecutionBrowser: () => null, ExecutionRows: ({ actions }: { actions: (row: ExecutionSlot) => React.ReactNode }) => <div>{actions(row)}</div> }))
+vi.mock('./ExecutionBrowser', () => ({ ExecutionBrowser: ({ batchControls }: { batchControls: React.ReactNode }) => <>{batchControls}</>, ExecutionRows: ({ actions }: { actions: (row: ExecutionSlot) => React.ReactNode }) => <div>{actions(row)}</div> }))
 const protocol = { id: 'protocol', published_revision_id: 'publication', published_revision: 1, graph: { nodes: [], edges: [] } } as unknown as Protocol
 const pending: ResultJob = { id: 'job', kind: 'plan', status: 'pending', progress: {}, error: null, protocol_revision_id: 'publication' }
 
@@ -26,7 +26,7 @@ function mount(children: React.ReactNode) {
 function ObservedProtocol({ draft }: { draft: Protocol }) {
   const { data } = useQuery({ queryKey: protocolForExperimentQueryKey('experiment'),
     queryFn: async () => draft, initialData: draft, staleTime: Infinity })
-  return <RunAllCellsButton protocol={data} experimentId="experiment" regenerationRequired={false} unboundFactors={[]} bindingDiscrepancies={[]} />
+  return <RunsTab protocol={data} experimentId="experiment" designSpec={null} regenerationRequired={false} unboundFactors={[]} onViewResult={() => {}} />
 }
 beforeEach(() => {
   vi.spyOn(experimentsApi, 'createResultJob').mockResolvedValue(pending)

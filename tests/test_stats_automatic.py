@@ -588,6 +588,7 @@ async def test_automatic_batch_pins_one_snapshot_before_enqueuing(monkeypatch):
     api.read_source.assert_awaited_once_with(db, experiment_id, version_id)
     assert {row["config"]["metric"] for row in results} == {"Custom", "Unmeasured"}
     assert all(row["config"]["family"] == "auto" and "backend" not in row for row in results)
+    assert all(row["config"]["max_order"] == 3 for row in results)
 
 
 @pytest.mark.parametrize("kind", ["boundary", "hurdle", "overdispersed_trials"])

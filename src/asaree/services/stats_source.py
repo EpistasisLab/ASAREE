@@ -35,7 +35,7 @@ class StatsRequest(BaseModel):
     measurement_type: str = Field(default="auto", pattern="^(continuous|count|binary|proportion|ordinal|auto)$")
     denominator: str | None = None
     ordinal_levels: list[str] = Field(default_factory=list)
-    max_order: int = Field(default=2, ge=1, le=3)
+    max_order: int = Field(default=3, ge=1, le=3)
     n_boot: int = Field(default=1000, ge=20, le=5000)
     n_perm: int = Field(default=1999, ge=99, le=10000)
     seed: int = Field(default=20261016, ge=0, le=2**32 - 1)

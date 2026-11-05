@@ -1,6 +1,12 @@
 import type { StatsSummary } from '@/types/stats'
 import { displayFactorName } from './factorLabels'
 
+export function statsUnavailableReason(report: StatsSummary): string | null {
+  if (report.status === 'valid' && !report.inference_reason) return null
+  return report.inference_reason || report.warnings.find(Boolean) || report.description
+    || 'The saved analysis did not record a reason.'
+}
+
 export function statsTestFactors(test: StatsSummary['tests'][number]): string[] {
   return (test.factors ?? test.effect.split(':')).map(displayFactorName)
 }

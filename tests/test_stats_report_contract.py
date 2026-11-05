@@ -40,6 +40,31 @@ def test_download_filename_sanitizes_paths_headers_and_handles_legacy_metadata()
     assert len(report_filename(saved, experiment_name="long" * 1000)) < 200
 
 
+@pytest.mark.parametrize("status", ["unavailable", "descriptive", "unreliable", "valid"])
+def test_unavailable_inference_produces_only_a_short_explanation(status):
+    reason = "Missing <usable> measurements." if status == "unavailable" else "No within-condition variation."
+    summary = dict(
+        metric="Score <custom>", status=status, warnings=[reason, "Redundant technical warning"],
+        description="A reliable statistical comparison could not be produced.",
+        methods=["Long methodology"], details=[dict(title="Numerical fitting", items=["Long technical explanation"])],
+    )
+    if status == "valid":
+        summary["inference_reason"] = reason
+    saved = dict(created_at="2026-11-04T12:00:00Z", output=dict(summary=summary))
+    original = deepcopy(saved)
+    html = render_html(saved)
+    assert "Score &lt;custom&gt;" in html
+    assert reason.replace("<", "&lt;").replace(">", "&gt;") in html
+    assert "Nov 4, 2026 at 12:00 PM UTC" in html
+    for omitted in (
+        "Main-effect tests", "Interaction tests", "Comparisons", "Observed distribution", "Model fit",
+        "What ran and why", "Reproducibility", "Long methodology", "Long technical explanation",
+        "Redundant technical warning",
+    ):
+        assert omitted not in html
+    assert saved == original
+
+
 def source_for_design(levels, *, unbalanced=False, missing=False, beta=False):
     rng = np.random.default_rng(53)
     rows = []

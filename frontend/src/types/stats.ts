@@ -73,6 +73,7 @@ export interface StatsSummary {
   version: number
   alpha?: number
   execution_status?: 'completed' | 'incomplete'
+  inference_reason?: string | null
   metric: string
   status: 'valid' | 'unreliable' | 'unavailable' | 'descriptive'
   description: string

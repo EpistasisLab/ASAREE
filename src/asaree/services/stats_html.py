@@ -88,6 +88,44 @@ def display_created_at(value):
     return f"{created:%b} {created.day}, {created.year} at {created.hour % 12 or 12}:{created:%M} {created:%p} UTC"
 
 
+def render_unavailable_html(analysis, summary):
+    """A short explanation replaces the full report when no inference was possible."""
+    def text(value):
+        return escape(display(value), quote=True)
+
+    reason = (
+        summary.get("inference_reason")
+        or next((warning for warning in summary.get("warnings", []) if warning), None)
+        or summary.get("description")
+        or "The saved analysis did not record a reason."
+    )
+    fields = [
+        ("Analysis status", "Statistics unavailable"),
+        ("Created", display_created_at(analysis.get("created_at"))),
+    ]
+    metadata = "".join(f"<div><dt>{text(label)}</dt><dd>{text(value)}</dd></div>" for label, value in fields)
+    return f"""<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src 'none'">
+<title>ASAREE statistics — {text(summary["metric"])}</title>
+<style>
+body{{font:16px/1.6 system-ui,sans-serif;color:#202c38;max-width:800px;margin:40px auto;padding:0 24px}}
+.report-header{{padding:24px;border:1px solid #b6d9e4;border-top:4px solid #167fa2;
+border-radius:12px;background:#f6fafc}}
+h1{{font-size:26px;line-height:1.25;margin:4px 0 20px}}
+.eyebrow{{font:11px monospace;color:#167fa2;text-transform:uppercase;letter-spacing:2px}}
+.report-summary{{display:flex;flex-wrap:wrap;gap:16px 32px;margin:0}}
+dt{{font-size:11px;color:#526170;letter-spacing:.06em;text-transform:uppercase}}
+dd{{margin:6px 0 0;font-size:14px}}
+.notice{{margin-top:20px;padding:16px;border:1px solid #d97706;border-radius:8px;background:#fff7ed}}
+.notice p{{margin:8px 0 0;overflow-wrap:anywhere}}
+@media print{{body{{margin:0;max-width:none}}}}
+</style></head><body><header class="report-header"><p class="eyebrow">ASAREE · Statistical report</p>
+<h1>Statistical results: {text(summary["metric"])}</h1><dl class="report-summary">{metadata}</dl></header>
+<section class="notice" aria-label="Why statistics are unavailable"><strong>Inference unavailable.</strong>
+<p>{text(reason)}</p></section></body></html>"""
+
+
 def model_fit_panel(summary, family, text):
     """Selected model, AIC and the candidate comparison; older reports fall back to provenance."""
     fit = summary.get("model_fit") or {}
@@ -170,6 +208,8 @@ def render_html(analysis: dict, *, source: dict | None = None) -> str:
     summary = output.get("summary")
     if not summary:
         raise ValueError("This analysis predates the automatic report. Run an automatic analysis to create a report.")
+    if summary.get("status") in {"unavailable", "descriptive", "unreliable"} or summary.get("inference_reason"):
+        return render_unavailable_html(analysis, summary)
     summary = present_summary(summary, (analysis.get("config") or {}).get("factors"), output.get("family"), output)
     boxplots = (output.get("summary") or {}).get("boxplots")
     if boxplots is None and source is not None:

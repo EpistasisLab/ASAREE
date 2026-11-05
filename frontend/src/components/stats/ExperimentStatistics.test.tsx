@@ -153,7 +153,7 @@ it('shows concise statistics and a report download', async () => {
   fireEvent.click(screen.getByRole('button', { name: /Duration/ }))
   expect(await screen.findByText('Treatment: A vs B')).toBeInTheDocument()
   expect(screen.getByText('0.6 to 0.9')).toBeInTheDocument()
-  expect(screen.getByRole('button', { name: 'Download HTML report' })).toBeInTheDocument()
+  expect(screen.getByRole('button', { name: 'Download HTML report' })).toBeEnabled()
   expect(screen.queryByRole('img')).not.toBeInTheDocument()
   expect(screen.getByText('What ran and why')).toBeInTheDocument()
   expect(screen.getByText('Elapsed time for one run.')).toBeInTheDocument()
@@ -198,14 +198,25 @@ it('renders the primary interval result even when a stored analytic result is si
   expect(screen.getByText(/primary parametric-bootstrap interval found no clear evidence/)).toBeInTheDocument()
 })
 
-it('shows descriptive-only reports without suggesting a regression model was fitted', async () => {
-  const descriptive: StatsAnalysis = { ...saved, report_status: 'descriptive', output: { ...saved.output!, family: 'descriptive',
-    summary: { ...saved.output!.summary!, status: 'descriptive', tests: [], effects: [] } } }
-  vi.spyOn(statsApi, 'history').mockResolvedValue([descriptive])
-  vi.spyOn(statsApi, 'get').mockResolvedValue(descriptive)
+it.each(['descriptive', 'unavailable', 'unreliable', 'valid'] as const)('shows only the reason and disables HTML downloads for %s metrics without inference', async status => {
+  const reason = 'All measured outcomes are identical. Tests and uncertainty cannot be estimated.'
+  const analysis: StatsAnalysis = { ...saved, report_status: status, report_warnings: [reason], output: { ...saved.output!,
+    summary: { ...saved.output!.summary!, status, inference_reason: status === 'valid' ? reason : null,
+      warnings: status === 'valid' ? ['Additional technical detail'] : [reason, 'Additional technical detail'] } } }
+  vi.spyOn(statsApi, 'history').mockResolvedValue([analysis])
+  vi.spyOn(statsApi, 'get').mockResolvedValue(analysis)
+  const download = vi.spyOn(statsApi, 'report')
   mount()
   fireEvent.click(await screen.findByRole('button', { name: /Duration/ }))
-  expect(await screen.findByText('Descriptive only. No uncertainty or statistical conclusions are estimated.')).toBeInTheDocument()
+  expect(await screen.findByText('Inference unavailable.')).toBeVisible()
+  expect(screen.getAllByText(reason).some(element => element.tagName === 'P')).toBe(true)
+  expect(screen.getByRole('button', { name: 'Download HTML report' })).toBeDisabled()
+  fireEvent.click(screen.getByRole('button', { name: 'Download HTML report' }))
+  expect(download).not.toHaveBeenCalled()
+  expect(screen.queryByRole('region', { name: 'Metric distribution' })).not.toBeInTheDocument()
+  expect(screen.queryByRole('region', { name: 'Comparisons table' })).not.toBeInTheDocument()
+  expect(screen.queryByText('What ran and why')).not.toBeInTheDocument()
+  expect(screen.queryByText('Additional technical detail')).not.toBeInTheDocument()
   expect(screen.queryByText(/Selected regression model distribution/)).not.toBeInTheDocument()
 })
 
@@ -233,7 +244,7 @@ it('lists unavailable metrics and explains why without showing statistical concl
   expect(row).toHaveTextContent('Report unavailable')
   expect(statsApi.get).not.toHaveBeenCalled()
   fireEvent.click(row)
-  expect(await screen.findByText('Free text has no established statistical ordering.')).toBeVisible()
+  expect(await screen.findByText('Free text has no established statistical ordering.', { selector: 'p' })).toBeVisible()
   expect(screen.queryByText('Evidence of an effect')).not.toBeInTheDocument()
 })
 
@@ -403,6 +414,7 @@ it('keeps analytic results visible when resampling is unavailable', async () => 
   expect(screen.getByText('0.6 to 0.9')).toBeInTheDocument()
   expect(screen.getByText('Too many failed refits')).toBeInTheDocument()
   expect(screen.getAllByText('Unavailable')).toHaveLength(2)
+  expect(screen.getByRole('button', { name: 'Download HTML report' })).toBeEnabled()
 })
 
 it('does not invent a definition for a metric whose description is missing', async () => {

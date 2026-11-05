@@ -4,7 +4,7 @@ import { statsApi } from '@/api/client'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader } from '@/components/ui/card'
 import type { StatsAnalysis } from '@/types/stats'
-import { describeStatsReportFindings, primaryComparisonResult, statsTestFactors } from '@/lib/statsFindings'
+import { describeStatsReportFindings, primaryComparisonResult, statsTestFactors, statsUnavailableReason } from '@/lib/statsFindings'
 import { AnalysisMethods } from './AnalysisMethods'
 
 const distributionNames: Record<string, string> = {
@@ -31,6 +31,20 @@ export function StatisticsReport({ analysis, experiment }: { analysis: StatsAnal
   const [downloading, setDownloading] = useState(false)
   const report = analysis.output?.summary
   if (!report) return <p className="text-sm text-muted-foreground">Run an automatic analysis to create a concise report for this metric.</p>
+  const unavailableReason = statsUnavailableReason(report)
+  if (unavailableReason) return <Card className="min-w-0">
+    <CardHeader>
+      <div className="flex justify-start">
+        <Button variant="outline" size="sm" disabled title="Statistics are unavailable for this metric.">
+          <Download className="size-3.5" />Download HTML report
+        </Button>
+      </div>
+    </CardHeader>
+    <CardContent className="space-y-2 text-sm">
+      <p className="font-medium">Inference unavailable.</p>
+      <p className="break-words text-muted-foreground">{unavailableReason}</p>
+    </CardContent>
+  </Card>
   const resampled = !!report.resampling
   const findings = describeStatsReportFindings(report)
   const primary = report.primary_analysis === 'parametric_bootstrap_intervals'
@@ -86,8 +100,7 @@ export function StatisticsReport({ analysis, experiment }: { analysis: StatsAnal
         {findings.map((finding, i) => <li key={i}>{finding}</li>)}
       </ul>}
       {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
-      {report.status === 'descriptive' ? <p className="text-sm text-muted-foreground">Descriptive only. No uncertainty or statistical conclusions are estimated.</p> : report.status !== 'valid' && <p role="alert" className="rounded border border-destructive p-3 text-sm">Statistical conclusions are unavailable for this metric. The reason is listed below.</p>}
-      {family && report.status !== 'descriptive' && <p className="text-sm">Selected regression model distribution: <span className="font-medium">{distributionNames[family] ?? family}</span></p>}
+      {family && <p className="text-sm">Selected regression model distribution: <span className="font-medium">{distributionNames[family] ?? family}</span></p>}
       {distribution && distribution.n > 0 && <section aria-label="Metric distribution" className="space-y-3">
         <h3 className="text-sm font-medium">Observed distribution</h3>
         {bins.some(bin => bin.count > 0) ? <figure aria-label={`${report.metric} observed distribution histogram`} className="space-y-3 rounded-lg border border-border bg-muted/20 p-4">
@@ -114,7 +127,7 @@ export function StatisticsReport({ analysis, experiment }: { analysis: StatsAnal
             </div>
           </div>
         </figure> : <p className="rounded-md border border-border bg-muted/20 p-3 text-xs text-muted-foreground">This saved report does not contain enough observations to draw a chart. Analyze this experiment version again to include it.</p>}
-        <p className="text-xs text-muted-foreground">Observed values pool the analyzed replicates across conditions. {report.status === 'descriptive' ? 'Descriptive only; no statistical inference is provided.' : 'The selected model describes outcomes after accounting for the experimental factors.'}</p>
+        <p className="text-xs text-muted-foreground">Observed values pool the analyzed replicates across conditions. The selected model describes outcomes after accounting for the experimental factors.</p>
         {!!metricInfo.coding.length && <p className="text-xs text-muted-foreground">Categorical outcomes use the analyzed category codes. Their numeric summaries depend on that coding.</p>}
         <dl className="grid grid-cols-2 gap-x-4 gap-y-2 text-xs @lg:grid-cols-3">
           {([

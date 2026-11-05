@@ -5,6 +5,7 @@ import { statsApi } from '@/api/client'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { StatisticsReport } from './StatisticsReport'
+import { statsUnavailableReason } from '@/lib/statsFindings'
 import type { StatsAnalysis, StatsMetricSource } from '@/types/stats'
 
 export function ExperimentStatistics({ experiment, version }: { experiment: string; version: string | null }) {
@@ -41,7 +42,7 @@ export function ExperimentStatistics({ experiment, version }: { experiment: stri
   const changed = !!source.data && analyses.some(a =>
     a.status !== 'pending' && a.status !== 'running' && a.fingerprint !== source.data.fingerprint)
   const pending = run.isPending || analyses.some(a => a.status === 'pending' || a.status === 'running')
-  const reports = analyses.filter(a => (a.status === 'completed' || a.status === 'incomplete') && (a.report_status === 'valid' || a.report_status === 'descriptive'))
+  const reports = analyses.filter(a => (a.status === 'completed' || a.status === 'incomplete') && a.report_status === 'valid')
   const failed = analyses.filter(a => a.status === 'failed' || a.status === 'incomplete')
   const error = source.error || history.error || run.error
   const ready = !!version && !source.isError && (source.data?.n_measured_replicates ?? 0) > 0
@@ -50,7 +51,7 @@ export function ExperimentStatistics({ experiment, version }: { experiment: stri
     <p className="text-xs text-muted-foreground">Analyze metrics from the experiment version being viewed. Methods are selected automatically. Rerunning replaces this version’s existing reports.</p>
     <div className="space-y-1 rounded-md border border-border bg-muted/20 p-3 text-xs text-muted-foreground">
       <p>Whole-dataset replicates are treated as independent observations.</p>
-      <p>Model fitting needs at least <strong className="text-foreground">5 usable measurements overall</strong> and <strong className="text-foreground">3 per observed cell</strong>, for each metric. These minimums do not guarantee a reliable comparison. Constant outcomes may receive a descriptive-only report.</p>
+      <p>Model fitting needs at least <strong className="text-foreground">5 usable measurements overall</strong> and <strong className="text-foreground">3 per observed cell</strong>, for each metric. These minimums do not guarantee a reliable comparison. Statistical inference is unavailable when all measured outcomes are identical.</p>
       <p>Missing measurements are excluded, not treated as zero. Each metric may use a different set of completed replicates.</p>
     </div>
     {changed && !pending && <p role="status" className="rounded-md border border-[color:var(--chart-4)]/40 p-3 text-xs text-[color:var(--chart-4)]">New or changed results are available for this version. Rerun analysis to update the reports.</p>}
@@ -63,7 +64,7 @@ export function ExperimentStatistics({ experiment, version }: { experiment: stri
     {history.isLoading && <p role="status" className="text-xs text-muted-foreground">Loading statistics…</p>}
     {pending && <p role="status" className="text-xs text-muted-foreground">Metrics are being analyzed. You can leave this tab and return later.</p>}
     {failed.map(a => <p key={a.id} role="alert" className="break-words text-xs text-destructive">{a.config.metric}: {a.error || (a.status === 'incomplete' ? 'Analysis incomplete. Rerun to finish the requested procedures.' : 'Analysis failed. Please rerun the analysis.')}</p>)}
-    {version && !history.isLoading && !history.error && !pending && reports.length === 0 && <p className="text-xs text-muted-foreground">No statistical reports are available for this experiment version. Analyze all metrics after collecting sufficient experiment results.</p>}
+    {version && !history.isLoading && !history.error && !pending && reports.length === 0 && <p className="text-xs text-muted-foreground">No statistical reports are available for this experiment version. {analyses.length ? 'Open a metric below to see why.' : 'Analyze all metrics after collecting sufficient experiment results.'}</p>}
     <div className="space-y-2">
       {metrics.map(metric => <ReportRow key={metric.name} experiment={experiment} metric={metric} analysis={latest.get(metric.name)} sourceFingerprint={source.data?.fingerprint} />)}
     </div>
@@ -83,11 +84,13 @@ function ReportRow({ experiment, metric, analysis, sourceFingerprint }: {
     staleTime: 0,
     refetchOnMount: 'always',
   })
+  const reportSummary = report.data?.output?.summary
+  const unavailableReason = reportSummary ? statsUnavailableReason(reportSummary) : null
+  const valid = reportSummary ? !unavailableReason : analysis?.report_status === 'valid'
   const status = !analysis ? (metric.availability_reason?.startsWith('Not enough') ? 'Needs measurements' : 'Not analyzed')
     : analysis.status === 'pending' ? 'Queued' : analysis.status === 'running' ? 'Analyzing'
     : analysis.status === 'failed' ? 'Analysis failed' : analysis.status === 'incomplete' ? 'Analysis incomplete'
-    : analysis.report_status === 'descriptive' ? 'Descriptive only'
-    : analysis.report_status === 'valid' ? 'Report ready' : 'Report unavailable'
+    : valid ? 'Report ready' : 'Report unavailable'
   const statusColor = {
     'Needs measurements': 'text-[color:var(--chart-4)]',
     'Not analyzed': 'text-muted-foreground',
@@ -95,14 +98,12 @@ function ReportRow({ experiment, metric, analysis, sourceFingerprint }: {
     'Analyzing': 'text-primary',
     'Analysis failed': 'text-destructive',
     'Analysis incomplete': 'text-[color:var(--chart-4)]',
-    'Descriptive only': 'text-primary',
     'Report ready': 'text-[color:var(--chart-3)]',
     'Report unavailable': 'text-[color:var(--chart-4)]',
   }[status]
   const outdated = finished && sourceFingerprint && analysis.fingerprint !== sourceFingerprint
-  const valid = analysis?.report_status === 'valid' || analysis?.report_status === 'descriptive'
-  const reason = analysis?.error || (finished && !valid && !outdated && metric.availability_reason)
-    || (!valid && analysis?.report_warnings?.join(' '))
+  const reason = analysis?.error || unavailableReason || (!valid && analysis?.report_warnings?.find(Boolean))
+    || (finished && !valid && !outdated && metric.availability_reason)
     || (!analysis && metric.availability_reason)
   return <div className="overflow-hidden rounded-md border border-border">
     <Button variant="ghost" aria-expanded={open} aria-controls={id}
@@ -117,7 +118,7 @@ function ReportRow({ experiment, metric, analysis, sourceFingerprint }: {
         </span>
         {metric.n_usable != null && <span className="block font-mono text-muted-foreground">Current: {metric.n_usable} usable measurements · least-measured observed cell: {metric.minimum_per_cell ?? 0}</span>}
         {metric.n_usable == null && <span className="block font-mono text-muted-foreground">{metric.n} recorded measurements</span>}
-        {reason && <span className="block break-words text-muted-foreground">{reason}</span>}
+        {reason && !open && <span className="block break-words text-muted-foreground">{reason}</span>}
         {analysis && <span className="block text-muted-foreground">{new Date(analysis.created_at).toLocaleString()}</span>}
       </span>
     </Button>
@@ -128,8 +129,7 @@ function ReportRow({ experiment, metric, analysis, sourceFingerprint }: {
         {(analysis?.status === 'pending' || analysis?.status === 'running') && <p role="status" className="p-3 text-xs text-muted-foreground">This metric is being analyzed. You can return later.</p>}
         {report.isLoading && <p role="status" className="p-3 text-xs text-muted-foreground">Loading report…</p>}
         {report.error && <p role="alert" className="p-3 text-xs text-destructive">{report.error.message}</p>}
-        {(report.data?.output?.summary?.status === 'valid' || report.data?.output?.summary?.status === 'descriptive') && <StatisticsReport analysis={report.data} experiment={experiment} />}
-        {report.data?.output?.summary && report.data.output.summary.status !== 'valid' && report.data.output.summary.status !== 'descriptive' && <div className="space-y-2 p-3 text-xs text-muted-foreground"><p>No statistical report could be produced.</p>{report.data.output.summary.warnings.map((warning, i) => <p key={i}>{warning}</p>)}</div>}
+        {report.data?.output?.summary && <StatisticsReport analysis={report.data} experiment={experiment} />}
       </>}
     </div>
   </div>

@@ -1,3 +1,4 @@
+import { displayFactorName } from '@/lib/factorLabels'
 import type { ModelCapabilities } from '@/types/llmSettings'
 import { modelCapabilities } from '@/lib/modelCapabilities'
 import { useEffect, useState } from 'react'
@@ -72,7 +73,7 @@ export function ModelFactorGroup({ id, factor, selected, warning }: {
     <Card size="sm" className={`gap-3 px-3 ${selected ? 'ring-2 ring-[color:var(--card-accent)]' : ''}`}>
       <div className="flex items-center gap-2">
         <Split className="size-5 shrink-0 text-chart-2" />
-        <div className="min-w-0 flex-1"><p className="truncate text-sm font-semibold" title={factor.name}>{factor.name}</p><p className="text-xs text-muted-foreground">Model factor · {factor.levels.length} levels</p></div>
+        <div className="min-w-0 flex-1"><p className="truncate text-sm font-semibold" title={displayFactorName(factor.name)}>{displayFactorName(factor.name)}</p><p className="text-xs text-muted-foreground">Model factor · {factor.levels.length} levels</p></div>
         {!!warning?.length && <WarningBadge issues={warning} className="flex size-4 shrink-0 items-center justify-center" />}
         <Button variant="ghost" size="icon-sm" className="nodrag nopan" aria-label={expanded ? 'Collapse model levels' : 'Expand model levels'} aria-expanded={expanded} onClick={(event) => {
           event.stopPropagation()

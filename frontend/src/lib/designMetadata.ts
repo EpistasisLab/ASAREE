@@ -1,5 +1,5 @@
 import { normalizeDesignMetrics } from '@/lib/metricCatalog'
-import type { CoordinationStrategySlug, DesignMetric, DesignSpec, Experiment, MeasurementPlan } from '@/types/experiments'
+import type { CoordinationStrategySlug, DesignMetric, DesignSpec, Experiment, MeasurementPlan, MetricRecommendationMetadata } from '@/types/experiments'
 
 /** The Design tab's autosaved fields, in the shape its local draft holds them. */
 export type DesignMetadata = {
@@ -7,6 +7,7 @@ export type DesignMetadata = {
   randomizationSeed: number | null
   metrics: DesignMetric[]
   measurementPlan: MeasurementPlan | null
+  metricRecommendations?: MetricRecommendationMetadata | null
   coordinationSlug: CoordinationStrategySlug
 }
 
@@ -16,6 +17,7 @@ export function designMetadataOf(experiment: Experiment): DesignMetadata {
     randomizationSeed: experiment.design_spec?.randomization_seed ?? null,
     metrics: normalizeDesignMetrics(experiment.design_spec?.metrics),
     measurementPlan: experiment.measurement_plan,
+    metricRecommendations: experiment.metric_recommendations ?? null,
     coordinationSlug: experiment.design_spec?.coordination_strategy?.slug ?? 'sequential',
   }
 }
@@ -32,6 +34,7 @@ export class DesignMetadataConflictError extends Error {
 }
 
 type DesignMetadataPatch = {
+  metric_recommendations?: MetricRecommendationMetadata | null
   hypothesis?: string | null
   measurement_plan?: MeasurementPlan | null
   measurement_validation_protocol_id?: string | null
@@ -64,6 +67,7 @@ export function designMetadataPatch(
   if (pending.size === 0) return null
 
   const patch: DesignMetadataPatch = {}
+  if (pending.has('metricRecommendations')) patch.metric_recommendations = draft.metricRecommendations
   if (pending.has('hypothesis')) patch.hypothesis = draft.hypothesis.trim() || null
   if (pending.has('measurementPlan')) {
     patch.measurement_plan = draft.measurementPlan

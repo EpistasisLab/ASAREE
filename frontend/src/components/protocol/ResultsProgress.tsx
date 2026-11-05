@@ -1,28 +1,31 @@
-import { CircleDollarSign, Clock3, Coins } from 'lucide-react'
 import { useState, type ReactNode } from 'react'
 import { Button } from '@/components/ui/button'
-import { Card } from '@/components/ui/card'
+import { Sigma } from 'lucide-react'
 import type { ExecutionCell, ExecutionSummary } from '@/types/executionResults'
 import { CellUsageChart } from './CellUsageChart'
-import { experimentResultStatus, formatUsageValue, usageMetricLabels, type UsageMetric } from '@/lib/resultUsage'
+import { experimentResultStatus, type UsageMetric } from '@/lib/resultUsage'
+import { formatCellMetric, selectedResultMetrics } from '@/lib/resultMetrics'
+import { ResultsScorecard } from './ResultsPanel'
 
 export function ResultsProgress({ summary, cells, cellsLoading, cellsError, attemptScope = 'latest', onAttemptScopeChange, chartPagination, selectedMetric, onMetricChange, onSelectCell, selectedCellId }: {
   summary: ExecutionSummary; cells: ExecutionCell[]; cellsLoading: boolean; cellsError?: string
   attemptScope?: 'latest' | 'all'; onAttemptScopeChange?: (scope: 'latest' | 'all') => void; chartPagination?: ReactNode
-  selectedMetric?: UsageMetric; onMetricChange?: (metric: UsageMetric) => void
+  selectedMetric?: string; onMetricChange?: (metric: string) => void
   onSelectCell?: (cell: ExecutionCell) => void
   selectedCellId?: string
 }) {
-  const [internalMetric, setInternalMetric] = useState<UsageMetric>('total_tokens')
-  const metric = selectedMetric ?? internalMetric
+  const [internalMetric, setInternalMetric] = useState<string>('')
+  const measurements = selectedResultMetrics(summary)
+  const metric = (selectedMetric ?? internalMetric) || (measurements[0] ? `metric:${measurements[0].key}` : '')
+  const measurement = measurements.find(item => `metric:${item.key}` === metric)
+  const metricTotal = measurement ? summary.metric_totals?.[measurement.key] : undefined
+  const metricTotalCount = measurement ? summary.metric_total_counts?.[measurement.key] ?? 0 : 0
+  const usageMetric: UsageMetric = metric === 'cost_usd' || metric === 'duration_seconds' ? metric : 'total_tokens'
   const completed = summary.counts?.completed ?? 0
   const total = summary.expected ?? summary.total ?? 0
   const status = experimentResultStatus(summary)
   const label = summary.unit === 'row' ? 'Rows completed' : 'Replicates completed'
-  const usage = attemptScope === 'all' ? summary.all_attempt_usage : summary.usage
   const completedExperiment = status === 'Completed'
-  const labels = usageMetricLabels(completedExperiment)
-  const usageDescription = attemptScope === 'all' ? 'all attempts, including retries' : 'the most recent attempt for each replicate'
   const number = (value: number | null | undefined) => value == null ? '—' : value.toLocaleString()
 
   return <section aria-label="Experiment progress" className="space-y-3">
@@ -48,22 +51,25 @@ export function ResultsProgress({ summary, cells, cellsLoading, cellsError, atte
       <p className="text-[11px] text-muted-foreground">{attemptScope === 'all' ? 'Includes previous attempts and retries.'
         : `Most recent attempt for each ${summary.unit === 'row' ? 'row execution' : 'replicate'}.`}</p>
     </div>
-    <div className="grid grid-cols-3 gap-2">
-      {([
-        ['total_tokens', labels.total_tokens, formatUsageValue('total_tokens', usage?.total_tokens), Coins, `Input and output tokens across ${usageDescription}.`],
-        ['cost_usd', labels.cost_usd, formatUsageValue('cost_usd', usage?.cost_usd), CircleDollarSign, `Reported or estimated cost across ${usageDescription}.`],
-        ['duration_seconds', labels.duration_seconds, formatUsageValue('duration_seconds', usage?.duration_seconds), Clock3, `Cumulative duration of ${usageDescription}. Parallel runs overlap in wall-clock time.`],
-      ] as const).map(([key, title, value, Icon, help]) => <Card key={title} size="sm" className="min-w-0 gap-0 p-0">
-        <Button variant="ghost" aria-label={`Show ${title.toLowerCase()} by cell`} aria-pressed={metric === key}
-          onClick={() => { setInternalMetric(key); onMetricChange?.(key) }} title={help}
-          className="h-full w-full min-w-0 flex-col items-stretch justify-start gap-1 whitespace-normal p-2 text-left aria-pressed:border-primary aria-pressed:bg-primary/10 @min-[450px]:p-3">
-          <span className="flex items-start gap-1 text-[11px] text-muted-foreground @min-[450px]:text-xs">
-            <Icon className="mt-0.5 size-3 shrink-0" aria-hidden="true" /><span className="min-w-0">{title}</span>
-          </span>
-          <span className="mt-auto truncate text-center font-mono text-sm font-medium tabular-nums @min-[450px]:text-lg" title={key === 'total_tokens' ? `${number(usage?.total_tokens)} tokens` : value}>{value}</span>
-        </Button>
-      </Card>)}
-    </div>
-    <CellUsageChart cells={cells} metric={metric} loading={cellsLoading} error={cellsError} attemptScope={attemptScope} pagination={chartPagination} completed={completedExperiment} onSelectCell={onSelectCell} selectedCellId={selectedCellId} />
+    <label className="block space-y-1 text-xs text-muted-foreground">
+      <span>Metric by cell</span>
+      <select aria-label="Metric by cell" value={measurement ? metric : ''} disabled={measurements.length === 0}
+        onChange={event => { setInternalMetric(event.target.value); onMetricChange?.(event.target.value) }}
+        className="h-9 w-full min-w-0 rounded-md border border-input bg-background px-2 text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+        <option value="" disabled hidden={measurements.length > 0}>{measurements.length === 0 ? 'No experiment metrics selected' : ''}</option>
+        {measurements.map(item => <option key={item.key} value={`metric:${item.key}`}>{item.label}</option>)}
+      </select>
+    </label>
+    {measurement && metricTotal !== undefined && <div role="region" aria-label={`${measurement.label} total`}>
+      <ResultsScorecard label={`${measurement.label} · Total`} icon={Sigma}
+        help="Sum of recorded measurements from the latest completed attempts across all cells in this experiment version. Attempts that reached their iteration limit and missing measurements are excluded."
+        value={metricTotal === null ? '—' : formatCellMetric(metricTotal, measurement)}
+        valueTitle={metricTotal === null ? 'No measurements yet' : `${metricTotal.toLocaleString()}${measurement.unit ? ` ${measurement.unit}` : ''}`}
+        note={metricTotalCount > 0
+          ? `${metricTotalCount.toLocaleString()} measured ${summary.unit === 'row' ? 'row executions' : 'replicates'} · All cells in this version`
+          : 'No measurements yet'} />
+    </div>}
+    {measurement && <p className="text-[11px] text-muted-foreground">Selected metrics show the latest attempt for each {summary.unit === 'row' ? 'row execution. Row outcomes are listed individually without cell aggregation' : 'replicate. Numeric cell summaries use completed attempts that did not reach their iteration limit'}. Open a cell below to inspect its recorded values and reasons for missing results. The attempt toggle above applies only to operational usage summaries. Missing measurements are excluded, not treated as zero.</p>}
+    {(!measurement || summary.unit === 'replicate') && <CellUsageChart cells={cells} metric={usageMetric} measurement={measurement} loading={cellsLoading} error={cellsError} attemptScope={attemptScope} pagination={chartPagination} completed={completedExperiment} onSelectCell={onSelectCell} selectedCellId={selectedCellId} />}
   </section>
 }

@@ -4,7 +4,7 @@ import { statsApi } from '@/api/client'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader } from '@/components/ui/card'
 import type { StatsAnalysis } from '@/types/stats'
-import { describeStatsReportFindings, primaryComparisonResult } from '@/lib/statsFindings'
+import { describeStatsReportFindings, primaryComparisonResult, statsTestFactors, statsUnavailableReason } from '@/lib/statsFindings'
 import { AnalysisMethods } from './AnalysisMethods'
 
 const distributionNames: Record<string, string> = {
@@ -31,9 +31,27 @@ export function StatisticsReport({ analysis, experiment }: { analysis: StatsAnal
   const [downloading, setDownloading] = useState(false)
   const report = analysis.output?.summary
   if (!report) return <p className="text-sm text-muted-foreground">Run an automatic analysis to create a concise report for this metric.</p>
+  const unavailableReason = statsUnavailableReason(report)
+  if (unavailableReason) return <Card className="min-w-0">
+    <CardHeader>
+      <div className="flex justify-start">
+        <Button variant="outline" size="sm" disabled title="Statistics are unavailable for this metric.">
+          <Download className="size-3.5" />Download HTML report
+        </Button>
+      </div>
+    </CardHeader>
+    <CardContent className="space-y-2 text-sm">
+      <p className="font-medium">Inference unavailable.</p>
+      <p className="break-words text-muted-foreground">{unavailableReason}</p>
+    </CardContent>
+  </Card>
   const resampled = !!report.resampling
   const findings = describeStatsReportFindings(report)
   const primary = report.primary_analysis === 'parametric_bootstrap_intervals'
+  const testGroups = [
+    { title: 'Main-effect tests', tests: report.tests.filter(test => statsTestFactors(test).length === 1) },
+    { title: 'Interaction tests', tests: report.tests.filter(test => statsTestFactors(test).length > 1) },
+  ]
   const distribution = report.distribution
   const bins = distribution?.plot?.bins ?? []
   const tickStep = Math.max(1, Math.ceil(Math.max(1, ...bins.map(bin => bin.count)) / 4))
@@ -64,7 +82,7 @@ export function StatisticsReport({ analysis, experiment }: { analysis: StatsAnal
       setDownloading(false)
     }
   }
-  return <Card>
+  return <Card className="min-w-0">
     <CardHeader>
       <div className="flex justify-start p-3 mb-2">
         <Button variant="outline" size="sm" onClick={() => void download()} disabled={downloading}>
@@ -75,15 +93,14 @@ export function StatisticsReport({ analysis, experiment }: { analysis: StatsAnal
       {metricInfo.unit && <p className="text-sm text-muted-foreground">Unit: {metricInfo.unit}</p>}
       {metricInfo.coding.map((line, i) => <p key={i} className="text-sm text-muted-foreground">{line}</p>)}
     </CardHeader>
-    <CardContent className="space-y-5">
+    <CardContent className="min-w-0 space-y-5">
       <p className="text-sm text-muted-foreground">{report.description}</p>
       {report.execution_status === 'incomplete' && <p role="alert" className="text-sm text-destructive">Analysis incomplete. Interrupted procedures supply no inference.</p>}
       {!!findings.length && <ul aria-label="Key findings" className="list-disc space-y-3 pl-5 text-sm">
         {findings.map((finding, i) => <li key={i}>{finding}</li>)}
       </ul>}
       {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
-      {report.status === 'descriptive' ? <p className="text-sm text-muted-foreground">Descriptive only. No uncertainty or statistical conclusions are estimated.</p> : report.status !== 'valid' && <p role="alert" className="rounded border border-destructive p-3 text-sm">Statistical conclusions are unavailable for this metric. The reason is listed below.</p>}
-      {family && report.status !== 'descriptive' && <p className="text-sm">Selected regression model distribution: <span className="font-medium">{distributionNames[family] ?? family}</span></p>}
+      {family && <p className="text-sm">Selected regression model distribution: <span className="font-medium">{distributionNames[family] ?? family}</span></p>}
       {distribution && distribution.n > 0 && <section aria-label="Metric distribution" className="space-y-3">
         <h3 className="text-sm font-medium">Observed distribution</h3>
         {bins.some(bin => bin.count > 0) ? <figure aria-label={`${report.metric} observed distribution histogram`} className="space-y-3 rounded-lg border border-border bg-muted/20 p-4">
@@ -110,7 +127,7 @@ export function StatisticsReport({ analysis, experiment }: { analysis: StatsAnal
             </div>
           </div>
         </figure> : <p className="rounded-md border border-border bg-muted/20 p-3 text-xs text-muted-foreground">This saved report does not contain enough observations to draw a chart. Analyze this experiment version again to include it.</p>}
-        <p className="text-xs text-muted-foreground">Observed values pool the analyzed replicates across conditions. {report.status === 'descriptive' ? 'Descriptive only; no statistical inference is provided.' : 'The selected model describes outcomes after accounting for the experimental factors.'}</p>
+        <p className="text-xs text-muted-foreground">Observed values pool the analyzed replicates across conditions. The selected model describes outcomes after accounting for the experimental factors.</p>
         {!!metricInfo.coding.length && <p className="text-xs text-muted-foreground">Categorical outcomes use the analyzed category codes. Their numeric summaries depend on that coding.</p>}
         <dl className="grid grid-cols-2 gap-x-4 gap-y-2 text-xs @lg:grid-cols-3">
           {([
@@ -123,18 +140,19 @@ export function StatisticsReport({ analysis, experiment }: { analysis: StatsAnal
           </div>)}
         </dl>
       </section>}
-      {!!report.tests.length && <div className="overflow-x-auto"><table className="w-full text-left text-sm">
-        <caption className="mb-2 text-left font-medium">{primary ? 'Secondary statistical tests' : 'Statistical tests'}</caption>
+      {!!report.tests.length && <p className="text-xs text-muted-foreground">Main-effect tests assess each factor averaged over the other factors. Interaction tests assess whether a factor’s effect depends on another factor’s setting. {primary && 'These omnibus tests are secondary; the comparisons below provide the primary bootstrap intervals.'}</p>}
+      {testGroups.filter(group => group.tests.length).map(group => <div key={group.title} className="max-w-full overflow-x-auto" tabIndex={0} role="region" aria-label={`${group.title} table`}><table className="w-full text-left text-sm [&_th]:min-w-36 [&_td]:min-w-36 [&_th]:max-w-96 [&_td]:max-w-96 [&_th]:break-normal [&_td]:break-words [&_.font-mono]:whitespace-nowrap">
+        <caption className="mb-2 text-left font-medium">{group.title}{primary ? ' · Secondary analysis' : ''}</caption>
         <thead><tr>{['Effect', resampled ? 'Analytic adjusted p' : 'Adjusted p-value', ...(resampled ? ['Resampling adjusted p'] : []), 'Analytic result'].map(title => <th scope="col" key={title} className="border-b border-border p-3">{title}</th>)}</tr></thead>
-        <tbody>{report.tests.map((row, i) => <tr key={i}>
-          <td className="border-b border-border p-3">{row.effect}{row.method && <span className="mt-1 block text-xs text-muted-foreground">{row.method}</span>}</td>
+        <tbody>{group.tests.map((row, i) => <tr key={i}>
+          <td className="border-b border-border p-3">{row.label ?? statsTestFactors(row).join(' × ')}{row.method && <span className="mt-1 block text-xs text-muted-foreground">{row.method}</span>}</td>
           <td className="border-b border-border p-3 font-mono">{value(row.p_adjusted, true)}</td>
           {resampled && <td className="border-b border-border p-3"><span className="font-mono">{value(row.permutation_p_adjusted ?? null, true)}</span><span className="mt-1 block text-xs text-muted-foreground">{row.permutation_p_adjusted == null ? row.permutation_status : row.permutation_result}</span>{row.permutation_p_adjusted != null && <span className="mt-1 block text-xs text-muted-foreground">{row.resampling_label}</span>}</td>}
           <td className="border-b border-border p-3">{row.result}</td>
         </tr>)}</tbody>
-      </table></div>}
+      </table></div>)}
       {resampled && !!report.tests.length && <p className="text-xs text-muted-foreground">Resampling procedures are named per row. Some test a different null hypothesis from the analytic test. Agreement does not establish validity.</p>}
-      {!!report.effects.length && <div className="overflow-x-auto"><table className="w-full text-left text-sm">
+      {!!report.effects.length && <div className="max-w-full overflow-x-auto" tabIndex={0} role="region" aria-label="Comparisons table"><table className="w-full text-left text-sm [&_th]:min-w-36 [&_td]:min-w-36 [&_th]:max-w-96 [&_td]:max-w-96 [&_th]:break-normal [&_td]:break-words [&_.font-mono]:whitespace-nowrap">
         <caption className="mb-2 text-left font-medium">Comparisons · 95% confidence intervals</caption>
         <thead><tr>{['Comparison', 'Effect', ...(primary ? [`Primary parametric-bootstrap ${Math.round((report.confidence_level ?? .95) * 100)}% interval`, 'Sensitivity: analytic 95% interval'] : [resampled ? 'Analytic 95% interval' : '95% interval', ...(resampled ? ['Bootstrap 95% interval'] : [])]), primary ? 'Sensitivity: analytic adjusted p' : 'Analytic adjusted p', primary ? 'Primary interval result' : 'Result'].map(title => <th scope="col" key={title} className="border-b border-border p-3">{title}</th>)}</tr></thead>
         <tbody>{report.effects.map((row, i) => <tr key={i}>

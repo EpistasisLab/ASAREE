@@ -83,7 +83,7 @@ export function upsertRuntimeMetric(plan: MeasurementPlan | null, metric: Design
       {
         id: metric.id,
         name: metric.name,
-        value_type: 'number',
+        value_type: metric.valueType === 'opaque' || metric.valueType === 'boolean' ? metric.valueType : 'number',
         direction: metric.direction,
         aggregation: metric.aggregation ?? 'mean',
         description: metric.description,

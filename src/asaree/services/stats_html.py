@@ -9,6 +9,13 @@ import unicodedata
 from datetime import UTC, datetime
 from html import escape
 
+from asaree.services.stats_boxplots import (
+    BOX_HEIGHT,
+    BOX_PLOT_HEIGHT,
+    BOX_TOP_PADDING,
+    render_boxplots,
+    snapshot_boxplots,
+)
 from asaree.services.stats_distribution import saved_distribution_plot
 from asaree.services.stats_findings import describe_report_findings, primary_comparison_result
 
@@ -71,6 +78,54 @@ def display(value, p=False):
     return str(value)
 
 
+def display_created_at(value):
+    """Readable, timezone-explicit timestamps in portable, script-free reports."""
+    try:
+        created = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except (ValueError, TypeError):
+        return display(value)
+    created = created.replace(tzinfo=UTC) if created.tzinfo is None else created.astimezone(UTC)
+    return f"{created:%b} {created.day}, {created.year} at {created.hour % 12 or 12}:{created:%M} {created:%p} UTC"
+
+
+def render_unavailable_html(analysis, summary):
+    """A short explanation replaces the full report when no inference was possible."""
+    def text(value):
+        return escape(display(value), quote=True)
+
+    reason = (
+        summary.get("inference_reason")
+        or next((warning for warning in summary.get("warnings", []) if warning), None)
+        or summary.get("description")
+        or "The saved analysis did not record a reason."
+    )
+    fields = [
+        ("Analysis status", "Statistics unavailable"),
+        ("Created", display_created_at(analysis.get("created_at"))),
+    ]
+    metadata = "".join(f"<div><dt>{text(label)}</dt><dd>{text(value)}</dd></div>" for label, value in fields)
+    return f"""<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src 'none'">
+<title>ASAREE statistics — {text(summary["metric"])}</title>
+<style>
+body{{font:16px/1.6 system-ui,sans-serif;color:#202c38;max-width:800px;margin:40px auto;padding:0 24px}}
+.report-header{{padding:24px;border:1px solid #b6d9e4;border-top:4px solid #167fa2;
+border-radius:12px;background:#f6fafc}}
+h1{{font-size:26px;line-height:1.25;margin:4px 0 20px}}
+.eyebrow{{font:11px monospace;color:#167fa2;text-transform:uppercase;letter-spacing:2px}}
+.report-summary{{display:flex;flex-wrap:wrap;gap:16px 32px;margin:0}}
+dt{{font-size:11px;color:#526170;letter-spacing:.06em;text-transform:uppercase}}
+dd{{margin:6px 0 0;font-size:14px}}
+.notice{{margin-top:20px;padding:16px;border:1px solid #d97706;border-radius:8px;background:#fff7ed}}
+.notice p{{margin:8px 0 0;overflow-wrap:anywhere}}
+@media print{{body{{margin:0;max-width:none}}}}
+</style></head><body><header class="report-header"><p class="eyebrow">ASAREE · Statistical report</p>
+<h1>Statistical results: {text(summary["metric"])}</h1><dl class="report-summary">{metadata}</dl></header>
+<section class="notice" aria-label="Why statistics are unavailable"><strong>Inference unavailable.</strong>
+<p>{text(reason)}</p></section></body></html>"""
+
+
 def model_fit_panel(summary, family, text):
     """Selected model, AIC and the candidate comparison; older reports fall back to provenance."""
     fit = summary.get("model_fit") or {}
@@ -112,14 +167,15 @@ def model_fit_panel(summary, family, text):
     )
     diagnostics = fit.get("diagnostics") or []
     diagnostic_table = (
-        "<table><caption>Diagnostics for the selected model</caption><thead><tr><th scope='col'>Diagnostic</th>"
+        '<div class="table-scroll" tabindex="0" role="region" aria-label="Model diagnostics">'
+        '<table><caption>Diagnostics for the selected model</caption><thead><tr><th scope="col">Diagnostic</th>'
         "<th scope='col'>Value</th><th scope='col'>Reading</th></tr></thead><tbody>"
         + "".join(
             f"<tr><td>{text(row['label'])}</td><td>{text(display(row.get('value')))}</td>"
             f"<td>{text(row.get('note'))}</td></tr>"
             for row in diagnostics
         )
-        + "</tbody></table>"
+        + "</tbody></table></div>"
         if diagnostics
         else ""
     )
@@ -132,9 +188,10 @@ def model_fit_panel(summary, family, text):
         + "".join(f"<div><dt>{text(label)}</dt><dd>{text(value)}</dd></div>" for label, value in facts)
         + "</dl>"
         + (f"<p>{text(fit['rule'])}</p>" if fit.get("rule") else "")
-        + "<table><caption>Candidate models</caption><thead><tr><th scope='col'>Distribution</th>"
+        + '<div class="table-scroll" tabindex="0" role="region" aria-label="Candidate models">'
+        '<table><caption>Candidate models</caption><thead><tr><th scope="col">Distribution</th>'
         "<th scope='col'>AIC</th><th scope='col'>ΔAIC vs best usable</th><th scope='col'>Status</th>"
-        f"<th scope='col'>Exclusion reason</th></tr></thead><tbody>{rows}</tbody></table>"
+        f"<th scope='col'>Exclusion reason</th></tr></thead><tbody>{rows}</tbody></table></div>"
         + (
             f"<p>Likelihood basis for the selected model: {text(fit['likelihood_basis'])}.</p>"
             if fit.get("likelihood_basis")
@@ -144,11 +201,19 @@ def model_fit_panel(summary, family, text):
     )
 
 
-def render_html(analysis: dict) -> str:
+def render_html(analysis: dict, *, source: dict | None = None) -> str:
+    from asaree.services.stats_labels import present_summary
+
     output = analysis.get("output") or {}
     summary = output.get("summary")
     if not summary:
         raise ValueError("This analysis predates the automatic report. Run an automatic analysis to create a report.")
+    if summary.get("status") in {"unavailable", "descriptive", "unreliable"} or summary.get("inference_reason"):
+        return render_unavailable_html(analysis, summary)
+    summary = present_summary(summary, (analysis.get("config") or {}).get("factors"), output.get("family"), output)
+    boxplots = (output.get("summary") or {}).get("boxplots")
+    if boxplots is None and source is not None:
+        boxplots = snapshot_boxplots(output, source, analysis.get("config") or {})
 
     def text(value):
         return escape(display(value), quote=True)
@@ -174,6 +239,11 @@ def render_html(analysis: dict) -> str:
 
         def cell(row, key):
             content = escape(display(row.get(key), key in {"p_adjusted", "permutation_p_adjusted"}))
+            if key in {
+                "estimate", "p_adjusted", "permutation_p_adjusted", "interval",
+                "bootstrap_interval", "primary_interval", "value",
+            }:
+                content = f'<span class="numeric-value">{content}</span>'
             if key == "p_adjusted":
                 if row.get(key) is None and row.get("unavailable_reason"):
                     content = "Unavailable" + small(row["unavailable_reason"])
@@ -204,7 +274,10 @@ def render_html(analysis: dict) -> str:
 
         body = "".join("<tr>" + "".join(cell(row, key) for key, _ in columns) + "</tr>" for row in rows)
         caption = f"<caption>{text(caption)}</caption>" if caption else ""
-        return f"<table>{caption}<thead><tr>{head}</tr></thead><tbody>{body}</tbody></table>"
+        return (
+            '<div class="table-scroll" tabindex="0" role="region" aria-label="Statistical results">'
+            f'<table>{caption}<thead><tr>{head}</tr></thead><tbody>{body}</tbody></table></div>'
+        )
 
     inference_reason = summary.get("inference_reason")
 
@@ -219,7 +292,10 @@ def render_html(analysis: dict) -> str:
         body = "".join(
             "<tr>" + "".join(f"<td>{text(row.get(key))}</td>" for key, _ in columns) + "</tr>" for row in rows
         )
-        return f"<table><thead><tr>{head}</tr></thead><tbody>{body}</tbody></table>"
+        return (
+            '<div class="table-scroll" tabindex="0" role="region" aria-label="Technical details">'
+            f'<table><thead><tr>{head}</tr></thead><tbody>{body}</tbody></table></div>'
+        )
 
     effects = [
         {
@@ -247,10 +323,18 @@ def render_html(analysis: dict) -> str:
         unit=definition.get("unit"),
         coding=[],
     )
-    metric_context = f"<p>{text(info['description'])}</p>"
-    if info.get("unit"):
-        metric_context += f"<p>Unit: {text(info['unit'])}</p>"
-    metric_context += "".join(f"<p>{text(line)}</p>" for line in info.get("coding", []))
+    report_fields = [
+        ("Metric description", info["description"]),
+        ("Unit", info.get("unit") or "Not specified"),
+        ("Analysis status", summary["status"]),
+        ("Execution", summary.get("execution_status", "completed")),
+        ("Analyzed observations", (summary.get("distribution") or {}).get("n", output.get("n_observations"))),
+        ("Created", display_created_at(analysis.get("created_at"))),
+    ]
+    metric_context = '<dl class="report-summary">' + "".join(
+        f'<div><dt>{text(label)}</dt><dd>{text(value)}</dd></div>' for label, value in report_fields
+    ) + '</dl>'
+    metric_context += "".join(f'<p class="coding-note">{text(line)}</p>' for line in info.get("coding", []))
     family = output.get("family")
     distribution_section = ""
     if family and not model_fit_panel(summary, family, text):
@@ -422,14 +506,25 @@ def render_html(analysis: dict) -> str:
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src 'none'">
 <title>ASAREE statistics — {text(summary["metric"])}</title>
 <style>body{{font:16px/1.6 system-ui,sans-serif;color:#202c38;max-width:1100px;margin:40px auto;padding:0 24px}}
-h1,h2{{line-height:1.25}}table{{border-collapse:collapse;width:100%;font-size:14px;margin:16px 0}}
-th,td{{border-bottom:1px solid #cbd5e1;text-align:left;padding:10px;vertical-align:top;overflow-wrap:anywhere}}
+.table-scroll{{max-width:100%;overflow-x:auto;margin:16px 0}}
+.numeric-value{{white-space:nowrap;font-family:monospace}}
+h1,h2{{line-height:1.25}}table{{border-collapse:collapse;width:100%;font-size:14px;margin:0}}
+th,td{{border-bottom:1px solid #cbd5e1;text-align:left;padding:10px;vertical-align:top;
+min-width:9rem;max-width:24rem;overflow-wrap:break-word}}
 th{{background:#eff3f6}}pre{{white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px}}
 .test-method{{display:block;margin-top:4px;color:#526170;font-size:12px}}
 .column-method{{display:block;margin-top:4px;color:#526170;font-size:11px;font-weight:normal}}
 .model-fit{{margin:20px 0;padding:20px;border:1px solid #dce6eb;border-radius:8px}}.model-fit h3{{margin:0 0 12px}}
 .fit-summary{{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin:0}}
 .fit-summary dt{{font-size:12px;color:#526170}}.fit-summary dd{{margin:2px 0 0;font:15px monospace}}
+.report-header{{padding:24px;border:1px solid #b6d9e4;border-top:4px solid #167fa2;
+border-radius:12px;background:#f6fafc}}
+.report-header h1{{margin:4px 0 16px}}.report-header>p{{margin:8px 0 20px;color:#526170}}
+.report-summary{{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,220px),1fr));gap:12px;margin:0}}
+.report-summary>div{{padding:12px 14px;background:#fff;border:1px solid #dce6eb;border-radius:8px;min-width:0}}
+.report-summary dt{{font-size:11px;color:#526170;letter-spacing:.06em;text-transform:uppercase}}
+.report-summary dd{{margin:6px 0 0;font-size:14px;font-weight:500;overflow-wrap:anywhere}}
+.report-header .coding-note{{font-size:12px;margin:12px 0 0}}
 .detail h3{{font-size:14px;margin:20px 0 4px}}
 .notice{{padding:12px 16px;border:1px solid #d97706;border-radius:8px;background:#fff7ed}}
 .detail table{{font-size:12px}}
@@ -446,6 +541,24 @@ background:repeating-linear-gradient(to top,transparent 0,transparent calc(25% -
 .x-ticks{{display:grid;margin-top:8px;font:10px monospace;color:#526170;overflow-wrap:anywhere}}
 .x-ticks span{{text-align:center}}.x-title{{text-align:center;font-size:12px;color:#526170}}
 .numeric-ticks{{display:flex;justify-content:space-between;gap:4px;margin-top:8px;font:10px monospace;color:#526170}}
+.boxplots>p{{font-size:13px;color:#526170}}.box-figure figcaption{{font-size:14px;font-weight:600}}
+.box-scroll{{overflow-x:auto;max-width:100%}}
+.box-chart{{display:flex;gap:8px;width:max-content;min-width:100%}}
+.box-y-title{{writing-mode:vertical-rl;transform:rotate(180deg);height:{BOX_HEIGHT}px;
+text-align:center;font-size:12px;max-width:3rem;overflow-wrap:anywhere}}
+.box-y-ticks{{display:flex;flex-direction:column;justify-content:space-between;height:{BOX_PLOT_HEIGHT}px;
+margin-top:{BOX_TOP_PADDING}px;text-align:right;font:11px monospace;color:#526170}}
+.box-groups{{display:flex;flex:1;gap:16px;position:relative}}
+.box-groups::before{{content:"";position:absolute;top:{BOX_HEIGHT}px;left:0;right:0;
+border-top:1px solid #94a3b8;pointer-events:none}}
+.box-group{{flex:1;min-width:max-content}}
+.box-traces{{display:flex;justify-content:center;gap:16px}}.box-slot{{flex:1;min-width:max-content;text-align:center}}
+.box-slot svg{{display:block;width:80px;height:{BOX_HEIGHT}px;margin-inline:auto;
+stroke:#167fa2;fill:none;stroke-width:1.5}}
+.box-slot rect{{fill:#deeff4}}.box-slot .box-median{{stroke:#202c38;stroke-width:2}}.box-slot circle{{fill:#167fa2}}
+.box-slot p,.box-level{{margin:8px 0 4px;font:11px monospace;white-space:nowrap;text-align:center}}
+.box-slot small{{display:block;color:#526170}}.box-level{{font-weight:600;padding:8px 0}}
+.missing-box{{height:{BOX_HEIGHT}px;display:flex;align-items:center;font-size:11px;color:#526170}}
 .sr-only{{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}}
 .methodology{{margin:24px 0;border:1px solid #b6d9e4;border-radius:12px;overflow:hidden}}
 .methodology header{{padding:20px;background:#eef8fb;border-bottom:1px solid #b6d9e4}}
@@ -455,11 +568,13 @@ background:repeating-linear-gradient(to top,transparent 0,transparent calc(25% -
 .method-step{{padding:16px;border:1px solid #dce6eb;border-radius:8px;min-width:0;overflow-wrap:anywhere}}
 .method-step h3{{font-size:15px}}.method-step h4{{font-size:13px;margin:12px 0 4px}}
 .method-step li{{font-size:13px;margin:8px 0}}.methodology details{{padding:16px;border-top:1px solid #dce6eb}}
-@media print{{body{{margin:0;max-width:none}}tr{{break-inside:avoid}}}}</style></head>
-<body><h1>Statistical results: {text(summary["metric"])}</h1>
-{metric_context}
-<p>Status: {text(summary["status"])} · Execution: {text(summary.get("execution_status", "completed"))}</p>
+@media print{{body{{margin:0;max-width:none}}.table-scroll{{overflow:visible}}
+th,td{{min-width:0;overflow-wrap:anywhere}}.numeric-value{{white-space:normal}}tr{{break-inside:avoid}}}}</style></head>
+<body><header class="report-header"><p class="eyebrow">ASAREE · Statistical report</p>
+<h1>Statistical results: {text(summary["metric"])}</h1>
 <p>{text(summary["description"])}</p>
+{metric_context}
+</header>
 {listing(describe_report_findings(summary))}
 {distribution_section}
 {
@@ -468,13 +583,25 @@ background:repeating-linear-gradient(to top,transparent 0,transparent calc(25% -
         if inference_reason
         else ""
     }
-<h2>{"Secondary statistical tests" if primary else "Statistical tests"}</h2>{
-        table(
-            [dict(row, effect=row.get("label") or row["effect"]) for row in summary["tests"]],
-            [("effect", "Effect"), ("p_adjusted", "Analytic adjusted p" if resampled else "Adjusted p-value")]
-            + ([("permutation_p_adjusted", "Resampling adjusted p")] if resampled else [])
-            + [("result", f"Analytic result (adjusted p < {summary.get('alpha', 0.05):g})")],
-            dict(p_adjusted=test_methods.get("p_adjusted"), permutation_p_adjusted=test_methods.get("permutation")),
+<p>Main-effect tests assess each factor averaged over the other factors.
+Interaction tests assess whether a factor's effect depends on another factor's setting.</p>
+{
+        "<p>These omnibus tests are secondary; the comparisons provide the primary bootstrap intervals.</p>"
+        if primary else ""
+    }
+{
+        "".join(
+            f"<h2>{title}</h2>" + table(
+                [dict(row, effect=row.get("label") or row["effect"])
+                 for row in summary["tests"] if row.get("kind") == kind],
+                [("effect", "Effect"), ("p_adjusted", "Analytic adjusted p" if resampled else "Adjusted p-value")]
+                + ([("permutation_p_adjusted", "Resampling adjusted p")] if resampled else [])
+                + [("result", f"Analytic result (adjusted p < {summary.get('alpha', 0.05):g})")],
+                dict(p_adjusted=test_methods.get("p_adjusted"), permutation_p_adjusted=test_methods.get("permutation")),
+            )
+            + render_boxplots(boxplots, kind, summary["metric"], info.get("unit"))
+            for kind, title in (("main", "Main-effect tests"), ("interaction", "Interaction tests"))
+            if any(row.get("kind") == kind for row in summary["tests"]) or (boxplots or {}).get(kind)
         )
     }
 <h2>Comparisons</h2>{
@@ -520,7 +647,7 @@ Statistical evidence does not establish practical importance.</p>
 {methodology}
 <h2>Limitations and exclusions</h2>{listing(summary["warnings"])}
 <details><summary>Reproducibility</summary>
-<p>Analysis: {text(analysis.get("id"))} · Created: {text(analysis.get("created_at"))}</p>
+<p>Analysis: {text(analysis.get("id"))} · Created: {text(display_created_at(analysis.get("created_at")))}</p>
 <pre>{
         text(
             json.dumps(

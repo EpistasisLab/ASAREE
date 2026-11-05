@@ -4046,7 +4046,7 @@ def _build_revision_instruction(base_instruction: str, verdict: dict[str, Any], 
     return "\n\n".join(parts)
 
 
-async def _monitor_protocol_run(protocol_run_id: uuid.UUID, cancel_event: asyncio.Event, interval: float = 1.5) -> None:
+async def _monitor_protocol_run(protocol_run_id: uuid.UUID, cancel_event: asyncio.Event, interval: float = 0.5) -> None:
     """Monitor cancellation and refresh liveness during an in-flight run.
 
     Watches for a Stop click (POST .../cancel) that a completely different
@@ -6234,7 +6234,12 @@ async def run_protocol(protocol_run_id: uuid.UUID) -> None:
         elif failed:
             # Recursive conversation-depth exhaustion retains its distinct
             # terminal status instead of being flattened into "failed".
-            await set_status(db, protocol_run_id, status=failure_status, error=failure_error)
+            from asaree.services.protocol_failures import summarize_node_failures
+
+            await set_status(
+                db, protocol_run_id, status=failure_status,
+                error=summarize_node_failures(graph, node_runs, fallback=failure_error),
+            )
         else:
             await set_status(db, protocol_run_id, status="finalizing")
             # Preserve the graph's designated output as a run artifact.

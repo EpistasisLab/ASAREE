@@ -1,6 +1,18 @@
 import { describe, expect, it } from 'vitest'
-import { displayFactorLevel } from './experiment'
+import { displayCellLabel, displayFactorCondition, displayFactorLevel, displayFactorName } from './experiment'
 import { normalizeDesignMetrics } from './metricCatalog'
+
+describe('factor and cell display labels', () => {
+  it('formats hierarchy and assignments without changing stored identities or level punctuation', () => {
+    const values = { 'Azure AI Foundry:Model': 'GPT-4.1', 'PubMed Retrieval Agent:Prompt': 'Detailed: cited' }
+    const stored = 'Azure AI Foundry:Model:GPT-4.1__PubMed Retrieval Agent:Prompt:Detailed: cited'
+    expect(displayFactorName('Azure AI Foundry:Model')).toBe('Azure AI Foundry › Model')
+    expect(displayCellLabel(values, undefined, stored)).toBe('Azure AI Foundry › Model = GPT-4.1 | PubMed Retrieval Agent › Prompt = Detailed: cited')
+    expect(Object.keys(values)).toEqual(['Azure AI Foundry:Model', 'PubMed Retrieval Agent:Prompt'])
+    expect(displayCellLabel({}, undefined, stored)).toBe(stored)
+    expect(displayFactorCondition('Critic:Enabled', false, undefined)).toBe('Critic › Enabled = Disabled')
+  })
+})
 
 describe('displayFactorLevel', () => {
   it('uses the label paired with a matching raw level', () => {

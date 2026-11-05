@@ -1,3 +1,4 @@
+import { displayFactorName } from '@/lib/factorLabels'
 import type { MouseEvent } from 'react'
 import { useNodeConnections } from '@xyflow/react'
 import { Plus } from 'lucide-react'
@@ -76,7 +77,7 @@ export function ConnectorAddStub({
       className={side === 'right' ? 'group/stub absolute top-1/2 -right-11 -translate-y-1/2' : side === 'top' ? 'group/stub absolute -top-11 -translate-x-1/2' : 'group/stub absolute -bottom-11 -translate-x-1/2'}
       style={side !== 'right' ? { left } : undefined}
     >
-      {factorName && <span className={`pointer-events-none absolute ${factorLabelPosition} whitespace-nowrap rounded border border-chart-2 bg-card px-1 font-mono text-[9px] text-chart-2`} title={factorName}>{factorLabel} · {factorOnOff ? 'on/off' : `${factorLevelCount ?? 0} levels`}</span>}
+      {factorName && <span className={`pointer-events-none absolute ${factorLabelPosition} whitespace-nowrap rounded border border-chart-2 bg-card px-1 font-mono text-[9px] text-chart-2`} title={displayFactorName(factorName)}>{factorLabel} · {factorOnOff ? 'on/off' : `${factorLevelCount ?? 0} levels`}</span>}
     <button
       type="button"
       onClick={handleClick}

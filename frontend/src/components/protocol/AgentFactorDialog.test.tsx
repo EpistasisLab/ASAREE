@@ -23,6 +23,7 @@ it('saves this agent on/off without changing its current activity', async () => 
   render(<AgentFactorDialog node={node} factors={[]} referenceScope={EMPTY_SCOPE} onClose={vi.fn()} onSave={save} onRemove={vi.fn()} />)
   expect(screen.queryByRole('button', { name: 'Agent levels' })).not.toBeInTheDocument()
   expect(screen.queryByRole('button', { name: 'All agents on/off' })).not.toBeInTheDocument()
+  expect(screen.getByLabelText('Factor name')).toHaveValue('Writer › Enabled')
   fireEvent.click(screen.getByRole('button', { name: 'Save factor' }))
   await waitFor(() => expect(save).toHaveBeenCalledWith({ name: 'Writer:Enabled', level_type: 'boolean', levels: [false, true], level_labels: ['Disabled', 'Enabled'] }, 'active', undefined))
   expect(node.data.active).not.toBe(false)

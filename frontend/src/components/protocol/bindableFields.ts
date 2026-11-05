@@ -429,7 +429,8 @@ function isConnectorNodeType(type: string | undefined): boolean {
 //
 // Colon-joined ("<agent>:<node>") so the eventual factor name (see
 // computeFactorName, which appends ":<field>" to this) reads as one
-// consistent "<agent>:<node>:<field>" chain throughout.
+// consistent stored "<agent>:<node>:<field>" chain. Display boundaries use
+// displayFactorName to show › without renaming bindings or workspace paths.
 export function agentTracedLabel(node: Node, edges: Edge[], nodes: Node[]): string {
   const label = (node.data as { label?: string })?.label || node.type || 'Node'
   if (!isConnectorNodeType(node.type)) return label

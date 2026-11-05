@@ -3,7 +3,7 @@ import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
-import { deriveFactors, displayFactorLevel, factorValueKey } from '@/lib/experiment'
+import { deriveFactors, displayFactorCondition, displayFactorName, displayFactorLevel, factorValueKey } from '@/lib/experiment'
 import type { Experiment, Replicate } from '@/types/experiments'
 
 // The API already supplies explicit cell labels and replicate numbers; sort
@@ -73,7 +73,7 @@ export function SelectReplicateDialog({
     }
     if (!needle) return true
     const summary = Object.entries(replicate.factor_values ?? {})
-      .map(([k, v]) => `${k}=${displayFactorLevel(designSpec, k, v, replicate.cell_label)}`)
+      .map(([k, v]) => displayFactorCondition(k, v, designSpec, replicate.cell_label))
       .join(' ')
     return replicate.replicate_label.toLowerCase().includes(needle) || summary.toLowerCase().includes(needle)
   })
@@ -109,8 +109,8 @@ export function SelectReplicateDialog({
             </div>
             {factors.map((factor) => (
               <div key={factor.name}>
-                <p className="truncate text-xs text-muted-foreground" title={factor.name}>
-                  {factor.name}
+                <p className="truncate text-xs text-muted-foreground" title={displayFactorName(factor.name)}>
+                  {displayFactorName(factor.name)}
                 </p>
                 <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1">
                   {factor.levels.map((level) => {
@@ -148,8 +148,8 @@ export function SelectReplicateDialog({
             const hasFactors = replicateResult.factor_values && Object.keys(replicateResult.factor_values).length > 0
             const summary = hasFactors
               ? Object.entries(replicateResult.factor_values!)
-                  .map(([k, v]) => `${k}: ${displayFactorLevel(designSpec, k, v, replicateResult.cell_label)}`)
-                  .join(' · ')
+                  .map(([k, v]) => displayFactorCondition(k, v, designSpec, replicateResult.cell_label))
+                  .join(' | ')
               : null
             const replicateNumber = replicateResult.replicate_number
             return (

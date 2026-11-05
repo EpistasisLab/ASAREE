@@ -3,9 +3,21 @@ from decimal import Decimal
 from uuid import UUID
 
 import pytest
+from sqlalchemy.dialects import postgresql
 
 from asaree.services import motoro_telemetry
-from asaree.services.result_usage import provider_usage, summarize_usage
+from asaree.services.result_usage import metric_preview_refresh_query, provider_usage, summarize_usage
+
+
+def test_custom_metric_preview_backfill_is_bounded_and_does_not_change_recorded_usage():
+    sql = str(metric_preview_refresh_query(UUID(int=7)).compile(
+        dialect=postgresql.dialect(), compile_kwargs={"literal_binds": True},
+    ))
+    assert "LIMIT 200" in sql
+    assert "metric_projection_version' IS DISTINCT FROM '2'" in sql
+    assert "usage_summary=protocol_runs.usage_summary" in sql
+    assert "result_summary=asaree_result_preview" in sql
+    assert str(UUID(int=7)) in sql
 
 
 async def test_usage_read_is_owner_scoped_batched_through_motoro(monkeypatch):

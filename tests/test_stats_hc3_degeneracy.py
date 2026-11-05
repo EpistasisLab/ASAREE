@@ -280,8 +280,8 @@ def test_exact_fit_keeps_descriptive_estimates_and_withholds_all_inference():
         assert test["p_adjusted"] is None and test["permutation_p_adjusted"] is None
         assert test["result"] == "Inference unavailable"
     estimates = {effect["comparison"]: effect for effect in summary["effects"]}
-    assert estimates["Effort: high vs low"]["estimate"] == pytest.approx(1)
-    assert estimates["Feature budget: 2 features vs 4 features"]["estimate"] == pytest.approx(0.5)
+    assert estimates["Effort = high vs low"]["estimate"] == pytest.approx(1)
+    assert estimates["Feature budget = 2 features vs 4 features"]["estimate"] == pytest.approx(0.5)
     for effect in summary["effects"]:
         assert effect["ci_low"] is None and effect["p_adjusted"] is None and effect["bootstrap_ci_low"] is None
         assert "Exact fit" in effect["unavailable_reason"]
@@ -291,6 +291,9 @@ def test_exact_fit_keeps_descriptive_estimates_and_withholds_all_inference():
         assert row.get("F_obs") is None or row["F_obs"] >= 0
     html = render_html(dict(id="x", created_at="now", output=output))
     assert "Inference unavailable." in html
+    assert "Exact fit" in html
+    assert "Comparisons</h2>" not in html
+    assert "What ran and why" not in html
     assert "&lt;0.001" not in html
 
 

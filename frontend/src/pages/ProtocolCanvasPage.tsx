@@ -314,7 +314,7 @@ export function ProtocolCanvasPage() {
         <Dialog open={versionBrowserOpen} onOpenChange={setVersionBrowserOpen}>
           <DialogContent className="sm:max-w-xl">
             <DialogHeader><DialogTitle>Browse experiment versions</DialogTitle></DialogHeader>
-            {protocolQuery.data && <ExperimentVersionHistory versions={experimentVersions ?? []} protocolId={protocolQuery.data.id} publishedId={protocolQuery.data.published_revision_id} selectedId={versionId} search={versionSearch} onSearch={setVersionSearch} onSelect={id => { setVersionId(id); setResultSelection(null); setVersionBrowserOpen(false) }} />}
+            {protocolQuery.data && <ExperimentVersionHistory versions={experimentVersions ?? []} protocolId={protocolQuery.data.id} publishedId={protocolQuery.data.published_revision_id} selectedId={versionId} search={versionSearch} onSearch={setVersionSearch} onSelect={id => { setVersionId(id === protocolQuery.data.published_revision_id ? '' : id); setResultSelection(null); setVersionBrowserOpen(false) }} />}
           </DialogContent>
         </Dialog>
 

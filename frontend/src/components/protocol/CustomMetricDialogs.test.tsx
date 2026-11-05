@@ -71,11 +71,11 @@ describe('CustomMetricFlow', () => {
     const agentGroup = [...list.querySelectorAll('details')].find(group => group.querySelector('summary')?.textContent === 'Writer')!
     expect(agentGroup).toHaveAttribute('open')
     expect([...agentGroup.querySelectorAll('h3')].map(heading => heading.textContent)).toEqual(['Agent', 'Tools'])
-    const toolsGroup = within(agentGroup).getByRole('region', { name: 'Writer: Tools' })
+    const toolsGroup = within(agentGroup).getByRole('region', { name: 'Writer › Tools' })
     expect([...toolsGroup.querySelectorAll('h4')].map(heading => heading.textContent)).toEqual(['MCP Tools', 'Scripts'])
     expect(toolsGroup.querySelector('h4')).toHaveClass('text-sm', 'text-chart-2')
     expect(within(toolsGroup).getAllByRole('option').every(option => option.parentElement?.classList.contains('ml-3'))).toBe(true)
-    expect(within(agentGroup).getAllByRole('option').map(option => option.getAttribute('aria-label')?.split(', ').slice(0, 2).join(', '))).toEqual(['Writer, Agent', 'Writer:Quality, MCP Tool', 'Writer:Alpha, Script', 'Writer:Zulu, Script'])
+    expect(within(agentGroup).getAllByRole('option').map(option => option.getAttribute('aria-label')?.split(', ').slice(0, 2).join(', '))).toEqual(['Writer, Agent', 'Writer › Quality, MCP Tool', 'Writer › Alpha, Script', 'Writer › Zulu, Script'])
   })
 
   it('sums a runtime measure over several chosen nodes', async () => {
@@ -182,7 +182,7 @@ describe('CustomMetricFlow', () => {
     /></QueryClientProvider>)
 
     await user.click(screen.getByRole('combobox', { name: 'Metric node' }))
-    const option = screen.getByRole('option', { name: 'Writer:Quality tools, MCP Tool' })
+    const option = screen.getByRole('option', { name: 'Writer › Quality tools, MCP Tool' })
     expect(within(option).getByText('MCP Tool')).toHaveAttribute('data-slot', 'badge')
     await user.click(option)
     await waitFor(() => expect(screen.getByRole('combobox', { name: 'MCP tool' })).toHaveTextContent('score'))
@@ -210,7 +210,7 @@ describe('CustomMetricFlow', () => {
     /></QueryClientProvider>)
 
     await user.click(screen.getByRole('combobox', { name: 'Metric node' }))
-    const option = screen.getByRole('option', { name: 'Writer:Scorer, Script' })
+    const option = screen.getByRole('option', { name: 'Writer › Scorer, Script' })
     expect(within(option).getByText('Script')).toHaveAttribute('data-slot', 'badge')
     expect(option).not.toHaveAttribute('aria-disabled', 'true')
   })

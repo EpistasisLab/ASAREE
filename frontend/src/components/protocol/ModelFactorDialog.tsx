@@ -1,3 +1,4 @@
+import { FactorNameInput } from './FactorNameInput'
 import type { ModelCapabilities } from '@/types/llmSettings'
 import { modelCapabilities } from '@/lib/modelCapabilities'
 import { useEffect, useRef, useState } from 'react'
@@ -98,7 +99,7 @@ export function ModelFactorDialog({ node, nodeLabel, factors, initialFieldPath, 
         {blocked(path) ? <p role="status" className="rounded-md border p-3 text-sm text-muted-foreground">Model levels cannot be combined with individual configuration factors. Select the existing factor type and remove its binding first.</p> : <>
           <p className="text-xs text-primary">{structured ? 'Compare complete model configurations. Use individual parameter factors to measure their separate effects.' : 'Vary this configuration field while keeping the other model settings.'}</p>
           {!available(path) && <p role="status" className="text-xs text-muted-foreground">The selected model does not support this field. Remove its factor or choose a model that supports it.</p>}
-          <div className="space-y-2"><Label htmlFor="model-factor-name">Factor name</Label><Input id="model-factor-name" value={draft.name} disabled={saving} onChange={(event) => setDraft({ ...draft, name: event.target.value })} /></div>
+          <div className="space-y-2"><Label htmlFor="model-factor-name">Factor name</Label><FactorNameInput id="model-factor-name" value={draft.name} disabled={saving} onValueChange={(name) => setDraft({ ...draft, name })} /></div>
           <fieldset disabled={saving} className="max-h-80 space-y-2 overflow-y-auto">{draft.levels.map((level, index) => <div key={index} ref={index === initialLevelIndex ? initialLevelRef : undefined} className={`flex items-start gap-2 rounded-md border p-2 ${index === initialLevelIndex ? 'border-chart-2' : ''}`}>
             <div className="min-w-0 flex-1 space-y-2">
               <p className="font-mono text-xs">Level {index + 1}{index === 0 ? ' · default test selection' : ''}</p>

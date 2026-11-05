@@ -1,23 +1,9 @@
-import { useState } from 'react'
-import { Check, Copy } from 'lucide-react'
-import { Button } from '@/components/ui/button'
+import { CopyButton } from './CopyButton'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 
 const SDK_GIT_URL = 'git+https://github.com/EpistasisLab/ASAREE.git@v0.1.0#subdirectory=sdk'
 
 function CodeBlock({ label, code }: { label: string; code: string }) {
-  const [copied, setCopied] = useState(false)
-
-  async function copy() {
-    try {
-      await navigator.clipboard.writeText(code)
-      setCopied(true)
-      setTimeout(() => setCopied(false), 2000)
-    } catch {
-      // Clipboard API blocked (e.g. insecure context) — the command is still selectable text.
-    }
-  }
-
   return (
     <div className="space-y-1.5">
       <p className="text-xs font-medium tracking-wide text-muted-foreground uppercase">{label}</p>
@@ -25,9 +11,7 @@ function CodeBlock({ label, code }: { label: string; code: string }) {
         <code className="flex-1 overflow-x-auto rounded bg-muted px-2.5 py-2 font-mono text-xs whitespace-pre select-all">
           {code}
         </code>
-        <Button type="button" size="icon" variant="outline" onClick={copy} aria-label={`Copy ${label} command`}>
-          {copied ? <Check className="size-4" /> : <Copy className="size-4" />}
-        </Button>
+        <CopyButton text={code} label={`Copy ${label} command`} />
       </div>
     </div>
   )

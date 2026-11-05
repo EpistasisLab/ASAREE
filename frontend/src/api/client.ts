@@ -35,7 +35,7 @@ import type { Run, RunStep } from '@/types/runs'
 import type { Skill, SkillListResponse, SkillUrlPreview } from '@/types/skills'
 import type { StatsAnalysis, StatsSource } from '@/types/stats'
 import type { Persona } from '@/types/personas'
-import type { AttemptDetail, AttemptPage, CursorPage, ExecutionCell, ExecutionSlot, ExecutionSummary, ResultJob, UsageDistribution } from '@/types/executionResults'
+import type { AttemptDetail, AttemptPage, CellMetricObservationPage, CursorPage, ExecutionCell, ExecutionSlot, ExecutionSummary, ResultJob, UsageDistribution } from '@/types/executionResults'
 
 const ACCESS_TOKEN_KEY = 'asaree_access_token'
 
@@ -257,6 +257,10 @@ export const experimentsApi = {
     request<{ factors: Record<string, unknown[]>; truncated: boolean }>(`/experiments/${id}/execution-results/factor-options${scopeQuery(scope)}`, { signal }),
   listExecutionCells: (id: string, scope: ResultsScope, params: Record<string, string | number | undefined> = {}, signal?: AbortSignal) =>
     request<CursorPage<ExecutionCell>>(`/experiments/${id}/execution-results/cells${resultPageQuery(scope, params)}`, { signal }),
+  getCellMetricObservations: (id: string, scope: ResultsScope, metricKey: string, cellIds: string[], offset = 0, signal?: AbortSignal) =>
+    request<CellMetricObservationPage>(`/experiments/${id}/execution-results/metric-observations${resultPageQuery(scope, {
+      metric_key: metricKey, cell_ids: cellIds.join(','), offset,
+    })}`, { signal }),
   listExecutions: (id: string, scope: ResultsScope, params: Record<string, string | number | undefined> = {}, signal?: AbortSignal) =>
     request<CursorPage<ExecutionSlot>>(`/experiments/${id}/execution-results/executions${resultPageQuery(scope, params)}`, { signal }),
   listExecutionAttempts: (id: string, slotId: string, scope: ResultsScope, cursor?: string, signal?: AbortSignal) =>

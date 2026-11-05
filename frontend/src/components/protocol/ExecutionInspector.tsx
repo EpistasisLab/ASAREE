@@ -103,7 +103,7 @@ function SlotInspector({ experimentId, slotId, scope, onClose, onBackToCell, onS
     queryFn: ({ signal }) => experimentsApi.getExecutionCell(experimentId, scope, { cell_id: slot!.cell_id }, signal),
     enabled: !!slot?.cell_id })
   const cellLabel = slot ? Object.entries(slot.factor_values).map(([name, value]) =>
-    displayFactorCondition(name, value, summary.data?.design_spec, slot.cell_label)).join(' · ') || slot.cell_label : ''
+    displayFactorCondition(name, value, summary.data?.design_spec, slot.cell_label)).join(' | ') || slot.cell_label : ''
   return <aside className={`${embedded ? 'relative h-full min-h-0 min-w-0' : 'absolute inset-0 z-20'} @container flex flex-col overflow-y-auto border-l bg-card p-3`} aria-label="Result details">
     <div className="mb-3 flex items-center justify-between gap-2">
       {onBackToCell && <Button variant="outline" size="xs" className={embedded ? '@min-[800px]/inspectors:hidden' : undefined} onClick={onBackToCell}>Back to cell</Button>}
@@ -227,7 +227,7 @@ function CellInspectorContent({ experimentId, selection, scope, onClose, onSelec
   useGenerationRefresh(cell.refetch, summary.data?.generation)
   useEffect(() => { if (!slot && listPanel.current) listPanel.current.scrollTop = savedScroll.current }, [slot])
   const cellLabel = cell.data ? Object.entries(cell.data.factor_values).map(([name, value]) =>
-    displayFactorCondition(name, value, summary.data?.design_spec, cell.data!.cell_label)).join(' · ') || cell.data.cell_label : ''
+    displayFactorCondition(name, value, summary.data?.design_spec, cell.data!.cell_label)).join(' | ') || cell.data.cell_label : ''
   const usageLabels = usageMetricLabels(!!cell.data?.total && (cell.data.counts?.completed ?? 0) >= cell.data.total)
   return <ResultsInspectorSplit replicate={slot ? <SlotInspector key={slot} embedded experimentId={experimentId} slotId={slot} scope={scope} usageMetricKeys={usageMetricKeys} onClose={() => setSlot(undefined)}
     onBackToCell={() => setSlot(undefined)} onSelectSlot={range || executionSearch ? undefined : setSlot} /> : undefined}>

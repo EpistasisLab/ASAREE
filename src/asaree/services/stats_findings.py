@@ -2,6 +2,8 @@
 
 import math
 
+from asaree.services.stats_labels import display_factor_name
+
 
 def primary_comparison_result(effect):
     low, high = effect.get("primary_ci_low"), effect.get("primary_ci_high")
@@ -45,7 +47,7 @@ def describe_findings(tests: list[dict], alpha: float = 0.05) -> list[str]:
 
     findings = []
     for test in tests:
-        factors = str(test["effect"]).split(":")
+        factors = [display_factor_name(name) for name in test.get("factors") or str(test["effect"]).split(":")]
         interaction = len(factors) > 1
         main = evidence(test.get("p_adjusted"))
         check = evidence(test.get("permutation_p_adjusted"))

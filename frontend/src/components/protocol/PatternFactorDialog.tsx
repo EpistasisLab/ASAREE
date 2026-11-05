@@ -1,3 +1,4 @@
+import { FactorNameInput } from './FactorNameInput'
 import { factorRecipients, factorScopeLabel } from '@/lib/sharedFactors'
 import { useState } from 'react'
 import { ArrowDown, ArrowUp, Plus, Split, X } from 'lucide-react'
@@ -86,7 +87,7 @@ export function PatternFactorDialog({ patternNodeId, graph, nodeLabel, factors, 
         <div className="space-y-2"><Label>Factor type</Label><div className="flex flex-wrap gap-2">{fields.map((field) => <Button key={field.fieldPath} size="sm" variant={path === field.fieldPath ? 'default' : blocked(field.fieldPath) ? 'secondary' : 'outline'} aria-pressed={path === field.fieldPath} disabled={saving} onClick={() => { setPath(field.fieldPath); resetDraft(seed(field.fieldPath)); setError('') }}>{field.label}</Button>)}</div></div>
         {blocked(path) ? <p role="status" className="rounded-md border p-3 text-sm text-muted-foreground">{blocked(path)}</p> : <>
           <p className="text-xs text-primary">{structured ? 'Compare complete pattern configurations. Use individual parameter factors to measure their separate effects.' : 'Vary this parameter while keeping the other pattern settings.'}</p>
-          <div className="space-y-2"><Label htmlFor="pattern-factor-name">Factor name</Label><Input id="pattern-factor-name" value={draft.name} disabled={saving} onChange={(event) => setDraft({ ...draft, name: event.target.value })} /></div>
+          <div className="space-y-2"><Label htmlFor="pattern-factor-name">Factor name</Label><FactorNameInput id="pattern-factor-name" value={draft.name} disabled={saving} onValueChange={(name) => setDraft({ ...draft, name })} /></div>
           <fieldset disabled={saving} className="max-h-80 space-y-2 overflow-y-auto">{draft.levels.map((level, index) => <div key={index} className="flex items-start gap-2 rounded-md border p-2">
             <div className="min-w-0 flex-1 space-y-2">
               <p className="font-mono text-xs">Level {index + 1}{index === 0 ? ' · default test selection' : ''}</p>

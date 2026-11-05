@@ -1,3 +1,4 @@
+import { FactorNameInput } from './FactorNameInput'
 import { factorScopeLabel, factorRecipients } from '@/lib/sharedFactors'
 import { useState } from 'react'
 import { ArrowDown, ArrowUp, Split } from 'lucide-react'
@@ -95,7 +96,7 @@ export function PersonaFactorDialog({ personaNodeId, graph, factors, initialMode
         <div className="space-y-2"><Label>Factor type</Label><div className="flex flex-wrap gap-2">{(Object.keys(modes) as Mode[]).map((value) => <Button key={value} size="sm" variant={mode === value ? 'default' : unavailable(value) ? 'secondary' : 'outline'} aria-pressed={mode === value} className={unavailable(value) ? 'border-dashed border-border' : undefined} title={unavailable(value)} disabled={saving} onClick={() => change(value)}>{modes[value]}</Button>)}</div></div>
         {blockedReason ? <p role="status" className="rounded-md border p-3 text-sm text-muted-foreground">{blockedReason}</p> : <>
         <p className="text-xs text-muted-foreground">{mode === 'boolean' ? 'Enable or disable this Persona node.' : mode === 'persona_selection' ? 'Each cell receives exactly one connected persona.' : 'Each cell enables every connected persona, including deactivated personas, or disables them all.'}</p>
-        <div className="space-y-2"><Label htmlFor="persona-factor-name">Factor name</Label><Input id="persona-factor-name" value={draft.name} disabled={saving} onChange={(event) => setDraft({ ...draft, name: event.target.value })} /></div>
+        <div className="space-y-2"><Label htmlFor="persona-factor-name">Factor name</Label><FactorNameInput id="persona-factor-name" value={draft.name} disabled={saving} onValueChange={(name) => setDraft({ ...draft, name })} /></div>
         {mode !== 'boolean' && affected.length < (mode === 'persona_toggle' ? 1 : 2) && <p className="text-xs text-destructive">Connect at least {mode === 'persona_toggle' ? 'one persona' : 'two different personas'} before generating cells.</p>}
         <div className="max-h-72 space-y-2 overflow-y-auto">{draft.levels.map((level, index) => <div key={index} className="flex items-center gap-2 rounded-md border p-2">
           <div className="min-w-0 flex-1 space-y-1">

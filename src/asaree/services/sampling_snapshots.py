@@ -12,7 +12,7 @@ from importlib.metadata import distribution
 from typing import Any
 
 from motoro.schemas.agent import ModelConfig
-from motoro.services.llm_service import _sampling_kwargs
+from motoro.services.llm_service import _build_model_string, _sampling_kwargs
 from motoro.services.model_capabilities import ModelCapabilities
 from motoro.services.sampling import resolve_sampling
 
@@ -66,7 +66,7 @@ def _pin_config(config: ModelConfig) -> dict[str, Any]:
 
 
 def _sampling_request(config: ModelConfig) -> dict[str, Any]:
-    kwargs = _sampling_kwargs(config, f"{config.provider.value}/{config.model}")
+    kwargs = _sampling_kwargs(config, _build_model_string(config))
     native: dict[str, Any] = kwargs.get(
         "extra_body", {key: kwargs[key] for key in ("temperature", "reasoning_effort") if key in kwargs}
     )

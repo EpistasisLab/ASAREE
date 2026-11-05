@@ -35,6 +35,13 @@ from asaree.services.experiment_run_results import (
 from asaree.services.measurement_engine import parse_measurement_plan
 from asaree.services.measurement_migration import normalize_experiment_measurement_plan
 from asaree.services.metrics import METRIC_CATALOG, normalize_metrics
+from asaree.services.protocol_failures import (
+    MAX_FAILED_NODES,
+    MAX_NODE_ERROR_LENGTH,
+    MAX_RUN_ERROR_LENGTH,
+    is_generic_run_error,
+    summarize_node_failures,
+)
 
 PAGE_SIZE = 20
 MAX_PAGE_SIZE = 100
@@ -96,6 +103,7 @@ def runtime_metrics(scope: ResultScope) -> dict[str, dict[str, Any]]:
                 "id": declaration.id,
                 "name": declaration.name,
                 "key": previous.get("key", declaration.id),
+                "unit": declaration.unit or previous.get("unit") or defaults.get("unit"),
                 "valueType": declaration.value_type or defaults.get("valueType", "number"),
                 "aggregation": declaration.aggregation
                 or previous.get("aggregation")
@@ -104,6 +112,38 @@ def runtime_metrics(scope: ResultScope) -> dict[str, dict[str, Any]]:
                 or previous.get("direction")
                 or defaults.get("defaultDirection", "neutral"),
             }
+    return definitions
+
+
+def result_metrics(scope: ResultScope) -> dict[str, dict[str, Any]]:
+    """Published metric identities for display and scalar cell aggregation."""
+    definitions = runtime_metrics(scope)
+    if scope.measurement_plan is not None:
+        plan = parse_measurement_plan(normalize_experiment_measurement_plan(scope.measurement_plan, None))
+        for metric in plan.metrics:
+            if metric.id not in definitions:
+                definitions[metric.id] = {
+                    "id": metric.id, "key": metric.id, "name": metric.name,
+                    # Custom declarations may accept arbitrary JSON. The compact
+                    # result preview projects only actual numbers/booleans; its
+                    # cell mean never casts text or structured output to a number.
+                    "valueType": metric.value_type or "number",
+                    "unit": metric.unit,
+                    "aggregation": "mean" if metric.aggregation == "rate" else metric.aggregation or "mean",
+                    "direction": metric.direction or "neutral",
+                }
+    else:
+        for metric in normalize_metrics((scope.design_spec or {}).get("metrics")):
+            if metric["id"] not in definitions:
+                definitions[metric["id"]] = {
+                    **metric, "key": metric["id"],
+                    "valueType": metric.get("valueType", "number"),
+                    "aggregation": metric.get("aggregation", "mean"),
+                    "direction": metric.get("direction", "neutral"),
+                }
+    for definition in definitions.values():
+        if definition.get("aggregation") == "rate":
+            definition["aggregation"] = "mean"
     return definitions
 
 
@@ -295,7 +335,7 @@ def slot_query(scope: ResultScope, *, cutoff: Any = None) -> Any:
             run.updated_at,
             run.started_at,
             run.completed_at,
-            func.left(run.error, 512).label("error"),
+            func.left(run.error, MAX_RUN_ERROR_LENGTH).label("error"),
             run.result_summary,
             run.usage_summary,
         )
@@ -384,12 +424,13 @@ async def read_summary(db: AsyncSession, scope: ResultScope) -> dict[str, Any]:
     refresh = await db.get(ResultRefresh, scope.key)
     if refresh is None:
         await request_refresh(db, scope)
-    elif (refresh.summary is not None and refresh.summary.get("cell_result_details_version") != 1
+    elif (refresh.summary is not None
+          and (refresh.summary.get("cell_result_details_version") != 2 or "metric_totals" not in refresh.summary)
           and refresh.generation == refresh.processed_generation):
-        # Older cached summaries need one rebuild to acquire cell result details.
+        # Older cached summaries need one rebuild to acquire new overview fields.
         refresh.generation += 1
         await db.flush()
-    metrics = list(runtime_metrics(scope).values())
+    metrics = list(result_metrics(scope).values())
     connected = {edge.get("source") for edge in scope.graph.get("edges", [])}
     datasets = {}
     for node in scope.graph.get("nodes", []):
@@ -414,6 +455,7 @@ async def read_summary(db: AsyncSession, scope: ResultScope) -> dict[str, Any]:
             metric["key"]: metric["valueType"] for metric in metrics if metric["aggregation"] in {"mean", "sum"}
         },
         "metric_labels": {metric["key"]: metric["name"] for metric in metrics},
+        "metric_units": {metric["key"]: metric.get("unit") for metric in metrics},
         "metric_aggregations": {metric["key"]: metric["aggregation"] for metric in metrics},
         "metric_directions": {metric["key"]: metric["direction"] for metric in metrics},
         **(refresh.summary if refresh and refresh.summary is not None else {}),
@@ -495,7 +537,9 @@ async def read_executions(
     row_count = (refresh.summary or {}).get("source_row_count") if refresh else None
     if (scope.unit == "row" and row_count is not None and status in {None, "not_started"}
             and sort_metric is None and usage_metric is None):
-        return await _read_row_window(db, scope, int(row_count), filters, cursor, page_size(limit))
+        page = await _read_row_window(db, scope, int(row_count), filters, cursor, page_size(limit))
+        await enrich_run_errors(db, scope, page["items"])
+        return page
     position = decode_cursor(cursor, scope, "executions", filters)
     query = slot_query(scope)
     query = query.where(*cell_filters(FactorialCell, search, factors))
@@ -540,8 +584,10 @@ async def read_executions(
     rows = (await db.execute(statement.add_columns(label_order.label("label_order")).order_by(*orders)
                              .limit(page_size(limit) + 1))).mappings().all()
     last = rows[limit - 1] if len(rows) > limit else None
+    items = [execution_payload(dict(row)) for row in rows[:limit]]
+    await enrich_run_errors(db, scope, items)
     return {
-        "items": [execution_payload(dict(row)) for row in rows[:limit]],
+        "items": items,
         "total": total,
         "next_cursor": encode_cursor(scope, "executions", ([last["sort_value"]] if sort_metric else []) + [
             last["label_order"], str(last["cell_id"]), last["replicate_number"],
@@ -909,6 +955,113 @@ async def read_factor_options(db: AsyncSession, scope: ResultScope) -> dict[str,
     return {'factors': options, 'truncated': len(rows) > 1000}
 
 
+def metric_observations_query(
+    scope: ResultScope, metric_id: str, cell_ids: list[uuid.UUID], *, offset: int, limit: int,
+) -> Any:
+    """Page slots per cell before projecting one bounded observation from evidence.
+
+    The slot query supplies publication scope and latest-attempt identity. Never
+    load full attempt documents or infer an unavailable value from usage totals.
+    """
+    slots = slot_query(scope).subquery("metric_slots")
+    ordering = (slots.c.replicate_number, func.coalesce(slots.c.row_index, -1), slots.c.slot_id)
+    ranked = select(
+        slots.c.cell_id, slots.c.slot_id, slots.c.replicate_label, slots.c.replicate_number,
+        slots.c.row_index, slots.c.run_id, slots.c.status.label("execution_status"),
+        slots.c.result["truncated"].as_boolean().label("truncated"),
+        slots.c.result["evaluation_state"].astext.label("evaluation_state"),
+        func.count().over(partition_by=slots.c.cell_id).label("total"),
+        func.row_number().over(partition_by=slots.c.cell_id, order_by=ordering).label("position"),
+    ).where(slots.c.cell_id.in_(cell_ids)).subquery("ranked_metric_slots")
+    page = select(ranked).where(ranked.c.position > offset, ranked.c.position <= offset + limit).subquery("metric_page")
+    document = ProtocolRun.attempt_result["measurement"]["observations"]
+    observations = func.jsonb_array_elements(case(
+        (func.jsonb_typeof(document) == "array", document), else_=cast(literal("[]"), JSONB),
+    )).table_valued("value").lateral("metric_observations")
+    observation = cast(observations.c.value, JSONB)
+    selected = select(observation.label("observation")).select_from(observations).where(
+        observation["metric_id"].astext == metric_id,
+    ).limit(1).correlate(ProtocolRun).lateral("selected_observation")
+    value = cast(selected.c.observation["value"], Text)
+    return select(
+        page,
+        selected.c.observation["status"].astext.label("status"),
+        func.left(value, 4096).label("value_preview"),
+        (func.length(value) > 4096).label("value_truncated"),
+        func.left(selected.c.observation["error"].astext, 4096).label("error"),
+        func.left(ProtocolRun.attempt_result["metric_evaluation"]["error"].astext, 4096).label("evaluation_error"),
+        func.left(ProtocolRun.error, 4096).label("execution_error"),
+    ).select_from(page).outerjoin(ProtocolRun, ProtocolRun.id == page.c.run_id).outerjoin(
+        selected, true(),
+    ).order_by(page.c.cell_id, page.c.position)
+
+
+def metric_observation_reason(row: Any) -> str | None:
+    if row["status"] == "measured":
+        return None
+    if row["error"]:
+        return row["error"]
+    if row["status"]:
+        return {
+            "unavailable": "The producer reported this metric as unavailable without a reason.",
+            "failed": "The metric producer failed without recording an error.",
+            "timed_out": "The metric producer timed out.",
+            "cancelled": "Metric evaluation was cancelled.",
+            "not_applicable": "This metric does not apply to this execution.",
+        }.get(row["status"], "No measurement was recorded.")
+    if row["evaluation_state"] == "failed":
+        return row["evaluation_error"] or "Metric evaluation failed without recording an error."
+    if row["execution_status"] == "not_started":
+        return "This execution has not started; no measurement has been recorded."
+    if row["run_id"] is None:
+        return "No attempt evidence is recorded for this execution; the selected metric has no recorded observation."
+    if row["execution_status"] in {"pending", "queued", "running", "finalizing"}:
+        return "This execution is still in progress; the measurement has not been recorded yet."
+    if row["execution_status"] in {"failed", "cancelled", "limit_reached"}:
+        return row["execution_error"] or {
+            "failed": "This execution failed before recording the metric.",
+            "cancelled": "This execution was cancelled before recording the metric.",
+            "limit_reached": "This execution reached its iteration limit before recording the metric.",
+        }[row["execution_status"]]
+    if row["evaluation_state"] in {"pending", "queued", "running"}:
+        return "Metric evaluation is still in progress."
+    return "No observation was recorded for this selected metric in this attempt; the stored result provides no reason."
+
+
+async def read_metric_observations(
+    db: AsyncSession, scope: ResultScope, *, metric_key: str, cell_ids: list[uuid.UUID],
+    offset: int = 0, limit: int = PAGE_SIZE,
+) -> dict[str, Any]:
+    definitions = {metric["key"]: identifier for identifier, metric in result_metrics(scope).items()}
+    if metric_key not in definitions:
+        raise ValueError("The selected metric is not declared in this experiment version.")
+    if not cell_ids or len(cell_ids) > PAGE_SIZE or offset < 0:
+        raise ValueError("Select between 1 and 20 cells and a nonnegative offset.")
+    page_size(limit)
+    rows = (await db.execute(metric_observations_query(
+        scope, definitions[metric_key], cell_ids, offset=offset, limit=limit,
+    ))).mappings().all()
+    cells = {str(identifier): {"cell_id": str(identifier), "items": [], "total": 0} for identifier in cell_ids}
+    for row in rows:
+        cell = cells[str(row["cell_id"])]
+        cell["total"] = row["total"]
+        cell["items"].append({
+            "slot_id": str(row["slot_id"]), "replicate_label": row["replicate_label"],
+            "replicate_number": row["replicate_number"], "row_index": row["row_index"],
+            "execution_status": row["execution_status"], "status": row["status"] or "not_recorded",
+            "value_preview": row["value_preview"], "value_truncated": bool(row["value_truncated"]),
+            "reason": metric_observation_reason(row),
+            "exclusion_reason": (
+                None if scope.unit == "row" else
+                "Excluded from cell aggregation because this attempt reached its iteration limit."
+                if row["truncated"] or row["execution_status"] == "limit_reached"
+                else "Excluded from cell aggregation because this attempt did not complete."
+                if row["execution_status"] != "completed" else None
+            ),
+        })
+    return {"cells": list(cells.values()), "offset": offset, "limit": limit}
+
+
 async def read_execution_neighbors(db: AsyncSession, scope: ResultScope, *, slot_id: uuid.UUID) -> dict[str, Any]:
     """Adjacent inspectable results within the selected cell, across list pages."""
     slots = slot_query(scope).subquery("slots")
@@ -966,7 +1119,7 @@ async def read_attempts(
         run.status,
         run.created_at,
         run.completed_at,
-        func.left(run.error, 512).label("error"),
+        func.left(run.error, MAX_RUN_ERROR_LENGTH).label("error"),
         run.result_summary,
         run.usage_summary,
     ).where(
@@ -1007,7 +1160,7 @@ async def read_attempts(
             .one_or_none()
         )
         legacy = dict(record) if record else None
-    return {
+    page = {
         "slot": execution_payload(dict(slot)),
         "legacy_result": legacy,
         "items": [
@@ -1029,6 +1182,8 @@ async def read_attempts(
         if len(rows) > limit
         else None,
     }
+    await enrich_run_errors(db, scope, [page["slot"], *page["items"]])
+    return page
 
 
 async def lookup_slot(db: AsyncSession, scope: ResultScope, replicate_label: str) -> dict[str, Any]:
@@ -1038,7 +1193,9 @@ async def lookup_slot(db: AsyncSession, scope: ResultScope, replicate_label: str
         raise RunResultsProjectionError("slot_not_found")
     if len(rows) != 1:
         raise ValueError("ambiguous_replicate_label_use_slot_id")
-    return execution_payload(dict(rows[0]))
+    payload = execution_payload(dict(rows[0]))
+    await enrich_run_errors(db, scope, [payload])
+    return payload
 
 
 async def read_cell(
@@ -1080,7 +1237,7 @@ async def read_attempt_detail(db: AsyncSession, scope: ResultScope, run_id: uuid
     query = select(
         ProtocolRun.id,
         ProtocolRun.status,
-        func.left(ProtocolRun.error, 2048).label("error"),
+        func.left(ProtocolRun.error, MAX_RUN_ERROR_LENGTH).label("error"),
         ProtocolRun.started_at,
         ProtocolRun.completed_at,
         ProtocolRun.protocol_revision_id,
@@ -1102,13 +1259,62 @@ async def read_attempt_detail(db: AsyncSession, scope: ResultScope, run_id: uuid
     run = (await db.execute(query)).mappings().one_or_none()
     if run is None:
         raise RunResultsProjectionError("attempt_not_found")
-    return {
+    detail = {
         **dict(run),
         "run_id": str(run["id"]),
         "node_labels": _node_labels(scope.graph),
         "usage": run["usage_summary"],
         "protocol_revision_id": str(run["protocol_revision_id"]) if run["protocol_revision_id"] else None,
     }
+    await enrich_run_errors(db, scope, [detail])
+    return detail
+
+
+def failed_node_errors_query(scope: ResultScope, run_ids: list[uuid.UUID]) -> Any:
+    """Project only bounded failure text for the already-paged generic errors."""
+    run = ProtocolRun
+    nodes = func.jsonb_each(case(
+        (func.jsonb_typeof(run.node_runs) == 'object', run.node_runs), else_=cast(literal('{}'), JSONB),
+    )).table_valued('key', 'value').lateral('failed_nodes')
+    state = cast(nodes.c.value, JSONB)
+    failures = select(
+        run.id.label('run_id'), nodes.c.key.label('node_id'),
+        state['status'].astext.label('status'),
+        func.left(state['error'].astext, MAX_NODE_ERROR_LENGTH + 1).label('error'),
+        func.count().over(partition_by=run.id).label('total'),
+        func.row_number().over(partition_by=run.id, order_by=nodes.c.key).label('position'),
+    ).select_from(run).join(nodes, true()).where(
+        run.id.in_(run_ids), run.protocol_id == scope.protocol_id,
+        run.protocol_revision_id == scope.protocol_revision_id,
+        or_(run.design_revision_id == scope.design_revision_id,
+            and_(legacy_flag(scope), run.design_revision_id.is_(None))),
+        run.is_test_run.is_(False), run.target_node_id.is_(None),
+        state['status'].astext.in_(('failed', 'limit_reached')),
+    ).subquery('failed_node_errors')
+    return select(failures).where(failures.c.position <= MAX_FAILED_NODES).order_by(
+        failures.c.run_id, failures.c.position,
+    )
+
+
+async def enrich_run_errors(db: AsyncSession, scope: ResultScope, items: list[dict[str, Any]]) -> None:
+    """Recover historical generic errors without fetching node outputs or whole evidence."""
+    pending = [item for item in items if item.get('run_id') and item.get('status') in {'failed', 'limit_reached'}
+               and is_generic_run_error(item.get('error'))]
+    if not pending:
+        return
+    run_ids = list({uuid.UUID(item['run_id']) for item in pending})
+    rows = (await db.execute(failed_node_errors_query(scope, run_ids))).mappings().all()
+    failures: dict[str, dict[str, Any]] = {}
+    totals: dict[str, int] = {}
+    for row in rows:
+        identifier = str(row['run_id'])
+        failures.setdefault(identifier, {})[row['node_id']] = {'status': row['status'], 'error': row['error']}
+        totals[identifier] = row['total']
+    for item in pending:
+        identifier = item['run_id']
+        item['error'] = summarize_node_failures(
+            scope.graph, failures.get(identifier, {}), total_failures=totals.get(identifier),
+        )
 
 
 async def read_evidence(

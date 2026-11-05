@@ -38,6 +38,26 @@ function experiment(overrides: Partial<Experiment> = {}): Experiment {
 }
 
 describe('designMetadataPatch', () => {
+  it('saves metric opt-outs with the measurement plan without overwriting other recommendation metadata', () => {
+    const fresh = experiment({ metric_recommendations: {
+      applied_version: 1,
+      dismissed_version: null,
+      intentionally_removed_keys: [],
+      contextual_suggestion_dismissals: { tool_error_rate: 'previous-context' },
+    } })
+    const baseline = designMetadataOf(fresh)
+    const recommendations = { ...fresh.metric_recommendations!, intentionally_removed_keys: ['cost_usd'] }
+    expect(designMetadataPatch({
+      ...baseline,
+      measurementPlan: emptyPlan,
+      metricRecommendations: recommendations,
+    }, baseline, fresh, 'protocol-1')).toEqual({
+      measurement_plan: emptyPlan,
+      measurement_validation_protocol_id: 'protocol-1',
+      metric_recommendations: recommendations,
+    })
+  })
+
   it('sends nothing for a draft that was never edited, even when the server moved on', () => {
     // The clobber: a panel loaded with an empty plan, then a script bound the
     // metrics. The panel's untouched stale copy must not be written back.

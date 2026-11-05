@@ -89,6 +89,7 @@ def test_html_places_boxes_below_each_test_section_and_formats_header_fields():
     assert '<header class="report-header">' in html
     assert "<dt>Unit</dt><dd>ms</dd>" in html
     assert "<dt>Analyzed observations</dt><dd>8</dd>" in html
+    assert "<dt>Created</dt><dd>Nov 4, 2026 at 12:00 PM UTC</dd>" in html
     assert "<script" not in html
     del output["summary"]["boxplots"]
     assert "Main-effect distributions</h3>" in render_html(dict(output=output, config=config), source=source)

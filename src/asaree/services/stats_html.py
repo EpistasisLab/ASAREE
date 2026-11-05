@@ -78,6 +78,16 @@ def display(value, p=False):
     return str(value)
 
 
+def display_created_at(value):
+    """Readable, timezone-explicit timestamps in portable, script-free reports."""
+    try:
+        created = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except (ValueError, TypeError):
+        return display(value)
+    created = created.replace(tzinfo=UTC) if created.tzinfo is None else created.astimezone(UTC)
+    return f"{created:%b} {created.day}, {created.year} at {created.hour % 12 or 12}:{created:%M} {created:%p} UTC"
+
+
 def model_fit_panel(summary, family, text):
     """Selected model, AIC and the candidate comparison; older reports fall back to provenance."""
     fit = summary.get("model_fit") or {}
@@ -279,7 +289,7 @@ def render_html(analysis: dict, *, source: dict | None = None) -> str:
         ("Analysis status", summary["status"]),
         ("Execution", summary.get("execution_status", "completed")),
         ("Analyzed observations", (summary.get("distribution") or {}).get("n", output.get("n_observations"))),
-        ("Created", analysis.get("created_at")),
+        ("Created", display_created_at(analysis.get("created_at"))),
     ]
     metric_context = '<dl class="report-summary">' + "".join(
         f'<div><dt>{text(label)}</dt><dd>{text(value)}</dd></div>' for label, value in report_fields
@@ -492,7 +502,8 @@ background:repeating-linear-gradient(to top,transparent 0,transparent calc(25% -
 .x-ticks span{{text-align:center}}.x-title{{text-align:center;font-size:12px;color:#526170}}
 .numeric-ticks{{display:flex;justify-content:space-between;gap:4px;margin-top:8px;font:10px monospace;color:#526170}}
 .boxplots>p{{font-size:13px;color:#526170}}.box-figure figcaption{{font-size:14px;font-weight:600}}
-.box-scroll{{overflow-x:auto;max-width:100%}}.box-chart{{display:flex;gap:8px;min-width:max-content}}
+.box-scroll{{overflow-x:auto;max-width:100%}}
+.box-chart{{display:flex;gap:8px;width:max-content;min-width:100%}}
 .box-y-title{{writing-mode:vertical-rl;transform:rotate(180deg);height:{BOX_HEIGHT}px;
 text-align:center;font-size:12px;max-width:3rem;overflow-wrap:anywhere}}
 .box-y-ticks{{display:flex;flex-direction:column;justify-content:space-between;height:{BOX_PLOT_HEIGHT}px;
@@ -500,11 +511,12 @@ margin-top:{BOX_TOP_PADDING}px;text-align:right;font:11px monospace;color:#52617
 .box-groups{{display:flex;flex:1;gap:16px;position:relative}}
 .box-groups::before{{content:"";position:absolute;top:{BOX_HEIGHT}px;left:0;right:0;
 border-top:1px solid #94a3b8;pointer-events:none}}
-.box-group{{flex:1;min-width:80px}}
-.box-traces{{display:flex;justify-content:center;gap:4px}}.box-slot{{width:80px;text-align:center}}
-.box-slot svg{{display:block;width:80px;height:{BOX_HEIGHT}px;stroke:#167fa2;fill:none;stroke-width:1.5}}
+.box-group{{flex:1;min-width:max-content}}
+.box-traces{{display:flex;justify-content:center;gap:16px}}.box-slot{{flex:1;min-width:max-content;text-align:center}}
+.box-slot svg{{display:block;width:80px;height:{BOX_HEIGHT}px;margin-inline:auto;
+stroke:#167fa2;fill:none;stroke-width:1.5}}
 .box-slot rect{{fill:#deeff4}}.box-slot .box-median{{stroke:#202c38;stroke-width:2}}.box-slot circle{{fill:#167fa2}}
-.box-slot p,.box-level{{margin:8px 0 4px;font:11px monospace;overflow-wrap:anywhere;text-align:center}}
+.box-slot p,.box-level{{margin:8px 0 4px;font:11px monospace;white-space:nowrap;text-align:center}}
 .box-slot small{{display:block;color:#526170}}.box-level{{font-weight:600;padding:8px 0}}
 .missing-box{{height:{BOX_HEIGHT}px;display:flex;align-items:center;font-size:11px;color:#526170}}
 .sr-only{{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}}
@@ -595,7 +607,7 @@ Statistical evidence does not establish practical importance.</p>
 {methodology}
 <h2>Limitations and exclusions</h2>{listing(summary["warnings"])}
 <details><summary>Reproducibility</summary>
-<p>Analysis: {text(analysis.get("id"))} · Created: {text(analysis.get("created_at"))}</p>
+<p>Analysis: {text(analysis.get("id"))} · Created: {text(display_created_at(analysis.get("created_at")))}</p>
 <pre>{
         text(
             json.dumps(

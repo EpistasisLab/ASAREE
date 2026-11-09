@@ -20,6 +20,10 @@ src/asaree/_version.py
 sdk/src/asaree_client/_version.py
 
 # Private local planning and agent guidance
-docs/
+docs/*
+# Shared experiment contracts must travel with the repository; other local docs stay private.
+!docs/agents/
+docs/agents/*
+!docs/agents/experiment-contracts.md
 issues/
 tasks/

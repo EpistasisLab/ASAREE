@@ -1,238 +1,78 @@
-# Frontend visual style
+# ASAREE agent instructions
 
-The frontend (`frontend/`) uses a deliberate dark, retrofuturist/high-tech visual language.
-Preserve it for all new pages and components — don't revert to shadcn's plain default theme
-or introduce a different aesthetic without being asked.
+ASAREE runs factorial experiments over agent protocol graphs. Use these shared
+instructions with Codex and Claude Code; specialized rules live near their code.
 
-- **Theme**: dark mode only (`<html class="dark">` in `index.html`), a graphite background
-  (not near-black) with a cyan/electric-blue accent (`--primary`). Tokens live in
-  `frontend/src/index.css`'s `.dark` block — adjust values there, don't hardcode colors in
-  components.
-- **Motifs**: a faint cyan grid backdrop and scanline texture on `body`, glowing buttons
-  (`components/ui/button.tsx` — every variant glows in its own accent color: `default`/
-  `outline`/`secondary`/`ghost` in `--primary`, `destructive` in `--destructive`; only `link`
-  has no surface to glow), and glowing HUD-style corner brackets on cards
-  (`components/ui/card.tsx`'s `Card`, plus `components/AuthLayout.tsx`). These live in the
-  shared primitives, not per-page overrides — a new page gets them for free by using
-  `Card`/`Button`/`AppHeader`, so build on those rather than hand-rolling styles.
-- **Monospace for technical readouts**: IDs, hashes, token prefixes, cell labels, and
-  key=value data dumps use `font-mono` (see `components/protocol/cells/CellsTable.tsx`,
-  `ApiTokensSection.tsx`)
-  to read like a real data/terminal output, not prose.
-- **Every button glows uniformly, by explicit choice**: an earlier pass reserved the glow for
-  one "primary" action per section (`default` variant only), with `outline`/`ghost` left
-  plain — the user found that inconsistent and asked for uniform glowing buttons instead.
-  Don't reintroduce the primary-only hierarchy; if a future change to `button.tsx` needs a
-  visual hierarchy again, ask first rather than assuming the old convention.
-- **Tables vs. cards is a zoom-level decision, not a style preference**: a "container" list —
-  sparse metadata, click one to drill into it (e.g. the Experiments list) — is a card/tile
-  grid, not a table; a table only earns its place once you're inside that container looking
-  at dense, precise, multi-attribute records to compare (e.g. an experiment's Cells, with
-  their metrics/hyperparameters). Don't reach for a table just because a list exists — check
-  which zoom level you're actually building first.
-  - Detail on the Experiments tile grid lives in `frontend/src/pages/AGENTS.md`; detail on
-    the Cells heatmap/table (and the per-agent run tally that replaced the old Agents grid)
-    lives in `frontend/src/components/protocol/cells/AGENTS.md`. Read the relevant one before
-    touching `ExperimentsPage.tsx` or anything under `components/protocol/cells/`.
-- **There is no separate experiment detail page** — clicking an Experiments tile lands on
-  `/experiments/{id}/protocol`, the protocol canvas, and everything that used to be on a
-  static `ExperimentDetailPage` now lives in that canvas's `ExperimentSidePanel` tabs
-  (Design/Cells/Runs/Results) or its top bar. `/experiments/{id}` is kept only as a redirect
-  for old bookmarks. Don't reintroduce a static detail page; a new per-experiment view is a
-  new tab in that panel. The panel is drag-resizable by its right edge (320px–1100px, always
-  leaving the canvas ≥420px) and remembers its width in `localStorage` — so a new tab in it
-  should be width-responsive via container queries, not built for one fixed column width.
+## Read before changing code
 
-## Agent skills
+- Read applicable nested `AGENTS.md` files from root to the area being edited, even when
+  the CLI starts at the repository root. More specific rules refine parent rules;
+  explicit user instructions take precedence. Nested files are instructions, not subagents.
+- For frontend work, read [frontend instructions](frontend/AGENTS.md), then applicable
+  [page](frontend/src/pages/AGENTS.md),
+  [protocol](frontend/src/components/protocol/AGENTS.md), and
+  [Cells](frontend/src/components/protocol/cells/AGENTS.md) instructions.
+- For backend work, read [backend instructions](src/asaree/AGENTS.md).
+- Before exploring or implementing domain behavior, read [CONTEXT.md](CONTEXT.md) and
+  relevant available ADRs under `docs/adr/`. Use their canonical vocabulary and surface
+  proposed contradictions. Some supporting docs are private/local; if absent, proceed
+  without creating replacements speculatively.
+- Before changing experiment datasets, agents, factors, revisions, execution/results, or
+  measurement behavior, read [experiment contracts](docs/agents/experiment-contracts.md).
+  This applies across backend, frontend, SDK, and related tests.
 
-### Issue tracker
+## Execution and cost
 
-Implementation issues and specs live in the separate `EpistasisLab/ASAREE_Issues` GitHub repository. See `docs/agents/issue-tracker.md`.
+- Work solo by default. At most one scoped search agent is appropriate for a targeted
+  investigation; use parallel agent fan-out only when the user explicitly requests it.
+- Search the named area first; widen only when focused searches are insufficient.
+- Run the narrowest relevant lint/type/test checks. Ask before long builds, checks taking
+  minutes, expensive statistical simulations, or starting extra infrastructure.
+- Ask before browser automation, Playwright, or screenshot-based UI verification. The
+  user checks UI appearance; use type checks, lint, and existing tests for routine work.
+  State any behavior that cannot be confirmed without a browser.
+- When approval is needed, explain the action and its purpose in one sentence. Existing
+  explicit authorization remains valid; do not ask again for an already authorized action.
 
-### Triage labels
+## Verification
 
-Use the five canonical Matt Pocock triage labels. See `docs/agents/triage-labels.md`.
+- Frontend: commands and working directory are in [frontend instructions](frontend/AGENTS.md).
+- Backend and backend tests: read [backend verification](src/asaree/AGENTS.md#verification),
+  including service prerequisites and expensive-test markers.
+- For SDK, workspace-core, and MCP package work, inspect the affected package configuration
+  and existing tests before selecting focused checks.
+- For documentation-only edits, check local links, instruction scope, and `git diff --check`;
+  application builds/tests are unnecessary unless executable behavior changed.
+- Before changing CI or preparing integration/release work, read
+  [CONTRIBUTING.md](CONTRIBUTING.md). Report checks run, failures, and unverified behavior.
 
-### Domain docs
+## Git and releases
 
-This is a single-context repository with `CONTEXT.md` at the root and private local ADRs under `docs/adr/`. See `docs/agents/domain.md`.
+- Follow [CONTRIBUTING.md](CONTRIBUTING.md): features/fixes branch from current `develop`
+  and target `develop`. Set the PR base explicitly; GitHub defaults to `main`.
+- Preserve commit ancestry with merge commits, including feature, release, hotfix, and
+  synchronization PRs; refresh branches by merging rather than rebasing.
+- Explicit user authorization is required before merging into `main` (including hotfixes),
+  creating release tags, publishing artifacts, or deploying production.
+- Replace temporary Motoro integration pins with tested release tags before production
+  releases, following the dependency validation in `CONTRIBUTING.md`.
+- Do not add `Co-Authored-By` or `Generated-with` lines to commits or PRs.
 
-# Git commit conventions
+## Issue tracker
 
-Do not add `Co-Authored-By` or `Generated-with` lines to commits or PRs.
+- Issues/specs live in `EpistasisLab/ASAREE_Issues`; code and PRs live in `EpistasisLab/ASAREE`.
+  Use `gh` and explicitly pass `-R EpistasisLab/ASAREE_Issues` for issue operations.
+- Reference issues from PRs as `EpistasisLab/ASAREE_Issues#<number>`.
+- Use canonical triage labels: `needs-triage`, `needs-info`, `ready-for-agent`,
+  `ready-for-human`, and `wontfix`.
+- For detailed issue/triage workflows, read `docs/agents/issue-tracker.md` and
+  `docs/agents/triage-labels.md` when present. They are optional local references;
+  the shared tracker and label rules above remain authoritative when they are absent.
 
-## Branch and release workflow
+## Communication
 
-Follow [CONTRIBUTING.md](CONTRIBUTING.md): `main` is the default branch, but
-feature/fix branches start from and target `develop`. Set the PR base explicitly
-to `develop`; release and hotfix promotion into `main` is deliberate.
-Use merge commits for release/synchronization PRs. Replace temporary Motoro
-integration pins with tested release tags before ASAREE production releases.
-Require explicit user authorization before merging into `main` (including
-hotfixes), creating release tags, publishing artifacts, or deploying production.
-
-# Cost-conscious execution
-
-Favor the cheapest tool/approach that reliably gets the job done. Before doing any of the
-following, say in one sentence what you're about to do and why it's needed, and ask first
-rather than doing it silently as a routine part of coding:
-
-- **No Playwright/browser automation or screenshot-based UI verification.** The user checks
-  UI changes visually themselves once you report them done — see the standing preference to
-  skip Playwright verification agents. Screenshots are read as images, which cost far more
-  tokens than text, and driving a browser adds many extra tool round-trips on top. Verify with
-  `tsc`/`oxlint`/existing tests instead; if something genuinely can't be confirmed without a
-  browser, say so explicitly rather than skipping verification or reaching for Playwright
-  unasked.
-- **No multi-agent fan-out for routine coding work** — don't invoke the `Workflow` tool or
-  spawn multiple subagents in parallel just because a task touches several files. Each spawned
-  agent carries its own multiplied context/token cost. Default to working solo, or at most one
-  scoped `Explore`/`general-purpose` agent for a targeted search. Reserve `Workflow`/parallel
-  fan-out for when the user explicitly asks for that scale.
-- **No unscoped, repo-wide exploration** ("search everywhere," reading many files in full) when
-  the request already names specific files or areas — grep/read narrowly first, and only widen
-  the search if that comes up empty.
-- **No speculative full test-suite runs or long builds** — run the narrowest test/lint command
-  that covers the change under review; ask before running something that takes minutes or spins
-  up extra infrastructure (dev servers, containers, etc.).
-
-# Experiment data model
-
-- **Datasets are a real, stored many-to-many** — the `experiment_datasets` join table
-  (`models/experiment_dataset.py`, migration `d5a3b90c71e4`), unlike agents below: a dataset
-  genuinely is a first-class property of an experiment worth a real relationship, matching
-  what ARES does. It started as a scalar `ResearchExperiment.dataset_id` FK (migration
-  `a1b2c3d4e5f6`); that column is **dropped** — uncapping the Dataset connector means one
-  experiment can run against several, so a single winner would have been a lie. Read/write it
-  through `services/experiments.py`'s `set_experiment_datasets` /
-  `get_experiment_dataset_ids` / `get_dataset_ids_by_experiment` (the batch one — use it on
-  list endpoints to avoid an N+1), never by touching the model.
-  - `position` on the join row preserves **canvas wiring order**, which is the order the
-    agent's prompt lists the datasets in, so it's user-visible, not cosmetic.
-  - `dataset_ids` is a **full replacement**, not a merge (`[]` detaches everything). The API
-    and SDK still accept and return the old scalar `dataset_id`: on write it's the
-    one-dataset shorthand, on read a view of `dataset_ids[0]`. Don't add a second source of
-    truth — the join table is it.
-  - It's set via `PATCH /experiments/{id}`, not at creation: the notebook's Step 1 (create the
-    experiment) runs *before* Step 2 (register the dataset), so there's nothing to attach yet
-    at create time — see the `client.experiments.update(...)` call after Step 2 in
-    `spinal_pipeline.ipynb`. In the GUI it's `ProtocolCanvas.tsx`'s `syncExperimentDatasets`
-    effect, which PATCHes whenever the canvas's set of Dataset nodes changes. That effect's
-    ref is deliberately **seeded from the graph as loaded so it never fires on mount** — a
-    mount-time "reconcile" would see zero Dataset nodes on a notebook-driven experiment and
-    detach its dataset. Keep that property if you touch it.
-  - An experiment with no datasets attached is an expected, permanent state (everything
-    created before the FK existed) — not a bug to backfill.
-- **Agents are deliberately NOT a stored relationship** — there's no `experiment_agents` join
-  table, and none is planned. Agents are reusable per-user templates, not something an
-  experiment "owns"; asking "which agents ran in this experiment" is answered by scanning the
-  user's `Run`s for `run_metadata.experiment_id` matches (see `ExperimentAgents` in
-  `components/protocol/RunsTab.tsx`) and cross-referencing `GET /agents`, not by a new backend
-  association. `GET /runs` has no server-side `experiment_id` filter (only `agent_id`) — this
-  fetches every run for the user and filters client-side, which is fine at today's scale but
-  is the place to add a real filter if a user's run history grows large enough to matter.
-- **Cells belong to a design revision, not to the experiment** — `experiment_design_revisions`
-  (`models/experiment_design_revision.py`, migration `e2f7c4a91b60`). The current design is the
-  one revision with `superseded_at IS NULL` (a partial unique index enforces "at most one",
-  rather than convention). This exists because generation used to be purely additive: a design
-  shrunk from 6 cells to 2 left all 6 behind, so the experiment still read "0/6 scored" and
-  "run all cells" still launched 6.
-  - **Never query `FactorialReplicateResult` without joining its owning cell** — that loses
-    experiment/design-revision scope. Go through
-    `services/factorial_cells.py`'s `get_replicate`/`list_replicates`/`upsert_replicate`, which scope to the
-    current revision by default and take an explicit `revision_id` only to read history on
-    purpose. `experiment_id` lives on the parent cell, and both experiment and revision filters
-    are applied together because `revision_id` can arrive from a query string.
-  - **Cell vs. replicate:** a `FactorialCell` is one unique factor combination together
-    with all its planned `FactorialReplicateResult` children. Group replicate responses by `cell_id`,
-    and use “replicate” for run/progress/scored counts. “Run all cells” is the experiment-level
-    action that runs every pending replicate across those cells.
-  - `generate_design_cells` opens a new revision **only when the new design would drop a cell
-    the current one has**. Re-clicking generate, changing the seed, widening a factor's levels
-    or raising `replicates` all keep the current revision and its row ids — history entries are
-    meant to mark designs that actually discarded something, not every edit. Results for a
-    label the two revisions share are copied forward; the originals stay in history.
-  - `ProtocolRun.design_revision_id` **pins** which design a run's result belongs to, so a
-    regenerate mid-flight can't redirect the write-back (`plan_cell_runs` →
-    `run_protocol`/`promote_cell_score_metrics`). It's `ondelete="SET NULL"` — run history
-    outlives the design; cells are `ondelete="CASCADE"` so deleting a revision really does
-    delete its results.
-  - Deleting the **current** revision is refused (409) — that's a reset, not a deletion;
-    regenerating is how you replace it. Revision numbers are `max()+1` over every revision ever,
-    so a deleted number is never reused. The history UI is `components/protocol/cells/
-    DesignHistory.tsx`.
-- **A protocol canvas is a draft; production runs use a published revision** — `Protocol.graph`
-  remains the autosaved draft while `protocol_revisions` stores immutable graph snapshots. A
-  `ProtocolRun` carries both `design_revision_id` and `protocol_revision_id`; `run_protocol`
-  loads the latter, so a canvas edit can never hot-patch queued, running, or resumed work. Never
-  create a production run from `Protocol.graph` directly: publish first and pass the resulting
-  revision through the planning path. The top bar deliberately says when a visible canvas has
-  unpublished changes and which published revision production currently uses.
-- **A declared factor must bind to at least one canvas field before a cell batch can run** —
-  deleting/unbinding a node field leaves the factor declared but *unbound*, rather than silently
-  deleting the experimental treatment. The user must rebind it or remove it, then review the
-  design impact and regenerate. `services.factor_bindings` is the shared backend guard; the
-  Design tab shows the same state before generation.
-
-# Color — meaningful variation, not decoration
-
-A single cyan accent everywhere read as flat/monotone rather than retrofuturist (that style
-leans on multi-hue neon contrast — synthwave, Tron, Blade Runner — not minimalism). Cards can
-now be individually re-tinted, but the tint must mean something; don't add color for its own
-sake.
-
-- **Mechanism**: `components/ui/card.tsx`'s `Card` reads a `--card-accent` CSS custom property
-  (falling back to `--primary`) for its ring/glow/corner-bracket colors — see the comment on
-  `Card` itself. Set it via `style={cardAccent('var(--chart-3)')}` (`lib/utils.ts`) on any
-  individual `Card`; anything that also wants the icon/badge/hover-arrow to match reads
-  `text-[color:var(--card-accent,var(--primary))]` the same way `AgentCard` and the Experiments
-  tiles do — don't hardcode `text-primary` on elements living inside a re-tintable card.
-- **Status-driven tint** (`lib/experiment.ts`'s `cellsStatusAccent`): `--chart-4` (amber) = cells
-  generated but none scored, `--primary` (cyan) = partially scored, `--chart-3` (emerald) = fully
-  scored, `--muted-foreground` (dim) = no cells yet. Used on both the Experiments-list tiles and
-  the detail page's "Cells" stat card — the same status must always resolve to the same color
-  everywhere, so change it in that one function, not per call site.
-- **Hash-driven tint** (`lib/utils.ts`'s `hashToChartHue`): for things with no "done/pending"
-  status but real category variety — e.g. `AgentCard` tints by `model_config.model`, so agents
-  sharing an LLM visually match without a hardcoded model→color table that goes stale the moment
-  a new model ships. Same input always produces the same one of the five `--chart-*` hues.
-  **Not for protocol-canvas nodes** — see the table below.
-- **Table-driven tint** (`lib/nodeAccent.ts`'s `nodeAccent(kind)`): protocol-canvas nodes only.
-  Thirteen node kinds against five `--chart-*` hues made collisions arithmetic, and they landed
-  on the confusable pairs (Skill/AI, Dataset/Knowledge, Pattern/Script), so every kind now has an
-  explicit entry. Five keep the `--chart-*` hue the old hash gave them (agent, dataset,
-  reason+act, critic gate, and the LLM family) and the other eight moved to a `--node-1`…`--node-8`
-  slot in `index.css`'s `.dark` block — **fixing a repeat means moving the bucket-mates, not
-  repainting the canvas**, so don't reassign an anchor's hue without being asked. Both the node
-  card and its inspector call `nodeAccent` with the same key so they can't drift; a kind with no
-  entry falls back to `--primary` rather than a hashed hue, so a new node type visibly asks for a
-  slot. Adjacent hues are assigned to related kinds on purpose (the two MCP kinds, the two OKF
-  kinds). Note LLM nodes are one hue for the whole family, not one per provider.
-  - `--node-label` (yellow) is separate from all of them: it's the connector captions on
-    `AgentNode`/`CriticGateNode`, which are meant to stand out *from* their node, so they
-    deliberately don't follow `--card-accent` the way everything else inside a card does.
-- **Don't hash/rotate a tint just to break up visual monotony** with no underlying meaning (e.g.
-  cycling colors by array index) — that was considered and rejected in favor of the schemes
-  above. If a new list of things genuinely has no status or category worth encoding in color,
-  it's fine for it to stay a single accent.
-
-# Communication style
-
-Be concise and execution-oriented.
-
-For coding tasks:
-- Do the requested work without lengthy explanations.
-- Make routine implementation decisions yourself.
-- Do not present multiple alternatives unless the choice materially affects
-  architecture, correctness, or requirements.
-- Do not enumerate pros and cons for routine decisions.
-- Do not explain obvious code changes.
-- Do not repeatedly summarize what you are doing.
-- Ask questions only when ambiguity would materially change the implementation.
-- Prefer implementing over discussing.
-- After completing a task, give a short summary of what changed.
-- If you identify an important concern, state it briefly and recommend one
-  course of action rather than presenting many possibilities.
-
-Keep responses focused, brief, and concise. Give deeper explanations only
-when I explicitly ask for them.
+- Be concise and execution-oriented. Make routine implementation decisions and carry out
+  authorized work; ask only when ambiguity materially changes requirements or correctness.
+- Explain significant decisions or concerns briefly, with one recommended course of action.
+  Give alternatives or deeper explanations when requested or when the choice is consequential.
+- Finish with a short account of changes, verification, and material limitations.

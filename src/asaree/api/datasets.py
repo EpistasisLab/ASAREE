@@ -99,6 +99,7 @@ class ArtifactResponse(BaseModel):
     id: uuid.UUID
     namespace: str
     storage_key: str
+    legacy_path: str | None = None
     sha256: str | None
     byte_size: int | None
     format: str

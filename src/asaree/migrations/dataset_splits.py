@@ -20,12 +20,30 @@ def legacy_artifact(
 ) -> dict[str, Any]:
     file = Path(path).resolve()
     root = root.resolve()
-    if not file.is_relative_to(root):
-        raise ValueError(f"Legacy dataset file {file} is outside dataset storage {root}; configure its original root")
+    artifact_id = uuid.uuid4()
+    external = not file.is_relative_to(root)
+    if external:
+        try:
+            file.stat()
+        except FileNotFoundError:
+            pass
+        else:
+            raise ValueError(
+                f"Legacy dataset file {file} is outside dataset storage {root}; configure its original root"
+            )
+        # No bytes exist to import. Reserve a managed key, retaining the old
+        # location only as evidence; never resolve a managed reference outside root.
+        key = f"{dataset_id}/unavailable/{artifact_id}/{file.name}"
+    else:
+        key = file.relative_to(root).as_posix()
     artifact: dict[str, Any] = dict(
-        id=uuid.uuid4(), dataset_id=dataset_id, namespace="datasets", storage_key=file.relative_to(root).as_posix(),
+        id=artifact_id, dataset_id=dataset_id, namespace="datasets", storage_key=key,
+        legacy_path=path if external else None,
         sha256=expected_hash, byte_size=None, format=format, status="missing",
     )
+    if external:
+        logger.warning("Legacy dataset %s artifact %s: missing (outside managed storage)", dataset_id, path)
+        return artifact
     try:
         observed = sha256_file(file)
         artifact.update(byte_size=file.stat().st_size, sha256=expected_hash or observed)
@@ -88,6 +106,8 @@ def restore_legacy_paths(connection: Connection, root: Path) -> None:
         if artifact_id is None:
             return None, None
         artifact = connection.execute(sa.select(artifacts).where(artifacts.c.id == artifact_id)).mappings().one()
+        if artifact.get("legacy_path"):
+            return artifact["legacy_path"], artifact["sha256"]
         path = (root.resolve() / artifact["storage_key"]).resolve()
         if artifact["namespace"] != "datasets" or not path.is_relative_to(root.resolve()):
             raise ValueError("Invalid dataset artifact reference during downgrade")

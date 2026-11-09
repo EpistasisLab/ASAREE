@@ -22,6 +22,8 @@ class DatasetArtifact(Base):
     )
     namespace: Mapped[str] = mapped_column(String(32), nullable=False, default="datasets")
     storage_key: Mapped[str] = mapped_column(Text, nullable=False)
+    # Diagnostic evidence only; never used to resolve a managed artifact.
+    legacy_path: Mapped[str | None] = mapped_column(Text)
     sha256: Mapped[str | None] = mapped_column(String(64))
     byte_size: Mapped[int | None] = mapped_column(BigInteger)
     format: Mapped[str] = mapped_column(String(16), nullable=False)

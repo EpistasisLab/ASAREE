@@ -27,6 +27,7 @@ def upgrade() -> None:
         sa.Column("dataset_id", uuid, sa.ForeignKey("registered_datasets.id", ondelete="CASCADE"), nullable=False),
         sa.Column("namespace", sa.String(32), nullable=False),
         sa.Column("storage_key", sa.Text(), nullable=False),
+        sa.Column("legacy_path", sa.Text()),
         sa.Column("sha256", sa.String(64)), sa.Column("byte_size", sa.BigInteger()),
         sa.Column("format", sa.String(16), nullable=False), sa.Column("status", sa.String(32), nullable=False),
         if_not_exists=True,

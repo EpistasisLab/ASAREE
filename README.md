@@ -250,7 +250,9 @@ It preserves available source and partition bytes in place, creates relative
 artifact references, and makes the preserved legacy split current. Missing files
 and recorded hash mismatches produce migration warnings and explicit artifact
 statuses; unknown split provenance stays unknown. A newly computed hash records
-the file observed during migration, not an old execution's input. Files outside
+the file observed during migration, not an old execution's input. Missing files
+outside the configured root retain their original location as `legacy_path`
+diagnostic evidence and receive an unavailable managed key. Existing files outside
 the configured root stop the migration so the mount/configuration can be corrected.
 Back up dataset storage together with PostgreSQL before applying it.
 

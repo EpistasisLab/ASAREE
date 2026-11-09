@@ -21,6 +21,10 @@ sdk/src/asaree_client/_version.py
 
 # Private local planning and agent guidance
 docs/*
+# This shared storage decision must travel with implementation sessions.
+!docs/adr/
+docs/adr/*
+!docs/adr/0003-immutable-dataset-inputs-and-managed-artifacts.md
 # Shared experiment contracts must travel with the repository; other local docs stay private.
 !docs/agents/
 docs/agents/*

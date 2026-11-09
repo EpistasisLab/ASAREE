@@ -6,6 +6,20 @@ factor-combination cell and compares the recorded outcomes.
 
 ## Language
 
+### Datasets
+
+**Dataset source**:
+The immutable original input identified by one registered dataset. Whole-dataset and per-row execution consume the same source.
+_Avoid_: Editable dataset content
+
+**Dataset split**:
+An immutable train/test partition pair associated with a dataset source, together with the available provenance of its creation.
+_Avoid_: Overwritable train/test files
+
+**Current split**:
+A dataset's optional default split selection for future use. Changing it does not change a published version's pinned inputs.
+_Avoid_: The dataset's only split
+
 ### Experiments
 
 **Experiment**:

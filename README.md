@@ -244,6 +244,30 @@ start only after both migration services exit successfully.
 `docker compose restart asaree-app` restarts only that service and does not
 rerun the migration services.
 
+Dataset split migration `94b6c8d0e2f4` must run online with the existing dataset
+storage mounted and `ASAREE_DATASET_STORAGE_DIR` pointing to its original root.
+It preserves available source and partition bytes in place, creates relative
+artifact references, and makes the preserved legacy split current. Missing files
+and recorded hash mismatches produce migration warnings and explicit artifact
+statuses; unknown split provenance stays unknown. A newly computed hash records
+the file observed during migration, not an old execution's input. Files outside
+the configured root stop the migration so the mount/configuration can be corrected.
+Back up dataset storage together with PostgreSQL before applying it.
+
+Quick and manual split requests now create new split IDs and unique partition
+files. `GET /api/datasets/{id}/splits` lists history; `GET` on
+`/api/datasets/{id}/splits/{split_id}` retrieves its artifacts and provenance;
+`PUT /api/datasets/{id}/splits/{split_id}/selection` makes it current. Dataset
+responses retain the selected split's paths and metadata for compatibility.
+Publication and execution input pinning remains separate work (#68).
+
+An online downgrade restores the current split's compatibility fields and source
+path without changing files. Older split files remain on disk, but their history
+records are removed by the downgrade; restore the database backup to recover those
+records. Interrupted preparations can leave unreferenced `.preparing` directories
+or complete split directories without committed records. They are never listed
+as splits; retain them for inspection until reference-aware cleanup is available.
+
 Before upgrading an existing production deployment, back up both databases.
 Then check out the desired release tag and recreate the stack:
 

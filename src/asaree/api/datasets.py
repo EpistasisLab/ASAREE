@@ -18,6 +18,7 @@ from pydantic import BaseModel
 from sqlalchemy.exc import IntegrityError
 
 from asaree.deps import CurrentUser, DbSession
+from asaree.models.dataset_split import DatasetArtifact, DatasetSplit
 from asaree.models.dataset_workspace_event import WorkspaceEventType
 from asaree.services.dataset_workspace_events import list_events, record_event
 from asaree.services.datasets import (
@@ -27,9 +28,12 @@ from asaree.services.datasets import (
     delete_dataset,
     get_dataset,
     get_dataset_by_name,
+    get_split,
     list_datasets,
+    list_splits,
     quick_split_dataset,
     register_manual_split,
+    select_split,
 )
 
 router = APIRouter(prefix="/datasets", tags=["datasets"])
@@ -67,6 +71,8 @@ class DatasetResponse(BaseModel):
     name: str
     raw_path: str | None
     raw_sha256: str | None
+    raw_artifact_id: uuid.UUID | None = None
+    current_split_id: uuid.UUID | None = None
     # Null until a split is actually produced (POST .../split/quick or
     # .../split/manual) -- registration itself never splits (see
     # RegisteredDataset's own module docstring).
@@ -74,12 +80,8 @@ class DatasetResponse(BaseModel):
     test_path: str | None
     train_sha256: str | None
     test_sha256: str | None
-    # How that split was produced -- the hashes above identify the files, these
-    # describe (and are enough to reproduce) the procedure. All null for a
-    # never-split dataset, and also for one split before these columns existed;
-    # split_group_column is the column actually grouped on, so null there means
-    # a stratified split, not "we forgot to record it". Read out by the Dataset
-    # node inspector alongside the hashes.
+    # Compatibility views of the current split. The history endpoint carries
+    # its effective strategy and target; absent legacy provenance stays unknown.
     split_method: str | None = None
     split_group_column: str | None = None
     split_test_size: float | None = None
@@ -91,6 +93,72 @@ class DatasetResponse(BaseModel):
     # dictionary_json contract exactly.
     dictionary_json: str | None = None
     created_at: datetime | None = None
+
+
+class ArtifactResponse(BaseModel):
+    id: uuid.UUID
+    namespace: str
+    storage_key: str
+    sha256: str | None
+    byte_size: int | None
+    format: str
+    status: str
+
+
+class SplitResponse(BaseModel):
+    id: uuid.UUID
+    dataset_id: uuid.UUID
+    source_sha256: str | None
+    train_artifact: ArtifactResponse | None
+    test_artifact: ArtifactResponse | None
+    target_column: str | None
+    method: str | None
+    strategy: str | None
+    group_column: str | None
+    stratify_column: str | None
+    test_size: float | None
+    seed: int | None
+    legacy: bool
+    created_at: datetime
+
+
+def _split_response(split: DatasetSplit) -> SplitResponse:
+    def artifact_response(artifact: DatasetArtifact | None) -> ArtifactResponse | None:
+        return ArtifactResponse.model_validate(artifact, from_attributes=True) if artifact else None
+
+    return SplitResponse(
+        id=split.id, dataset_id=split.dataset_id, source_sha256=split.source_sha256,
+        train_artifact=artifact_response(split.train_artifact), test_artifact=artifact_response(split.test_artifact),
+        target_column=split.target_column, method=split.method, strategy=split.strategy,
+        group_column=split.group_column, stratify_column=split.stratify_column,
+        test_size=split.test_size, seed=split.seed, legacy=split.legacy, created_at=split.created_at,
+    )
+
+
+@router.get("/{dataset_id}/splits", response_model=list[SplitResponse])
+async def list_splits_endpoint(dataset_id: uuid.UUID, db: DbSession, user: CurrentUser) -> list[SplitResponse]:
+    await _get_owned_dataset(db, dataset_id, user)
+    return [_split_response(s) for s in await list_splits(db, dataset_id=dataset_id, owner_id=user.id)]
+
+
+@router.get("/{dataset_id}/splits/{split_id}", response_model=SplitResponse)
+async def get_split_endpoint(
+    dataset_id: uuid.UUID, split_id: uuid.UUID, db: DbSession, user: CurrentUser
+) -> SplitResponse:
+    split = await get_split(db, dataset_id=dataset_id, split_id=split_id, owner_id=user.id)
+    if split is None:
+        raise HTTPException(status_code=404, detail="No such split")
+    return _split_response(split)
+
+
+@router.put("/{dataset_id}/splits/{split_id}/selection", response_model=DatasetResponse)
+async def select_split_endpoint(
+    dataset_id: uuid.UUID, split_id: uuid.UUID, db: DbSession, user: CurrentUser
+) -> DatasetResponse:
+    dataset = await select_split(db, dataset_id=dataset_id, split_id=split_id, owner_id=user.id)
+    if dataset is None:
+        raise HTTPException(status_code=404, detail="No such split")
+    return _dataset_response(dataset)
 
 
 class DatasetRowSchemaResponse(BaseModel):
@@ -107,6 +175,8 @@ def _dataset_response(d: Any) -> DatasetResponse:
         name=d.name,
         raw_path=d.raw_path,
         raw_sha256=d.raw_sha256,
+        raw_artifact_id=d.raw_artifact_id,
+        current_split_id=d.current_split_id,
         train_path=d.train_path,
         test_path=d.test_path,
         train_sha256=d.train_sha256,
@@ -183,8 +253,7 @@ async def quick_split_dataset_endpoint(
 ) -> DatasetResponse:
     """ASAREE's own built-in split (group-aware when group_column is given
     and present, else stratified on target_column) -- covers the common
-    case. Safe to call again (e.g. a different seed): overwrites whichever
-    split currently exists rather than accumulating one per call."""
+    case. Every successful call preserves a new immutable split."""
     dataset = await _get_owned_dataset(db, dataset_id, user)
     try:
         dataset = await quick_split_dataset(

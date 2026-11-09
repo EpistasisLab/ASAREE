@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import async_engine_from_config
 # table this chain cannot see. Add each new model module here as it's added.
 import asaree.models.audit_log_entry  # noqa: F401
 import asaree.models.dataset  # noqa: F401
+import asaree.models.dataset_split  # noqa: F401
 import asaree.models.dataset_workspace_event  # noqa: F401
 import asaree.models.experiment  # noqa: F401
 import asaree.models.experiment_artifact  # noqa: F401

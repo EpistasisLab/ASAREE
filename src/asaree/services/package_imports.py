@@ -220,7 +220,7 @@ async def execute_package_import(_ctx: dict[str, Any], job_id: str) -> None:
             raise
 
 
-async def relay_imports(_ctx: dict[str, Any]) -> None:
+async def relay_imports(ctx: dict[Any, Any], *args: Any, **kwargs: Any) -> None:
     from asaree.worker.enqueue import _get_pool
 
     async with get_session() as db:

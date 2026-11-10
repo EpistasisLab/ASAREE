@@ -36,9 +36,9 @@ from asaree.models.protocol_revision import ProtocolRevision
 from asaree.models.protocol_run import ProtocolRun
 from asaree.models.user import User
 from asaree.services import experiment_packages as packages
-from asaree.services import okf_bundles
+from asaree.services import okf_bundles, okf_documents
 from asaree.services import package_imports as imports
-from asaree.services.dataset_inputs import freeze_dataset_inputs
+from asaree.services.dataset_inputs import freeze_dataset_inputs, resolve_attempt_inputs
 from asaree.services.datasets import create_dataset, quick_split_dataset
 from asaree.services.design_generation import generate_design_cells
 from asaree.services.package_reconstruction import Reconstruction, require_configured
@@ -80,6 +80,7 @@ async def test_export_import_independent_owner_and_reexport(
     monkeypatch.setattr('asaree.config.get_settings', lambda: settings)
     monkeypatch.setattr('asaree.services.datasets.get_settings', lambda: settings)
     monkeypatch.setattr(okf_bundles, 'get_settings', lambda: settings)
+    monkeypatch.setattr(okf_documents, 'get_settings', lambda: settings)
     source = b'x,y\r\n01,0\r\n02,1\r\n03,0\r\n04,1\r\n05,0\r\n06,1\r\n07,0\r\n08,1\r\n'
     dataset = await create_dataset(db, name='Pinned original', csv_bytes=source, owner_id=owner.id, target_column='y')
     if mode == 'whole_dataset':
@@ -96,6 +97,10 @@ async def test_export_import_independent_owner_and_reexport(
     resource_db.add(SkillFile(skill_id=skill.id, path='assets/binary.bin', encoding='base64',
                               content=base64.b64encode(binary).decode(), position=7))
     await resource_db.flush()
+    async def read_fixture_skill(identifier):
+        value = await resource_db.get(Skill, uuid.UUID(str(identifier)))
+        return value if value is not None and value.deleted_at is None else None
+    monkeypatch.setattr('motoro.services.skill_service.get_skill', read_fixture_skill)
     graph = {'nodes': [
         {'id': 'agent', 'type': 'agent', 'data': {'config': {
             'system_prompt': str(dataset.id), 'api_key': 'NEVER_IMPORT_CONNECTION_SECRET'},
@@ -128,21 +133,36 @@ async def test_export_import_independent_owner_and_reexport(
         graph['nodes'][0]['data']['dataset_selection'] = [str(dataset.id)]
         factors.append({'name': 'Inputs', 'level_type': 'dataset_selection',
                         'levels': [[str(dataset.id)], [str(secondary.id)]], 'level_labels': ['Split', 'Original']})
-    knowledge = Path(settings.okf_bundle_upload_dir) / str(owner.id) / 'source'
+    document = mode == 'per_row'
+    knowledge_root = settings.okf_document_dir if document else settings.okf_bundle_upload_dir
+    knowledge = Path(knowledge_root) / str(owner.id) / 'source'
     knowledge.mkdir(parents=True)
     knowledge_bytes = b'# Exact knowledge\r\n\xc3\xa9\n'
     (knowledge / 'concept.md').write_bytes(knowledge_bytes)
     server = MCPServerConfig(id=uuid.uuid4(), owner_id=owner.id, transport=MCPTransport.STDIO,
-        name=okf_bundles.server_name_for(owner.id, knowledge),
+        name=(okf_documents.server_name_for(owner.id, knowledge) if document else
+              okf_bundles.server_name_for(owner.id, knowledge)),
         command=okf_bundles.command_for_bundle(knowledge, managed=True),
         capabilities={'tools': [{'name': 'read_concept'}]})
     resource_db.add(server)
     await resource_db.flush()
-    graph['nodes'].append({'id': 'knowledge', 'type': 'okf_bundle', 'data': {'config': {
-        'bundle_id': str(server.id), 'bundle_path': str(knowledge), 'server_name': server.name}}})
+    graph['nodes'].append({'id': 'knowledge', 'type': 'okf_document' if document else 'okf_bundle', 'data': {'config': {
+        'document_id' if document else 'bundle_id': str(server.id),
+        'document_path' if document else 'bundle_path': str(knowledge), 'server_name': server.name}}})
     graph['edges'].append({'source': 'knowledge', 'target': 'agent', 'targetHandle': 'knowledge'})
+    graph['nodes'].append({'id': 'tool', 'type': 'mcp_tool', 'data': {'config': {
+        'server_id': str(server.id), 'server_name': server.name, 'tool_names': ['read_concept']}}})
+    graph['edges'].append({'source': 'tool', 'target': 'agent', 'targetHandle': 'tool'})
+    measurement_plan = {'metrics': [{'id': 'reported', 'name': 'Reported output', 'value_type': 'opaque',
+                                    'direction': 'neutral', 'aggregation': 'none'}],
+        'producers': [{'id': 'source-binding', 'producer_id': 'asaree.mcp_tool', 'kind': 'reported',
+                       'outputs': {'value': 'reported'}, 'config': {'agent_node_id': 'agent', 'mcp_node_id': 'tool',
+                           'server_id': str(server.id), 'tool_name': 'read_concept', 'opaque_value': str(server.id)}}],
+        'inputs': []}
     source_experiment = await db.get(ResearchExperiment, scope.experiment_id)
-    source_experiment.design_spec = {'factors': factors, 'replicates': 2}
+    source_experiment.measurement_plan = measurement_plan
+    source_experiment.design_spec = {'factors': factors, 'replicates': 2,
+        'metrics': [{'id': 'reported', 'name': 'Reported output', 'kind': 'custom'}]}
     source_protocol = await db.get(Protocol, scope.protocol_id)
     source_protocol.graph = graph
     await db.flush()
@@ -155,7 +175,8 @@ async def test_export_import_independent_owner_and_reexport(
     publication.graph = graph
     publication.design_revision_id = design.id
     publication.experiment_snapshot = {'design_spec': source_experiment.design_spec, 'hypothesis': 'Preserved',
-                                       'design_type': 'factorial', 'measurement_plan': None, 'task_brief': None}
+                                       'design_type': 'factorial', 'measurement_plan': measurement_plan,
+                                       'task_brief': None}
     publication.dataset_inputs = await freeze_dataset_inputs(db, graph, owner_id=owner.id,
                                                             design_spec=source_experiment.design_spec)
     if mode == 'whole_dataset':
@@ -183,19 +204,24 @@ async def test_export_import_independent_owner_and_reexport(
     monkeypatch.setattr(packages, 'system_session', source_resources)
     await packages._resources(writer, portable_graph, portable_settings, owner.id)
     if include_results:
-        parent = await db.scalar(select(FactorialReplicateResult).join(FactorialCell).where(
-            FactorialCell.design_revision_id == design.id).limit(1))
+        parent, factor_values = (await db.execute(select(
+            FactorialReplicateResult, FactorialCell.factor_values,
+        ).join(FactorialCell).where(FactorialCell.design_revision_id == design.id).limit(1))).one()
         slot = None
         if mode == 'per_row':
             slot = FactorialRowResult(replicate_result_id=parent.id, protocol_revision_id=publication.id,
                 dataset_id=dataset.id, raw_sha256=dataset.raw_sha256, row_index=0)
             db.add(slot)
             await db.flush()
+        row_snapshot = {'dataset_id': str(dataset.id), 'raw_sha256': dataset.raw_sha256,
+                        'row_index': 0, 'values': {'x': '01'}} if slot else None
+        from asaree.services.protocol_execution import apply_factor_bindings
+        attempt_inputs = resolve_attempt_inputs(publication.dataset_inputs, apply_factor_bindings(graph, factor_values),
+                                                 dataset_row=row_snapshot)
         run = ProtocolRun(protocol_id=scope.protocol_id, owner_id=owner.id,
             protocol_revision_id=publication.id, design_revision_id=scope.design_revision_id, status='completed',
             replicate_result_id=parent.id, row_result_id=slot.id if slot else None,
-            dataset_row={'dataset_id': str(dataset.id), 'raw_sha256': dataset.raw_sha256,
-                         'row_index': 0, 'values': {'x': '01'}} if slot else None,
+            dataset_row=row_snapshot, dataset_inputs=attempt_inputs, factor_values=factor_values,
             attempt_result={'measurement': {'observations': [
                 {'metric_id': 'null', 'status': 'measured', 'value': None},
                 {'metric_id': 'missing', 'status': 'unavailable'},
@@ -204,6 +230,7 @@ async def test_export_import_independent_owner_and_reexport(
         db.add(ProtocolRun(protocol_id=scope.protocol_id, owner_id=owner.id,
             protocol_revision_id=publication.id, design_revision_id=scope.design_revision_id,
             replicate_result_id=parent.id, row_result_id=slot.id if slot else None, status='failed',
+            dataset_row=row_snapshot, dataset_inputs=attempt_inputs, factor_values=factor_values,
             attempt_result={'legacy': {'provenance': 'legacy.unknown', 'value': str(dataset.id)}},
             created_at=datetime.now(UTC) - timedelta(hours=1)))
         await db.flush()
@@ -239,6 +266,7 @@ async def test_export_import_independent_owner_and_reexport(
     assert bool(local_dataset.current_split_id) == (mode == 'whole_dataset')
     local_server = await resource_db.get(MCPServerConfig, uuid.UUID(importer.maps['mcp', str(server.id)]))
     assert local_server.owner_id == destination_owner.id
+    assert okf_documents.is_document_server(local_server) == document
     restored_knowledge = Path(okf_bundles.bundle_path_from_command(local_server.command))
     assert (restored_knowledge / 'concept.md').read_bytes() == knowledge_bytes
     local_skill = await resource_db.get(Skill, uuid.UUID(importer.maps['skill', str(skill.id)]))
@@ -279,11 +307,31 @@ async def test_export_import_independent_owner_and_reexport(
     monkeypatch.setattr(sampling_snapshots, 'resolve_discovery_context', AsyncMock(return_value={
         'provider': 'openai', 'credential_revision': 'local-fixture', 'discovered_at': None}))
     monkeypatch.setattr(package_reconstruction, 'system_session', resource_session)
+    async def read_local_server(identifier):
+        return await resource_db.get(MCPServerConfig, identifier)
+    monkeypatch.setattr('asaree.services.reported_metrics.mcp_service.get_server', read_local_server)
     await db.flush()
     await api.configuration(job.id, api.Configuration(connections_configured=True, dependencies_resolved=True),
                             db, destination_owner)
     await publish_protocol_endpoint(protocol.id, destination_owner, db)
     local_publication = await db.get(ProtocolRevision, protocol.published_revision_id)
+    assert local_publication.dataset_inputs['bindings'] == publication.dataset_inputs['bindings']
+    for source_pin, local_pin in zip(publication.dataset_inputs['inputs'],
+                                     local_publication.dataset_inputs['inputs'], strict=True):
+        assert source_pin['dataset_id'] != local_pin['dataset_id']
+        assert source_pin['raw_sha256'] == local_pin['raw_sha256']
+        for key in ('mode', 'target_column', 'description', 'dictionary_json'):
+            assert source_pin[key] == local_pin[key]
+        for key in ('raw_artifact', 'train_artifact', 'test_artifact'):
+            if source_pin[key] is None:
+                assert local_pin[key] is None
+            else:
+                assert source_pin[key]['sha256'] == local_pin[key]['sha256']
+                assert source_pin[key]['id'] != local_pin[key]['id']
+    configured_producer = local_publication.experiment_snapshot['measurement_plan']['producers'][0]['config']
+    local_server_id = uuid.UUID(importer.maps['mcp', str(server.id)])
+    assert configured_producer['server_id'] == str(local_server_id)
+    assert local_server_id != server.id and configured_producer['opaque_value'] == str(server.id)
     assert local_publication.graph['sampling_snapshot'] != graph['sampling_snapshot']
     local_stage = root / 'second-writer'
     local_stage.mkdir()
@@ -339,3 +387,57 @@ async def test_v1_skill_binary_content_is_restored_with_explicit_unknown_source_
     assert source.provenance['dependency']['source_position'] == 'legacy.unknown'
     protocol = await db.scalar(select(Protocol).where(Protocol.experiment_id == experiment))
     assert protocol.published_revision_id is None
+
+
+async def test_missing_source_stays_unresolved_instead_of_using_an_existing_same_name_dataset(
+    results_db, resource_db, tmp_path, monkeypatch,
+):
+    db, scope, cell, owner = results_db
+    settings = AsareeSettings(_env_file=None, data_root=str(tmp_path / 'storage'))
+    monkeypatch.setattr('asaree.config.get_settings', lambda: settings)
+    monkeypatch.setattr('asaree.services.datasets.get_settings', lambda: settings)
+    existing = await create_dataset(db, name='Unavailable source', csv_bytes=b'x\ncurrent bytes\n', owner_id=owner.id)
+    source_id = str(uuid.uuid4())
+    graph = {'nodes': [{'id': 'agent', 'type': 'agent', 'data': {}},
+        {'id': 'dataset', 'type': 'dataset', 'data': {'config': {
+            'dataset_id': source_id, 'dataset_name': existing.name}}}],
+        'edges': [{'source': 'dataset', 'target': 'agent', 'targetHandle': 'dataset'}]}
+    pin = {'dataset_id': source_id, 'dataset_name': existing.name, 'dataset_node_id': 'dataset',
+           'mode': 'whole_dataset', 'raw_sha256': 'a' * 64, 'split_id': None, 'raw_artifact': None,
+           'train_artifact': None, 'test_artifact': None, 'description': None, 'dictionary_json': None,
+           'target_column': ''}
+    job = PackageImport(id=uuid.uuid4(), owner_id=owner.id, request_key='missing', status='queued',
+                        preflight={}, progress={}, expires_at=datetime.now(UTC) + timedelta(days=1))
+    db.add(job)
+    await db.flush()
+    root = imports.directory(job.id)
+    stage = root / 'writer'
+    stage.mkdir(parents=True)
+    writer = packages.PackageWriter(root / 'archive.tar.gz', stage)
+    writer.json('publication/canvas.json', graph)
+    writer.json('publication/settings.json', {'design_spec': {'factors': []}})
+    writer.json('experiment-metadata.json', {'name': 'Missing original'})
+    writer.json('inputs/bindings.json', {'schema_version': 1, 'provenance': 'pinned', 'inputs': [pin],
+        'bindings': [{'dataset_node_id': 'dataset', 'agent_node_id': 'agent', 'mode': 'whole_dataset'}]})
+    writer.dependency(source_id, 'dataset', 'publication_pinned', status='missing', reason='Pinned source unavailable')
+    writer.finish({'format': 'asaree.experiment-package', 'schema_version': 2,
+        'experiment_id': str(scope.experiment_id), 'protocol_id': str(scope.protocol_id),
+        'publication': {'id': str(scope.protocol_revision_id), 'version': 1}, 'results_included': False})
+    job.preflight = inspect(root / 'archive.tar.gz', root / 'payload', Limits(), threading.Event())
+    assert job.preflight['unresolved_count'] == 1
+    importer = Reconstruction(db, job, root / 'payload', Limits())
+    job.experiment_id = await importer.activate(resource_db)
+    job.status = 'completed'
+    await db.flush()
+    local = await db.get(RegisteredDataset, uuid.UUID(importer.maps['dataset', source_id]))
+    assert local.id != existing.id and local.raw_artifact_id is None
+    assert local.raw_sha256 == pin['raw_sha256'] and local.name != existing.name
+    @asynccontextmanager
+    async def resources(**kwargs):
+        yield resource_db
+    monkeypatch.setattr('asaree.services.package_reconstruction.system_session', resources)
+    from fastapi import HTTPException
+    with pytest.raises(HTTPException, match='unresolved') as rejected:
+        await api.configuration(job.id, api.Configuration(connections_configured=True, dependencies_resolved=True),
+                                db, owner)
+    assert rejected.value.status_code == 422 and job.configured_at is None

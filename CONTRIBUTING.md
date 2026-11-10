@@ -57,6 +57,13 @@ environment. Check available native binaries/services before concluding that
 PostgreSQL cannot run locally. Do not use production/application databases,
 substitute SQLite, or read application credential files to configure tests.
 
+Some execution sandboxes discard background processes when a command ends. In
+that case, supervise the disposable PostgreSQL process, migrations and test
+runner within one command, stopping PostgreSQL in `finally`. If Unix-domain
+sockets are unavailable, PostgreSQL can use localhost TCP with
+`unix_socket_directories=''`. Confirm connectivity from the test process;
+`pg_ctl` reporting a successful start alone is insufficient in such a sandbox.
+
 Set these variables explicitly in the test process:
 
 | Variable | Disposable database |

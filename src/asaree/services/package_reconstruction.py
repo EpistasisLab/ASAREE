@@ -101,7 +101,8 @@ class Reconstruction:
 
     def name(self, kind: str, source: str, name: str, maximum: int = 255) -> str:
         # Import UUID namespaces avoid name collisions without cross-owner lookup.
-        value = f'{name[:maximum - 34]}-{identity(self.job, kind, source).hex}'
+        prefix = name[:maximum - 34].rstrip('-') if kind == 'skill' else name[:maximum - 34]
+        value = f'{prefix}-{identity(self.job, kind, source).hex}'
         self.names[kind, source] = value
         return value
 
@@ -361,6 +362,11 @@ class Reconstruction:
                 else:
                     levels.append(deepcopy(level))
             factor['levels'] = levels
+        for producer in (settings.get('measurement_plan') or {}).get('producers', []):
+            if producer.get('producer_id') == 'asaree.mcp_tool':
+                config = producer.get('config') or {}
+                if config.get('server_id'):
+                    config['server_id'] = str(self.map('mcp', config['server_id']))
         return graph, settings
 
     async def activate(self, motoro: AsyncSession) -> uuid.UUID:

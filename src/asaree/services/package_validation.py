@@ -126,7 +126,7 @@ class PackageTarInfo(tarfile.TarInfo):
             return self._proc_pax(archive)
         if self.type not in {tarfile.REGTYPE, tarfile.AREGTYPE}:
             raise PackageError('Only ordinary files and local path/size PAX metadata are supported')
-        return super()._proc_member(archive)  # type: ignore[attr-defined]
+        return super()._proc_member(archive)  # type: ignore[misc]  # Private stdlib hook, covered on supported Pythons.
 
     def _proc_pax(self, archive: Any) -> Any:
         if self.size < 0 or self.size > 4096 or getattr(archive, '_package_pax_active', False):

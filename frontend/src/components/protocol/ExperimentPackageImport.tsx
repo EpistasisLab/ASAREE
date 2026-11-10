@@ -20,16 +20,21 @@ export function ExperimentPackageImport({ experimentId }: { experimentId?: strin
   selectedRef.current = selected
   const uploadController = useRef<AbortController | null>(null)
   const list = useQuery({ queryKey: ['package-imports', experimentId], queryFn: () => packageImportsApi.list(experimentId),
-    refetchInterval: 3000 })
+    refetchInterval: (query) => query.state.data?.some((item) => ['uploading', 'validating', 'queued', 'activating'].includes(item.status)) ? 3000 : false })
   const job = useQuery({ queryKey: ['package-import', selected], enabled: selected !== null,
-    queryFn: () => packageImportsApi.get(selected!), refetchInterval: 1000 })
+    queryFn: () => packageImportsApi.get(selected!),
+    refetchInterval: (query) => !query.state.data || ['uploading', 'validating', 'queued', 'activating'].includes(query.state.data.status) ? 1000 : false })
   const current = job.data
   const files = useQuery({ queryKey: ['package-import-files', selected, offset],
     enabled: !!current?.preflight.manifest && !['expired', 'cancelled'].includes(current.status),
     queryFn: () => packageImportsApi.files(selected!, offset) })
   const action = useMutation({
     mutationFn: async ({ id, command }: { id: string; command: 'confirm' | 'cancel' | 'retry' }) => packageImportsApi.command(id, command),
-    onSuccess: () => { void client.invalidateQueries({ queryKey: ['package-import'] }); void client.invalidateQueries({ queryKey: ['experiments'] }) },
+    onSuccess: () => {
+      void client.invalidateQueries({ queryKey: ['package-import'] })
+      void client.invalidateQueries({ queryKey: ['package-imports'] })
+      void client.invalidateQueries({ queryKey: ['experiments'] })
+    },
     onError: (cause) => setError(String(cause)),
   })
   const upload = async (file: File) => {

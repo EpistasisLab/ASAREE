@@ -1,7 +1,7 @@
 """Preserve immutable dataset splits and relocatable source/partition artifacts."""
 
 import sqlalchemy as sa
-from alembic import context, op
+from alembic import op
 from sqlalchemy.dialects import postgresql
 
 from asaree.migrations.guards import create_foreign_key, drop_column, has_column, has_table
@@ -56,7 +56,7 @@ def upgrade() -> None:
         "fk_dataset_current_split", "registered_datasets", "dataset_splits",
         ["current_split_id", "id"], ["id", "dataset_id"],
     )
-    if not context.is_offline_mode():
+    if not op.get_context().as_sql:
         from pathlib import Path
         from asaree.config import get_settings
         from asaree.migrations.dataset_splits import preserve_legacy_splits
@@ -78,13 +78,13 @@ def upgrade() -> None:
 def downgrade() -> None:
     for name, type_ in LEGACY_COLUMNS.items():
         op.add_column("registered_datasets", sa.Column(name, type_), if_not_exists=True)
-    if not context.is_offline_mode() and has_table("dataset_artifacts"):
+    if not op.get_context().as_sql and has_table("dataset_artifacts"):
         from pathlib import Path
         from asaree.config import get_settings
         from asaree.migrations.dataset_splits import restore_legacy_paths
 
         restore_legacy_paths(op.get_bind(), Path(get_settings().dataset_storage_dir))
-    elif context.is_offline_mode():
+    elif op.get_context().as_sql:
         op.execute("""DO $$ BEGIN
             IF EXISTS (SELECT 1 FROM dataset_artifacts) THEN
                 RAISE EXCEPTION 'Artifact path restoration requires an online downgrade';

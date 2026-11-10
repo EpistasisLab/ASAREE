@@ -1,16 +1,46 @@
 """Legacy evidence checks independent of a running database."""
 
 import asyncio
+import importlib
 import os
 import uuid
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
+from alembic.migration import MigrationContext
+from alembic.operations import Operations
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from asaree.migrations.dataset_splits import legacy_artifact
 from asaree.security.hashing import sha256_file
+
+
+@pytest.mark.parametrize("direction", ["upgrade", "downgrade"])
+def test_split_migration_supports_operations_without_environment_context(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, direction: str
+) -> None:
+    """Result-test schema setup runs revisions with only an Operations context."""
+    from asaree import config
+    from asaree.migrations import dataset_splits
+
+    migration = importlib.import_module("asaree.migrations.versions.94b6c8d0e2f4_immutable_dataset_splits")
+    monkeypatch.setattr(config, "get_settings", lambda: SimpleNamespace(dataset_storage_dir=str(tmp_path)))
+    monkeypatch.setattr(migration, "has_column", lambda *args: True)
+    monkeypatch.setattr(migration, "has_table", lambda *args: True)
+    monkeypatch.setattr(migration, "create_foreign_key", lambda *args: None)
+    monkeypatch.setattr(migration, "drop_column", lambda *args: None)
+    for name in ("create_table", "create_index", "add_column", "drop_constraint", "drop_table"):
+        monkeypatch.setattr(Operations, name, lambda *args, **kwargs: None)
+    preserved = []
+    restored = []
+    monkeypatch.setattr(dataset_splits, "preserve_legacy_splits", lambda bind, root: preserved.append(root))
+    monkeypatch.setattr(dataset_splits, "restore_legacy_paths", lambda bind, root: restored.append(root))
+    with Operations.context(MigrationContext.configure(dialect_name="postgresql")):
+        getattr(migration, direction)()
+    assert preserved == ([tmp_path] if direction == "upgrade" else [])
+    assert restored == ([tmp_path] if direction == "downgrade" else [])
 
 
 def test_legacy_artifact_preserves_bytes_and_computes_only_missing_hash(tmp_path: Path) -> None:

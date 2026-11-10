@@ -76,6 +76,7 @@ import hashlib
 import json
 import os
 import re
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
@@ -83,6 +84,7 @@ from typing import Any, cast
 import pandas as pd
 
 from .stages import DEFAULT_STAGE_PLAN, TABULAR_ML, Stage, StagePlan, resolve_stage_plan
+from .storage import atomic_write, managed_reference, resolve, storage_roots
 
 # ASAREE's own workspace-server process spawns as a child of the ASAREE
 # backend (stdio), so it shares the backend's filesystem automatically — no
@@ -90,7 +92,8 @@ from .stages import DEFAULT_STAGE_PLAN, TABULAR_ML, Stage, StagePlan, resolve_st
 # reason this was ever env-configurable at all). Defaults to a path relative
 # to wherever that process's cwd is, matching dataset_storage_dir's own
 # default convention (asaree.config.AsareeSettings).
-WORKSPACE_ROOT = os.environ.get("ASAREE_DATASET_WORKSPACE_DIR", "./data/workspaces")
+WORKSPACE_ROOT = str(storage_roots()["workspaces"])
+_INITIAL_WORKSPACE_ROOT = WORKSPACE_ROOT
 
 # The default pipeline's stages and their canonical output versions, kept as
 # module constants because they are what every caller that predates stage plans
@@ -157,7 +160,8 @@ def make_workspace_id(experiment_id: str, cell_label: str) -> str:
 
 def _resolve_dir(workspace_id: str, root: str | None = None) -> Path:
     """Map a workspace id to its directory, rejecting path traversal."""
-    base = Path(root or WORKSPACE_ROOT).resolve()
+    base = Path(root or (WORKSPACE_ROOT if WORKSPACE_ROOT != _INITIAL_WORKSPACE_ROOT
+                        else storage_roots()["workspaces"])).resolve()
     parts = (workspace_id or "").split("/")
     if len(parts) != 2:
         raise WorkspaceError(
@@ -226,6 +230,8 @@ class Workspace:
     ) -> None:
         self.workspace_id = workspace_id
         self.dir = _resolve_dir(workspace_id, root)
+        self.storage_roots = storage_roots()
+        self.storage_roots["workspaces"] = self.dir.parent.parent
         self.requested_slot = slot
         # Only a fallback for a workspace that records no plan (i.e. every
         # workspace on the default preset, and every one written before plans
@@ -272,10 +278,23 @@ class Workspace:
         """
         if not self.exists():
             raise WorkspaceError(f"workspace not initialized: {self.workspace_id}")
-        raw = json.loads(self.state_path.read_text())
+        raw = self._map_paths(json.loads(self.state_path.read_text()), encode=False)
         if isinstance(raw.get("slots"), dict):
             return raw
         return {"format_version": 1, "slots": {LEGACY_SLOT: raw}}
+
+    def _map_paths(self, value: Any, *, encode: bool) -> Any:
+        if isinstance(value, dict):
+            return {
+                key: (managed_reference(Path(item), self.storage_roots) if encode
+                      else str(resolve(item, self.storage_roots)))
+                if key in {"train", "test", "manifest_path"} and isinstance(item, str) and item
+                else self._map_paths(item, encode=encode)
+                for key, item in value.items()
+            }
+        if isinstance(value, list):
+            return [self._map_paths(item, encode=encode) for item in value]
+        return value
 
     def _save_document(self, doc: dict[str, Any]) -> None:
         slots = doc.get("slots") or {}
@@ -301,9 +320,8 @@ class Workspace:
                 payload["stage_plan"] = plan
         self.dir.mkdir(parents=True, exist_ok=True)
         # Atomic write: a crash mid-write must never truncate the pointer of record.
-        tmp = self.state_path.with_suffix(".json.tmp")
-        tmp.write_text(json.dumps(payload, indent=1, ensure_ascii=False) + "\n")
-        tmp.replace(self.state_path)
+        payload = self._map_paths(payload, encode=True)
+        atomic_write(self.state_path, (json.dumps(payload, indent=1, ensure_ascii=False) + "\n").encode())
 
     def _resolve_slot(self, doc: dict[str, Any]) -> str:
         """Which slot of ``doc`` this instance addresses.
@@ -495,6 +513,12 @@ class Workspace:
     def _find_version(self, version_id: str) -> dict[str, Any] | None:
         return next((v for v in self._versions() if v["id"] == version_id), None)
 
+    def manifest_path(self, stage: str) -> Path:
+        version = self._find_version(self._stage(stage).version_id)
+        if version and version.get("manifest_path"):
+            return Path(version["manifest_path"])
+        return self.manifests_dir / f"{stage}.json"
+
     def accepted_output(self, stage: str) -> dict[str, Any] | None:
         """The accepted version a given stage produced, if any."""
         want = self._stage(stage).version_id
@@ -524,6 +548,13 @@ class Workspace:
     # --- reads ---
 
     def _read_pair(self, version: dict[str, Any]) -> tuple[pd.DataFrame, pd.DataFrame]:
+        for partition in ("train", "test"):
+            expected = version.get(f"sha256_{partition}")
+            try:
+                if expected and _file_sha256(Path(version[partition])) != expected:
+                    raise WorkspaceError(f"{partition} version hash mismatch")
+            except OSError as exc:
+                raise WorkspaceError(f"{partition} version unavailable") from exc
         train = pd.read_parquet(version["train"])
         test = pd.read_parquet(version["test"])
         return train, test
@@ -621,12 +652,31 @@ class Workspace:
         test_df = X_test.copy()
         test_df[target] = y_test.to_numpy()
 
-        vdir = self.version_dir(version_id)
-        vdir.mkdir(parents=True, exist_ok=True)
+        parent = self.version_dir(version_id)
+        parent.parent.mkdir(parents=True, exist_ok=True)
+        generation = uuid.uuid4().hex
+        staging = parent.parent / f".{version_id}.{generation}.preparing"
+        staging.mkdir()
+        try:
+            train_df.to_parquet(staging / "train.parquet", index=False)
+            test_df.to_parquet(staging / "test.parquet", index=False)
+            # Verify both before publishing a complete pair. A new generation
+            # keeps the prior state usable if writing or pointer publication fails.
+            for name in ("train.parquet", "test.parquet"):
+                pd.read_parquet(staging / name)
+                with (staging / name).open("rb") as stream:
+                    os.fsync(stream.fileno())
+            # Keep the established first-version layout. Subsequent writes
+            # publish another generation without overwriting a readable pair.
+            vdir = parent / generation if parent.exists() else parent
+            staging.rename(vdir)
+        except BaseException:
+            import shutil
+
+            shutil.rmtree(staging, ignore_errors=True)
+            raise
         train_path = vdir / "train.parquet"
         test_path = vdir / "test.parquet"
-        train_df.to_parquet(train_path, index=False)
-        test_df.to_parquet(test_path, index=False)
         sha_train = _file_sha256(train_path)
         sha_test = _file_sha256(test_path)
 
@@ -645,9 +695,8 @@ class Workspace:
             "learned": learned,
             "rationale": rationale,
         }
-        (self.manifests_dir / f"{stage}.json").write_text(
-            json.dumps(manifest, indent=1, ensure_ascii=False, default=str) + "\n"
-        )
+        manifest_bytes = (json.dumps(manifest, indent=1, ensure_ascii=False, default=str) + "\n").encode()
+        atomic_write(vdir / "manifest.json", manifest_bytes)
 
         # State — upsert this stage's version (do NOT advance HEAD yet).
         state = self.load_state()
@@ -660,6 +709,7 @@ class Workspace:
             "sha256_test": sha_test,
             "accepted": accepted,
             "run_id": run_id,
+            "manifest_path": str(vdir / "manifest.json"),
         }
         versions = [v for v in state["versions"] if v["id"] != version_id]
         versions.append(entry)
@@ -667,6 +717,12 @@ class Workspace:
         if accepted:
             state["head"] = version_id
         self._save_state(state)
+        # Compatibility view for scripts that inspect the established layout.
+        # Contract readers follow the manifest in the atomic state pointer.
+        try:
+            atomic_write(self.manifests_dir / f"{stage}.json", manifest_bytes)
+        except OSError:
+            pass
         return manifest
 
     def accept_stage(self, stage: str) -> None:

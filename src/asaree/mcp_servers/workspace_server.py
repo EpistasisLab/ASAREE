@@ -858,7 +858,7 @@ def read_stage_manifest(
         if not ws.exists():
             return json.dumps({"error": f"workspace {wid!r} not initialized."})
         _resolve_stage(ws, stage)
-        path = ws.manifests_dir / f"{stage}.json"
+        path = ws.manifest_path(stage)
         if not path.is_file():
             return json.dumps({"error": f"no committed manifest for stage {stage!r}."})
         return path.read_text()

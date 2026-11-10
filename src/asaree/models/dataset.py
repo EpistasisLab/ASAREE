@@ -47,7 +47,13 @@ class RegisteredDataset(Base, TimestampMixin):
 
     @property
     def raw_path(self) -> str | None:
-        return self.raw_artifact.path if self.raw_artifact else self._legacy_raw_path
+        if self.raw_artifact:
+            return self.raw_artifact.path
+        if self._legacy_raw_path:
+            from asaree.services.managed_storage import resolve_reference
+
+            return str(resolve_reference(self._legacy_raw_path))
+        return None
 
     @raw_path.setter
     def raw_path(self, value: str | None) -> None:

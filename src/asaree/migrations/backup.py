@@ -173,6 +173,6 @@ def main(args: Any) -> int:
     core_url = args.core_url or settings.database_url
     product_url = args.url or settings.product_database_url
     found = asyncio.run(targets(core_url, product_url))
-    for line in backup(found, Path(args.dir), args.keep):
+    for line in backup(found, Path(args.dir or settings.backup_dir), args.keep):
         print(line)
     return 0

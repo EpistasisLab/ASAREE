@@ -50,7 +50,7 @@ def commit_stage(
             f"workspace {workspace_id!r} is not open — call open_workspace first."
         )
     merged: dict[str, Any] = {}
-    manifest_path = ws.manifests_dir / f"{stage}.json"
+    manifest_path = ws.manifest_path(stage)
     if manifest_path.is_file():
         try:
             merged = dict(json.loads(manifest_path.read_text()).get("learned", {}))

@@ -22,6 +22,7 @@ from collections.abc import Sequence
 from pathlib import Path
 
 import pandas as pd
+from asaree_workspace_core.storage import atomic_write
 from sklearn.model_selection import GroupShuffleSplit, train_test_split
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -181,7 +182,7 @@ async def create_dataset(
     dest.mkdir(parents=True, exist_ok=True)
     raw_path = dest / "raw.csv"
     try:
-        raw_path.write_bytes(csv_bytes)
+        atomic_write(raw_path, csv_bytes)
     except Exception:
         shutil.rmtree(dest, ignore_errors=True)
         raise
@@ -315,6 +316,13 @@ async def delete_dataset(db: AsyncSession, dataset_id: uuid.UUID) -> bool:
         raise DatasetValidationError(
             "Dataset is referenced by published inputs or stored attempts and cannot be deleted"
         )
+    from asaree.services.managed_storage import workspace_references
+
+    artifacts = (await db.execute(select(DatasetArtifact).where(
+        DatasetArtifact.dataset_id == dataset_id
+    ))).scalars().all()
+    if workspace_references({Path(artifact.path).resolve() for artifact in artifacts}):
+        raise DatasetValidationError("Dataset is referenced by a retained workspace and cannot be deleted")
     await db.delete(dataset)
     await db.flush()
     shutil.rmtree(Path(get_settings().dataset_storage_dir) / str(dataset_id), ignore_errors=True)

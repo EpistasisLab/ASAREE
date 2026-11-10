@@ -103,7 +103,7 @@ _MAX_TIMEOUT = 900
 # a wired script is user-authored code that has no business reading either.
 # Inheriting os.environ would hand every one of them over. What's left is what a
 # script plausibly needs to run; its workspace is supplied as its cwd.
-_ENV_PASSTHROUGH = ("PATH", "HOME", "LANG", "LC_ALL", "TMPDIR", "ASAREE_DATASET_WORKSPACE_DIR")
+_ENV_PASSTHROUGH = ("PATH", "HOME", "LANG", "LC_ALL", "TMPDIR", "ASAREE_DATASET_WORKSPACE_DIR", "ASAREE_DATA_ROOT")
 
 
 def _ambient_value(ctx: Context[Any, Any, Any] | None, key: str) -> Any:
@@ -187,7 +187,9 @@ def _working_dir(workspace_id: str, script: Path) -> Path:
     workspace from ambient ``_meta`` instead of an argument.
     """
     if workspace_id:
-        root = Path(os.environ.get("ASAREE_DATASET_WORKSPACE_DIR", "./data/workspaces")).resolve()
+        from asaree_workspace_core.storage import storage_roots
+
+        root = storage_roots()["workspaces"]
         candidate = (root / workspace_id).resolve()
         if root in candidate.parents and candidate.is_dir():
             return candidate
@@ -403,6 +405,7 @@ def run_wired_script(
         # A standalone script has no ASAREE workspace to resolve. Do not expose
         # the server's workspace root merely because it exists in the parent.
         env.pop("ASAREE_DATASET_WORKSPACE_DIR", None)
+        env.pop("ASAREE_DATA_ROOT", None)
     # Unbuffered so a script killed by the timeout has still flushed what it
     # printed -- the whole value of a partial result is that it survives.
     env["PYTHONUNBUFFERED"] = "1"

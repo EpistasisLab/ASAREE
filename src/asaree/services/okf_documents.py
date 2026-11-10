@@ -270,7 +270,7 @@ async def register_document(*, owner_id: uuid.UUID, text: str, filename: str | N
         return await mcp_service.register_server(
             name=server_name_for(owner_id, directory),
             transport="stdio",
-            command=command_for_bundle(directory),
+            command=command_for_bundle(directory, managed=True),
             owner_id=owner_id,
         )
     except Exception:
@@ -283,14 +283,7 @@ async def register_document(*, owner_id: uuid.UUID, text: str, filename: str | N
 
 
 async def delete_document(config: Any) -> None:
-    """Forget the registration AND remove the stored file.
-
-    The opposite of ``okf_bundles``' delete, deliberately: there, the
-    directory is the user's own and predates ASAREE. Here it's storage this
-    module created, so leaving it behind would just accumulate orphans no
-    screen in the app can reach.
-    """
-    directory = document_dir_for(config)
+    """Unregister while retaining managed knowledge needed by history."""
     await mcp_service.delete_server(config.id)
-    if directory is not None and directory.is_dir() and directory.is_relative_to(document_root()):
-        shutil.rmtree(directory, ignore_errors=True)
+    # Retain for historical consumers; registration removal alone does not
+    # establish that managed knowledge state is unreferenced.

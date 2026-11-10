@@ -38,7 +38,12 @@ def main() -> None:
     parser.add_argument("--bundle", required=True, help="Absolute path to the OKF bundle directory to serve.")
     args = parser.parse_args()
 
-    os.environ["AGENTIC_OKF_BUNDLE_DIR"] = args.bundle
+    from asaree.services.managed_storage import resolve_reference
+
+    directory = resolve_reference(args.bundle)
+    if not directory.is_dir():
+        parser.error("Knowledge bundle is unavailable")
+    os.environ["AGENTIC_OKF_BUNDLE_DIR"] = str(directory)
 
     from motoro.mcp_servers.okf import mcp
 

@@ -237,6 +237,7 @@ async def resolve_pinned_registration(db: AsyncSession, pin: dict[str, Any], own
 def validate_workspace_inputs(workspace_id: str, manifest: dict[str, Any], scope: dict[str, Any]) -> None:
     """Allow reuse only within the same attempt and input manifest."""
     from asaree_workspace_core import Workspace
+    from asaree_workspace_core.storage import atomic_write
 
     ws = Workspace(workspace_id)
     path = ws.dir / "dataset_inputs.json"
@@ -245,8 +246,7 @@ def validate_workspace_inputs(workspace_id: str, manifest: dict[str, Any], scope
     if not path.exists() and ws.state_path.exists():
         raise DatasetInputError("dataset_input.workspace_conflict: existing lineage has unknown inputs")
     try:
-        with path.open("x") as stream:
-            json.dump(expected, stream, sort_keys=True)
+        atomic_write(path, json.dumps(expected, sort_keys=True).encode(), overwrite=False)
     except FileExistsError:
         try:
             recorded = json.loads(path.read_text())

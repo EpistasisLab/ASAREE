@@ -9,6 +9,8 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
+from asaree_workspace_core.storage import atomic_write
+
 from asaree.config import get_settings
 from asaree.services.dataset_row_csv import (
     DatasetRowCsvError,
@@ -26,9 +28,7 @@ def row_attempt_workspace_id(run_id: uuid.UUID) -> str:
 
 
 def _workspace_root() -> Path:
-    # Keep attempt data beside registered datasets while separating it from
-    # their immutable originals and the shared whole-dataset workspaces.
-    return Path(get_settings().dataset_storage_dir).resolve().parent
+    return Path(get_settings().dataset_workspace_dir).resolve()
 
 
 def _node_directory(root: Path, workspace_id: str, agent_node_id: str) -> Path:
@@ -160,7 +160,7 @@ def prepare_agent_row_inputs(
             materialize_row_csv(view, destination=destination)
         if not manifest.exists():
             try:
-                manifest.write_text(manifest_value, encoding="utf-8")
+                atomic_write(manifest, manifest_value.encode("utf-8"))
             except OSError as exc:
                 raise DatasetRowCsvError("source_unavailable", "Agent workspace metadata cannot be written") from exc
         row_inputs.append(

@@ -237,6 +237,10 @@ slowest test durations for both backend tiers. New expensive tests should use
 
 The frontend hot-reloads from your checkout; backend changes need a rebuild.
 
+See [managed storage operations](docs/managed-storage.md) for shared root and
+override precedence, relocation inventory, reference migration, retention,
+rollback, and coordinated backup/restore of both databases and managed files.
+
 `docker compose up -d --build` also runs pending database migrations. The
 one-shot `motoro-migrate` service upgrades Motoro's `motoro` database first;
 `asaree-migrate` then upgrades ASAREE's `asaree` database. The API and worker

@@ -1713,21 +1713,29 @@ async def test_preview_checks_a_thousand_replicates_per_step(results_db, monkeyp
     assert steps == 4  # three windows of up to 1,000 (the first also validates), then finish
 
 
-async def test_per_row_preview_fits_several_replicates_in_one_step(results_db, monkeypatch):
+async def test_per_row_preview_fits_several_replicates_in_one_step(results_db, monkeypatch, tmp_path):
     """Per row, a step used to cover a single replicate however few source rows
     it had: one replicate a second."""
     import dataclasses
+    import hashlib
 
     db, selected, cell, user = results_db
     db.add_all(
         FactorialReplicateResult(cell_id=cell.id, replicate_number=n, replicate_label=f"r{n}") for n in range(1, 101)
     )
+    raw = b"question\n" + b"prompt\n" * 30
+    path = tmp_path / "preview.csv"
+    path.write_bytes(raw)
+    dataset_id = uuid.uuid4()
+    digest = hashlib.sha256(raw).hexdigest()
+    db.add(RegisteredDataset(id=dataset_id, name="row-preview", owner_id=user.id,
+                             raw_path=str(path), raw_sha256=digest))
     await db.flush()
-    row_scope = dataclasses.replace(selected, row_plan={"driver_dataset_id": str(uuid.uuid4())})
+    row_scope = dataclasses.replace(selected, row_plan={"driver_dataset_id": str(dataset_id)})
     assert row_scope.unit == "row"
     job = await result_jobs.create_job(db, row_scope, user.id, kind="plan", request_key="row-preview", params={})
     # 30 verified source rows; validation already done.
-    job.progress = {"validated": True, "source": {"dataset_id": str(uuid.uuid4()), "sha256": "0" * 64,
+    job.progress = {"validated": True, "source": {"dataset_id": str(dataset_id), "sha256": digest,
                                                   "columns": ["question"], "count": 30}}
     await result_jobs.prepare_step(db, job, row_scope)
     assert job.progress["scanned"] == (1000 // 30) * 30  # 33 whole replicates x 30 rows in one step

@@ -97,7 +97,11 @@ async def create_protocol(
 
 
 async def get_protocol(db: AsyncSession, protocol_id: uuid.UUID) -> Protocol | None:
-    return (await db.execute(select(Protocol).where(Protocol.id == protocol_id))).scalar_one_or_none()
+    from asaree.models.package_import import PackageImport
+
+    return (await db.execute(select(Protocol).where(Protocol.id == protocol_id,
+        ~select(PackageImport.id).where(PackageImport.experiment_id == Protocol.experiment_id,
+                                        PackageImport.status != 'completed').exists()))).scalar_one_or_none()
 
 
 async def get_protocol_by_name(db: AsyncSession, name: str, *, owner_id: uuid.UUID) -> Protocol | None:
@@ -115,7 +119,11 @@ async def get_protocol_by_name(db: AsyncSession, name: str, *, owner_id: uuid.UU
 async def list_protocols(
     db: AsyncSession, *, owner_id: uuid.UUID, experiment_id: uuid.UUID | None = None
 ) -> Sequence[Protocol]:
-    stmt = select(Protocol).where(Protocol.owner_id == owner_id)
+    from asaree.models.package_import import PackageImport
+
+    stmt = select(Protocol).where(Protocol.owner_id == owner_id,
+        ~select(PackageImport.id).where(PackageImport.experiment_id == Protocol.experiment_id,
+                                        PackageImport.status != 'completed').exists())
     if experiment_id is not None:
         stmt = stmt.where(Protocol.experiment_id == experiment_id)
     return (await db.execute(stmt)).scalars().all()

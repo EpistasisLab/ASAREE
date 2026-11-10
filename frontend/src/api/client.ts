@@ -35,6 +35,7 @@ import type { Run, RunStep } from '@/types/runs'
 import type { Skill, SkillListResponse, SkillUrlPreview } from '@/types/skills'
 import type { StatsAnalysis, StatsSource } from '@/types/stats'
 import type { Persona } from '@/types/personas'
+import type { PackageImport, PackageFile } from '@/types/packageImports'
 import type { AttemptDetail, AttemptPage, CellMetricObservationPage, CursorPage, ExecutionCell, ExecutionSlot, ExecutionSummary, ResultJob, UsageDistribution } from '@/types/executionResults'
 
 const ACCESS_TOKEN_KEY = 'asaree_access_token'
@@ -120,17 +121,18 @@ async function authedFetch(path: string, options: RequestOptions = {}): Promise<
   const { body, skipAuthRetry, headers, ...rest } = options
   const token = getStoredAccessToken()
   const isFormData = body instanceof FormData
+  const isBlob = body instanceof Blob
 
   const doFetch = () =>
     fetch(`/api${path}`, {
       ...rest,
       credentials: 'include',
       headers: {
-        ...(body !== undefined && !isFormData ? { 'Content-Type': 'application/json' } : {}),
+        ...(body !== undefined && !isFormData && !isBlob ? { 'Content-Type': 'application/json' } : {}),
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
         ...headers,
       },
-      body: isFormData ? (body as FormData) : body !== undefined ? JSON.stringify(body) : undefined,
+      body: isBlob ? body : isFormData ? (body as FormData) : body !== undefined ? JSON.stringify(body) : undefined,
     })
 
   let res = await doFetch()
@@ -168,6 +170,18 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
 async function requestBlob(path: string, options: RequestOptions = {}): Promise<Blob> {
   const res = await authedFetch(path, options)
   return res.blob()
+}
+
+const importBase = '/experiment-package-imports'
+export const packageImportsApi = {
+  list: (experimentId?: string) => request<PackageImport[]>(`${importBase}${experimentId ? `?experiment_id=${experimentId}` : ''}`),
+  create: (requestKey: string) => request<PackageImport>(importBase, { method: 'POST', body: { request_key: requestKey } }),
+  upload: (id: string, file: File, signal?: AbortSignal) => request<PackageImport>(`${importBase}/${id}/upload`, { method: 'PUT', body: file, signal }),
+  get: (id: string) => request<PackageImport>(`${importBase}/${id}`),
+  command: (id: string, command: 'confirm' | 'cancel' | 'retry') => request<PackageImport>(`${importBase}/${id}/${command}`, { method: 'POST' }),
+  files: (id: string, offset = 0) => request<{ items: PackageFile[]; next_offset: number | null }>(`${importBase}/${id}/files?offset=${offset}`),
+  source: (id: string, path?: string) => requestBlob(`${importBase}/${id}/source${path ? `?path=${encodeURIComponent(path)}` : ''}`),
+  configure: (id: string) => request<PackageImport>(`${importBase}/${id}/configuration`, { method: 'POST', body: { connections_configured: true, dependencies_resolved: true } }),
 }
 
 export const authApi = {

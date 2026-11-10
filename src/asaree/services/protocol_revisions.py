@@ -41,6 +41,9 @@ async def publish_protocol(
     name: str | None = None, note: str | None = None,
 ) -> ProtocolRevision:
     """Freeze canvas, experiment settings, and generated design as one version."""
+    from asaree.services.package_reconstruction import require_configured
+
+    await require_configured(db, protocol.experiment_id)
     protocol = (
         await db.execute(
             select(Protocol)

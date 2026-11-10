@@ -221,7 +221,9 @@ async def test_dataset_pin_reads_exact_artifact_even_after_current_split_changes
     digest = hashlib.sha256(source.read_bytes()).hexdigest()
     pin = {"dataset_id": str(dataset), "raw_sha256": digest, "split_id": None,
            "raw_artifact": {"id": str(artifact_id), "sha256": digest}, "train_artifact": None, "test_artifact": None}
-    registration = SimpleNamespace(id=dataset, raw_sha256=digest, current_split_id=uuid.uuid4())
+    registration = SimpleNamespace(id=dataset, raw_sha256=digest, current_split_id=uuid.uuid4(),
+        name="Pinned source", description=None, dictionary_json=None, _target_column=None,
+        raw_artifact_id=artifact_id, created_at=datetime.now(UTC))
     artifact = SimpleNamespace(dataset_id=dataset, status="ready", sha256=digest, path=str(source), format="csv")
     db = SimpleNamespace(scalar=AsyncMock(return_value=registration), get=AsyncMock(return_value=artifact))
     await packages._datasets(
@@ -271,14 +273,15 @@ async def test_skill_capture_has_binary_resources_and_owner_predicate(tmp_path):
     writer = writer_at(tmp_path)
     identity, owner = uuid.uuid4(), uuid.uuid4()
     skill = SimpleNamespace(id=identity, name="bundle", description="A bundled skill", body="Exact instructions",
-                            frontmatter={"metadata": {"research": "opaque"}}, updated_at=datetime.now(UTC))
+                            frontmatter={"metadata": {"research": "opaque"}}, updated_at=datetime.now(UTC),
+                            source_filename="bundle.md", created_at=datetime.now(UTC))
     binary = b"\x00\x81\xffRESOURCE"
 
     async def stream(_query):
         async def rows():
-            yield "reference.md", "exact\r\n", "utf-8", uuid.uuid4()
-            yield "assets/image.bin", base64.b64encode(binary).decode(), "base64", uuid.uuid4()
-            yield ".env", "MUST NOT APPEAR", "utf-8", uuid.uuid4()
+            yield "reference.md", "exact\r\n", "utf-8", uuid.uuid4(), 0
+            yield "assets/image.bin", base64.b64encode(binary).decode(), "base64", uuid.uuid4(), 1
+            yield ".env", "MUST NOT APPEAR", "utf-8", uuid.uuid4(), 2
         return rows()
 
     db = SimpleNamespace(scalar=AsyncMock(return_value=skill), stream=stream)
@@ -410,7 +413,7 @@ async def test_api_requires_explicit_publication_and_allows_legacy_without_curre
 async def test_legacy_package_reports_missing_history_and_optional_results(tmp_path, monkeypatch, include_results):
     publication = SimpleNamespace(id=uuid.uuid4(), graph={"nodes": [], "edges": []}, experiment_snapshot=None,
                                   dataset_inputs=None, design_revision_id=None, revision=1,
-                                  published_at=datetime.now(UTC), name=None)
+                                  published_at=datetime.now(UTC), name=None, note=None)
     job = SimpleNamespace(id=uuid.uuid4(), owner_id=uuid.uuid4(), experiment_id=uuid.uuid4(), protocol_id=uuid.uuid4(),
                           protocol_revision_id=publication.id, design_revision_id=None,
                           params={"selection": {"include_results": include_results}})
@@ -423,6 +426,7 @@ async def test_legacy_package_reports_missing_history_and_optional_results(tmp_p
 
     monkeypatch.setattr(packages, "get_session", session)
     monkeypatch.setattr(packages, "_resources", AsyncMock())
+    monkeypatch.setattr(packages, "_import_sources", AsyncMock())
     results = AsyncMock()
     monkeypatch.setattr(packages, "_results", results)
     monkeypatch.setattr(result_exports, "get_settings", lambda: SimpleNamespace(result_export_dir=str(tmp_path)))

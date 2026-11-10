@@ -240,6 +240,8 @@ async def list_documents(owner_id: uuid.UUID) -> list[Any]:
     """Every document this user uploaded. Owner-scoped with no system
     fallback, same as ``okf_bundles.list_bundles``."""
     servers = await mcp_service.list_servers(owner_id=owner_id)
+    servers = [server for server in servers
+               if not (server.error_message or '').startswith('Import staging:')]
     return [s for s in servers if is_document_server(s) and s.owner_id == owner_id]
 
 

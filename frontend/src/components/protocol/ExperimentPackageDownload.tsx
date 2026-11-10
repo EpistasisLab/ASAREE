@@ -7,6 +7,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { jobActive, useResultJob } from '@/lib/resultJobs'
 import { newRequestKey } from '@/lib/requestKey'
 import type { Protocol } from '@/types/protocols'
+import { ExperimentPackageImport } from './ExperimentPackageImport'
 
 export function ExperimentPackageDownload({ experimentId, protocol, selectedVersionId }: {
   experimentId: string; protocol: Protocol; selectedVersionId?: string
@@ -68,8 +69,9 @@ export function ExperimentPackageDownload({ experimentId, protocol, selectedVers
       setOpen(true)
     }}><Download className="size-3.5" /> Download experiment package</Button>
     <Dialog open={open} onOpenChange={setOpen}>
-      <DialogContent className="sm:max-w-lg">
+      <DialogContent className="max-h-[90svh] overflow-y-auto sm:max-w-lg">
         <DialogHeader><DialogTitle>Download published experiment</DialogTitle></DialogHeader>
+        <ExperimentPackageImport experimentId={experimentId} />
         <label className="space-y-1 text-sm">Published version
           <select className="w-full rounded-md border bg-background px-2 py-2 font-mono text-sm" value={versionId}
             disabled={busy} onChange={event => { setVersionId(event.target.value); setJobId(undefined); setLinkError(undefined); create.reset() }}>

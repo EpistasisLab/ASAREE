@@ -57,7 +57,8 @@ def _readable(config: Any, user: Any) -> bool:
     a shared system server's registration/connection isn't any one user's to
     change through this API.
     """
-    return bool(config.owner_id == user.id or config.is_system)
+    return bool(config.owner_id == user.id or config.is_system) and not (
+        (getattr(config, 'error_message', None) or '').startswith('Import staging:'))
 
 
 class CallToolRequest(BaseModel):
@@ -234,6 +235,7 @@ async def register_server_endpoint(body: RegisterServerRequest, user: CurrentUse
 @router.get("", response_model=list[ServerResponse])
 async def list_servers_endpoint(user: CurrentUser) -> list[ServerResponse]:
     servers = await mcp_service.list_servers(owner_id=user.id)
+    servers = [server for server in servers if _readable(server, user)]
     return list(await asyncio.gather(*(_to_response(s, viewer_id=user.id) for s in servers)))
 
 
@@ -278,7 +280,7 @@ async def get_server_endpoint(server_id: uuid.UUID, user: CurrentUser) -> Server
 @router.patch("/{server_id}", response_model=ServerResponse)
 async def update_server_endpoint(server_id: uuid.UUID, body: UpdateServerRequest, user: CurrentUser) -> ServerResponse:
     existing = await mcp_service.get_server(server_id)
-    if existing is None or existing.owner_id != user.id:
+    if existing is None or existing.owner_id != user.id or not _readable(existing, user):
         raise HTTPException(status_code=404, detail="No such server")
     try:
         config = await mcp_service.update_server(
@@ -344,7 +346,7 @@ async def clear_credentials_endpoint(
 @router.delete("/{server_id}", status_code=204)
 async def delete_server_endpoint(server_id: uuid.UUID, user: CurrentUser) -> None:
     existing = await mcp_service.get_server(server_id)
-    if existing is None or existing.owner_id != user.id:
+    if existing is None or existing.owner_id != user.id or not _readable(existing, user):
         raise HTTPException(status_code=404, detail="No such server")
     await mcp_service.delete_server(server_id)
 
@@ -352,7 +354,7 @@ async def delete_server_endpoint(server_id: uuid.UUID, user: CurrentUser) -> Non
 @router.post("/{server_id}/refresh", response_model=ServerResponse)
 async def refresh_server_endpoint(server_id: uuid.UUID, user: CurrentUser) -> ServerResponse:
     existing = await mcp_service.get_server(server_id)
-    if existing is None or existing.owner_id != user.id:
+    if existing is None or existing.owner_id != user.id or not _readable(existing, user):
         raise HTTPException(status_code=404, detail="No such server")
     config = await mcp_service.refresh_server(server_id)
     assert config is not None
@@ -362,7 +364,7 @@ async def refresh_server_endpoint(server_id: uuid.UUID, user: CurrentUser) -> Se
 @router.post("/{server_id}/reconnect", response_model=ServerResponse)
 async def reconnect_server_endpoint(server_id: uuid.UUID, user: CurrentUser) -> ServerResponse:
     existing = await mcp_service.get_server(server_id)
-    if existing is None or existing.owner_id != user.id:
+    if existing is None or existing.owner_id != user.id or not _readable(existing, user):
         raise HTTPException(status_code=404, detail="No such server")
     config = await mcp_service.reconnect_server(server_id)
     assert config is not None

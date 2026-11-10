@@ -1,0 +1,308 @@
+"""Bounded, non-executing package inspection. Extracted bytes stay private."""
+from __future__ import annotations
+
+import gzip
+import hashlib
+import json
+import tarfile
+import threading
+import uuid
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, BinaryIO
+
+from asaree.services.experiment_packages import BLOCK, relative_path
+
+
+@dataclass(frozen=True)
+class Limits:
+    compressed: int = 1024**3
+    expanded: int = 8 * 1024**3
+    members: int = 100000
+    document: int = 16 * 1024**2
+
+
+class PackageError(ValueError):
+    """An actionable untrusted-package diagnostic."""
+
+
+def member_path(value: str) -> str:
+    relative_path(value)
+    if len(value.encode()) > 1024 or len(value.split('/')) > 32 or any(ord(c) < 32 for c in value):
+        raise PackageError('Invalid member path length, depth or control character')
+    return value
+
+
+def invalid(message: str) -> Any:
+    raise PackageError(message)
+
+
+def unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise PackageError(f'Duplicate JSON key: {key}')
+        result[key] = value
+    return result
+
+
+def document(path: Path, limits: Limits) -> Any:
+    if path.stat().st_size > limits.document:
+        raise PackageError(f'JSON document exceeds limit: {path.name}')
+    try:
+        return json.loads(path.read_bytes(), object_pairs_hook=unique_object,
+                          parse_constant=lambda value: invalid(f'Non-finite JSON: {value}'))
+    except (ValueError, UnicodeError, RecursionError) as exc:
+        raise PackageError(f'Invalid JSON: {path.name}: {exc}') from exc
+
+
+def records(path: Path, limits: Limits):
+    with path.open('rb') as stream:
+        while line := stream.readline(limits.document + 1):
+            if len(line) > limits.document:
+                raise PackageError(f'Inventory record exceeds limit: {path.name}')
+            try:
+                value = json.loads(line, object_pairs_hook=unique_object,
+                                   parse_constant=lambda value: invalid(f'Non-finite JSON: {value}'))
+            except (ValueError, UnicodeError, RecursionError) as exc:
+                raise PackageError(f'Invalid inventory: {path.name}: {exc}') from exc
+            if not isinstance(value, dict):
+                raise PackageError(f'Expected object record: {path.name}')
+            yield value
+
+
+def digest(path: Path) -> str:
+    with path.open('rb') as stream:
+        return hashlib.file_digest(stream, 'sha256').hexdigest()
+
+
+def verify(root: Path, record: dict[str, Any]) -> None:
+    path = root / member_path(record['path'])
+    if (not path.is_file() or type(record.get('bytes')) is not int
+            or path.stat().st_size != record['bytes'] or digest(path) != record.get('sha256')):
+        raise PackageError(f'Missing member or size/hash mismatch: {record["path"]}')
+
+
+class ExpandedReader:
+    def __init__(self, stream: BinaryIO, limit: int, stopping: threading.Event):
+        self.stream, self.limit, self.stopping, self.count = stream, limit, stopping, 0
+
+    def read(self, size: int = -1) -> bytes:
+        if self.stopping.is_set():
+            raise PackageError('Import cancelled')
+        value = self.stream.read(min(BLOCK, self.limit - self.count + 1, size if size >= 0 else BLOCK))
+        self.count += len(value)
+        if self.count > self.limit:
+            raise PackageError('Expanded archive exceeds configured limit')
+        return value
+
+
+def inspect(archive: Path, root: Path, limits: Limits, stopping: threading.Event) -> dict[str, Any]:
+    """Fresh root only. Never extractall, follow links, or trust tar metadata."""
+    if archive.stat().st_size > limits.compressed:
+        raise PackageError('Compressed archive exceeds configured limit')
+    root.mkdir(mode=0o700)
+    count = 0
+    try:
+        with gzip.open(archive, 'rb') as compressed:
+            expanded = ExpandedReader(compressed, limits.expanded, stopping)
+            with tarfile.open(fileobj=expanded, mode='r|') as tar:
+                for member in tar:
+                    count += 1
+                    if count > limits.members:
+                        raise PackageError('Archive exceeds configured member count')
+                    name = member_path(member.name)
+                    if not member.isfile() or member.sparse is not None or member.size < 0:
+                        raise PackageError(f'Only ordinary files are accepted: {name}')
+                    if member.size > limits.expanded:
+                        raise PackageError(f'Member exceeds expanded limit: {name}')
+                    destination = root / name
+                    destination.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+                    source = tar.extractfile(member)
+                    if source is None:
+                        raise PackageError(f'Missing member bytes: {name}')
+                    with destination.open('xb') as output:
+                        destination.chmod(0o600)
+                        remaining = member.size
+                        while remaining:
+                            if stopping.is_set():
+                                raise PackageError('Import cancelled')
+                            block = source.read(min(remaining, BLOCK))
+                            if not block:
+                                raise PackageError(f'Truncated member: {name}')
+                            output.write(block)
+                            remaining -= len(block)
+                    tar.members.clear()
+            while block := expanded.read(BLOCK):
+                if block.strip(b'\0'):
+                    raise PackageError('Unexpected data after tar end')
+        return validate(root, limits, count)
+    except (OSError, EOFError, tarfile.TarError, KeyError, TypeError, AttributeError) as exc:
+        raise PackageError(f'Malformed experiment package: {exc}') from exc
+
+
+def validate(root: Path, limits: Limits, count: int) -> dict[str, Any]:
+    manifest = document(root / 'manifest.json', limits)
+    if manifest.get('format') != 'asaree.experiment-package' or manifest.get('schema_version') not in (1, 2):
+        raise PackageError('Unsupported experiment package format/version; supported: 1, 2')
+    for key, name in (('files', 'files.jsonl'), ('dependencies', 'dependencies.jsonl')):
+        if manifest[key]['path'] != name:
+            raise PackageError(f'Invalid {key} inventory locator')
+        verify(root, manifest[key])
+    markers = root.parent / (root.name + '-verified')
+    markers.mkdir(mode=0o700)
+    files = 0
+    categories: dict[str, int] = {}
+    for record in records(root / 'files.jsonl', limits):
+        name = member_path(record['path'])
+        if name in {'manifest.json', 'files.jsonl'}:
+            raise PackageError('Circular inventory member')
+        (markers / hashlib.sha256(name.encode()).hexdigest()).touch(exist_ok=False)
+        verify(root, record)
+        if name.split('/')[0] not in {'dependencies.jsonl', 'publication', 'experiment-metadata.json',
+                                      'design', 'inputs', 'resources', 'requirements', 'results', 'sources'}:
+            raise PackageError(f'Unsupported payload category: {name}')
+        if name.endswith('.json'):
+            document(root / name, limits)
+        elif name.endswith('.jsonl'):
+            for _ in records(root / name, limits):
+                pass
+        files += 1
+        category = name.split('/')[0]
+        categories[category] = categories.get(category, 0) + 1
+    if files != manifest['file_count'] or files + 2 != count:
+        raise PackageError('Inventory/member counts differ; unlisted or missing payload')
+    required = ['publication/canvas.json', 'publication/settings.json', 'experiment-metadata.json']
+    if manifest.get('design_revision_id'):
+        required += ['design/revision.json', 'design/cells.jsonl', 'design/replicates.jsonl']
+    for name in required:
+        if not (root / name).is_file():
+            raise PackageError(f'Required member missing: {name}')
+    graph = document(root / 'publication/canvas.json', limits)
+    settings = document(root / 'publication/settings.json', limits)
+    if not isinstance(graph, dict) or not isinstance(settings, dict):
+        raise PackageError('Canvas and settings must be objects')
+    node_ids = [node['id'] for node in graph.get('nodes', [])]
+    if len(set(node_ids)) != len(node_ids):
+        raise PackageError('Duplicate canvas node identity')
+    for edge in graph.get('edges', []):
+        if edge['source'] not in node_ids or edge['target'] not in node_ids:
+            raise PackageError('Canvas edge references missing node')
+    unresolved, external, diagnostics = 0, 0, []
+    for record in records(root / 'dependencies.jsonl', limits):
+        if record.get('status') in {'missing', 'unresolved', 'changed', 'forbidden'}:
+            unresolved += 1
+            if len(diagnostics) < 100:
+                diagnostics.append(record)
+        external += bool(record.get('external_requirement'))
+        if record.get('status') == 'included':
+            if 'file' in record and not (root / member_path(record['file'])).is_file():
+                raise PackageError('Included dependency references missing file')
+            if 'directory' in record and not (root / member_path(record['directory'])).is_dir():
+                raise PackageError('Included dependency references missing directory')
+    validate_references(root, limits, manifest, markers)
+    warnings = ['Connections and credentials require local configuration and normal publication before execution.']
+    if manifest['schema_version'] == 1:
+        warnings.append('v1 omits structured Skill metadata/file order, complete dataset registration metadata, '
+                        'and row-slot identities. Original files remain inspectable; omitted facts are unknown.')
+    return {'manifest': manifest, 'categories': categories, 'unresolved_count': unresolved,
+            'external_requirements': external, 'diagnostics': diagnostics, 'warnings': warnings,
+            'file_count': files, 'bytes': sum(p.stat().st_size for p in root.rglob('*') if p.is_file())}
+
+
+def validate_references(root: Path, limits: Limits, manifest: dict[str, Any], markers: Path) -> None:
+    """Disk-backed identity indexes avoid an in-memory attempt/file inventory."""
+    def marker(kind: str, source: Any) -> Path:
+        return markers / hashlib.sha256(f'{kind}:{source}'.encode()).hexdigest()
+
+    def remember(kind: str, source: Any, record: Any) -> None:
+        if not isinstance(source, str) or len(source) > 255:
+            raise PackageError(f'Invalid {kind} identity')
+        path = marker(kind, source)
+        with path.open('xb') as stream:
+            stream.write(json.dumps(record).encode())
+
+    def require(kind: str, source: Any) -> dict[str, Any]:
+        path = marker(kind, source)
+        if not path.is_file():
+            raise PackageError(f'Unknown {kind} reference: {source}')
+        return document(path, limits)
+
+    for key in ('experiment_id', 'protocol_id'):
+        uuid.UUID(manifest[key])
+    uuid.UUID(manifest['publication']['id'])
+    for dep in records(root / 'dependencies.jsonl', limits):
+        if dep.get('kind') in {'dataset_file', 'skill_file'} and dep.get('status') == 'included':
+            remember(dep['kind'], dep['id'], dep)
+    bindings_path = root / 'inputs/bindings.json'
+    if bindings_path.exists():
+        bindings = document(bindings_path, limits)
+        if bindings.get('schema_version') != 1:
+            raise PackageError('Unsupported pinned input schema')
+        seen: dict[tuple[str, str], Any] = {}
+        for pin in bindings.get('inputs', []):
+            uuid.UUID(pin['dataset_id'])
+            if pin.get('mode') not in {'whole_dataset', 'per_row'}:
+                raise PackageError('Unknown dataset input mode')
+            for field in ('raw_artifact', 'train_artifact', 'test_artifact'):
+                ref = pin.get(field)
+                source = ref['id'] if ref else f'{pin["dataset_id"]}:original'
+                if not ref and field != 'raw_artifact':
+                    continue
+                expected = ref['sha256'] if ref else pin['raw_sha256']
+                key = pin['dataset_id'], field
+                if key in seen and seen[key] != source:
+                    raise PackageError('Conflicting dataset artifact identities')
+                seen[key] = source
+                dep_path = marker('dataset_file', source)
+                if dep_path.exists():
+                    dep = document(dep_path, limits)
+                    if dep['dataset_id'] != pin['dataset_id'] or dep['role'] != field:
+                        raise PackageError('Pinned artifact relationship mismatch')
+                    if digest(root / member_path(dep['file'])) != expected:
+                        raise PackageError('Pinned artifact hash differs from inventory')
+                elif not any(d.get('id') == source and d.get('status') in {'missing', 'unresolved', 'changed'}
+                             for d in records(root / 'dependencies.jsonl', limits)):
+                    # Entire dataset may be absent, and explicitly inventoried.
+                    if not any(d.get('id') == pin['dataset_id'] and d.get('kind') == 'dataset'
+                               and d.get('status') == 'missing'
+                               for d in records(root / 'dependencies.jsonl', limits)):
+                        raise PackageError('Pinned file is absent without missing-dependency evidence')
+            if pin.get('split_id'):
+                split_path = root / f'inputs/splits/{uuid.UUID(pin["split_id"])}.json'
+                if split_path.exists():
+                    split = document(split_path, limits)
+                    if (split['dataset_id'] != pin['dataset_id'] or split['source_sha256'] != pin['raw_sha256']
+                        or split['train_artifact_id'] != (pin.get('train_artifact') or {}).get('id')
+                        or split['test_artifact_id'] != (pin.get('test_artifact') or {}).get('id')):
+                        raise PackageError('Pinned split relationship mismatch')
+    for category, filename in (('cell', 'design/cells.jsonl'), ('replicate', 'design/replicates.jsonl')):
+        path = root / filename
+        if not path.exists():
+            continue
+        for record in records(path, limits):
+            uuid.UUID(record['id'])
+            if category == 'replicate':
+                require('cell', record['cell_id'])
+                if type(record['replicate_number']) is not int or record['replicate_number'] < 1:
+                    raise PackageError('Invalid planned replicate number')
+            remember(category, record['id'], record)
+    for path in (root / 'results/rows').glob('*.json'):
+        row = document(path, limits)
+        require('replicate', row['replicate_result_id'])
+        if row['protocol_revision_id'] != manifest['publication']['id']:
+            raise PackageError('Historical row belongs to a different publication')
+        remember('row', row['id'], row)
+    for path in (root / 'results/attempts').glob('*/attempt.json'):
+        attempt = document(path, limits)
+        if path.parent.name != str(uuid.UUID(attempt['id'])):
+            raise PackageError('Attempt path and identity disagree')
+        if not manifest.get('results_included'):
+            raise PackageError('Results present while manifest excludes results')
+        if attempt.get('replicate_result_id'):
+            require('replicate', attempt['replicate_result_id'])
+        if attempt.get('row_result_id') and manifest['schema_version'] >= 2:
+            require('row', attempt['row_result_id'])
+        remember('attempt', attempt['id'], attempt)
+    for file in (root / 'results/artifacts').glob('*'):
+        require('attempt', file.name)

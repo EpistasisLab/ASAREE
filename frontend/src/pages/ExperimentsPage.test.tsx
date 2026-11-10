@@ -3,7 +3,7 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, expect, it, vi } from 'vitest'
-import { experimentsApi } from '@/api/client'
+import { experimentsApi, packageImportsApi } from '@/api/client'
 import type { Experiment } from '@/types/experiments'
 import type { ExecutionSummary } from '@/types/executionResults'
 import { ExperimentsPage } from './ExperimentsPage'
@@ -16,6 +16,7 @@ afterEach(() => {
 })
 
 function setup() {
+  vi.spyOn(packageImportsApi, 'list').mockResolvedValue([])
   const experiments = Array.from({ length: 11 }, (_, i) => ({
     id: `experiment-${i}`,
     name: `Study ${i}`,

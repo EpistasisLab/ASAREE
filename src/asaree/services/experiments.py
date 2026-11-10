@@ -270,8 +270,12 @@ async def get_dataset_ids_by_experiment(
 
 
 async def get_experiment(db: AsyncSession, experiment_id: uuid.UUID) -> ResearchExperiment | None:
+    from asaree.models.package_import import PackageImport
+
     return (
-        await db.execute(select(ResearchExperiment).where(ResearchExperiment.id == experiment_id))
+        await db.execute(select(ResearchExperiment).where(ResearchExperiment.id == experiment_id,
+            ~select(PackageImport.id).where(PackageImport.experiment_id == ResearchExperiment.id,
+                                            PackageImport.status != 'completed').exists()))
     ).scalar_one_or_none()
 
 
@@ -294,7 +298,11 @@ async def get_experiment_by_name(db: AsyncSession, name: str, *, owner_id: uuid.
 async def list_experiments(
     db: AsyncSession, *, owner_id: uuid.UUID, include_archived: bool = False
 ) -> Sequence[ResearchExperiment]:
-    query = select(ResearchExperiment).where(ResearchExperiment.owner_id == owner_id)
+    from asaree.models.package_import import PackageImport
+
+    query = select(ResearchExperiment).where(ResearchExperiment.owner_id == owner_id,
+        ~select(PackageImport.id).where(PackageImport.experiment_id == ResearchExperiment.id,
+                                        PackageImport.status != 'completed').exists())
     if not include_archived:
         query = query.where(ResearchExperiment.archived_at.is_(None))
     return (await db.execute(query)).scalars().all()

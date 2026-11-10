@@ -67,6 +67,10 @@ class AsareeSettings(CoreSettings):
     result_export_dir: str = ""
     backup_dir: str = ""
     scratch_dir: str = ""
+    package_import_max_compressed: int = Field(default=1024**3, gt=0)
+    package_import_max_expanded: int = Field(default=8 * 1024**3, gt=0)
+    package_import_max_members: int = Field(default=100000, gt=0)
+    package_import_max_document: int = Field(default=16 * 1024**2, gt=0)
 
     # The one directory a user may browse and register OKF bundles under
     # (GET /okf/browse, POST /okf/bundles -- services/okf_bundles.py). Every

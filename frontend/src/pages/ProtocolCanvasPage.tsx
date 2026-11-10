@@ -29,6 +29,7 @@ import {
 } from '@/lib/protocolGraph'
 import type { Experiment } from '@/types/experiments'
 import type { Protocol } from '@/types/protocols'
+import { ExperimentPackageDownload } from '@/components/protocol/ExperimentPackageDownload'
 import type { Node, Edge } from '@xyflow/react'
 
 // Click-to-rename, the pattern for anything created with a placeholder name:
@@ -299,6 +300,8 @@ export function ProtocolCanvasPage() {
         </div>
         <div className="flex shrink-0 flex-wrap items-center gap-3 rounded-md border bg-card px-3 py-2 text-xs" aria-label="Experiment version controls">
           <Button variant="ghost" size="sm" disabled={!experimentVersions?.length} onClick={() => { setVersionSearch(''); setVersionBrowserOpen(true) }}>Version history</Button>
+          {protocolQuery.data && experimentId && <ExperimentPackageDownload experimentId={experimentId}
+            protocol={protocolQuery.data} selectedVersionId={versionId} />}
           <p className="text-muted-foreground">{versionId ? 'Canvas, Design, Runs, and Results show this saved version · read-only.'
             : !publishedVersion ? 'Publish the experiment to create its first version.'
               : hasChanges ? `Changes are not published. Runs and Results use version ${publishedVersion}.`

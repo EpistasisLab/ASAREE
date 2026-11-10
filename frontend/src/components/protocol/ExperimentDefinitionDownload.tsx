@@ -107,6 +107,6 @@ export function ExperimentDefinitionDownload({ experimentId, protocol }: { exper
   }
 
   return <><Button type="button" variant="outline" size="xs" onClick={downloadDefinition} disabled={downloadingDefinition}>
-    <Download className="size-3.5" /> {downloadingDefinition ? 'Preparing definition…' : 'Download experiment definition'}
+    <Download className="size-3.5" /> {downloadingDefinition ? 'Preparing draft JSON…' : 'Download draft definition JSON'}
   </Button>{definitionDownloadError && <p role="alert" className="text-xs text-destructive">{definitionDownloadError}</p>}</>
 }

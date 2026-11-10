@@ -22,6 +22,7 @@ sdk/src/asaree_client/_version.py
 # Private local planning and agent guidance
 docs/*
 !docs/managed-storage.md
+!docs/experiment-packages.md
 # This shared storage decision must travel with implementation sessions.
 !docs/adr/
 docs/adr/*

@@ -1,6 +1,7 @@
 """Owned, version-scoped asynchronous commands and native export downloads."""
 
 import uuid
+from dataclasses import replace
 from datetime import UTC, datetime
 from typing import Any
 
@@ -11,6 +12,7 @@ from sqlalchemy import select, text
 
 from asaree.api.result_reads import Scope
 from asaree.deps import CurrentUser, DbSession
+from asaree.models.protocol_revision import ProtocolRevision
 from asaree.models.result_job import ResultJob
 from asaree.services import result_exports, result_jobs
 
@@ -25,6 +27,8 @@ class Command(BaseModel):
     row_indices: list[int] | None = Field(default=None, max_length=100)
     rerun_slot_ids: list[uuid.UUID] = Field(default_factory=list, max_length=100)
     rerun_completed: bool = False
+    format: str = Field(default="analysis_csv", pattern="^(analysis_csv|experiment_package)$")
+    include_results: bool = False
 
 
 def payload(job: ResultJob) -> dict[str, Any]:
@@ -36,10 +40,12 @@ def payload(job: ResultJob) -> dict[str, Any]:
             key: value
             for key, value in job.progress.items()
             if key
-            in {"scanned", "planned", "created", "skipped", "cancelled", "bytes", "cell_count", "replicate_count"}
+            in {"scanned", "planned", "created", "skipped", "cancelled", "bytes", "cell_count", "replicate_count",
+                "sha256"}
         },
         "error": job.error,
         "protocol_revision_id": str(job.protocol_revision_id) if job.protocol_revision_id else None,
+        "format": job.params.get("selection", {}).get("format", "analysis_csv"),
     }
     if job.kind == "export" and job.status == "completed":
         token = result_exports.download_token(job)
@@ -74,7 +80,27 @@ async def _committed(db: DbSession, job: ResultJob) -> dict[str, Any]:
 
 
 @router.post("", status_code=202)
-async def create(command: Command, user: CurrentUser, db: DbSession, scope: Scope) -> dict[str, Any]:
+async def create(
+    command: Command, user: CurrentUser, db: DbSession, scope: Scope,
+    protocol_revision_id: uuid.UUID | None = None,
+) -> dict[str, Any]:
+    package = command.format == "experiment_package"
+    if package and (
+        command.kind != "export" or protocol_revision_id is None
+        or command.cell_id or command.replicate_ids is not None or command.row_indices is not None
+        or command.rerun_slot_ids or command.rerun_completed
+    ):
+        raise HTTPException(status_code=422, detail="Select one published experiment version for a complete package.")
+    if package:
+        publication = await db.scalar(select(ProtocolRevision).where(
+            ProtocolRevision.id == protocol_revision_id, ProtocolRevision.protocol_id == scope.protocol_id,
+        ))
+        if publication is None:
+            raise HTTPException(status_code=404, detail="protocol_revision_not_found")
+        scope = replace(scope, design_revision_id=publication.design_revision_id, graph=publication.graph,
+                        design_spec=(publication.experiment_snapshot or {}).get("design_spec"), versioned=True)
+    if command.include_results and not package:
+        raise HTTPException(status_code=422, detail="include_results requires an experiment package.")
     if command.row_indices is not None and (
         scope.unit != "row"
         or command.replicate_ids is None
@@ -89,7 +115,10 @@ async def create(command: Command, user: CurrentUser, db: DbSession, scope: Scop
             user.id,
             kind=command.kind,
             request_key=command.request_key,
-            params=command.model_dump(mode="json", exclude={"kind", "request_key"}, exclude_none=True),
+            params=command.model_dump(
+                mode="json", exclude={"kind", "request_key"} | (set() if package else {"format", "include_results"}),
+                exclude_none=True,
+            ),
         )
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -144,7 +173,8 @@ async def download(
     except ValueError as exc:
         raise HTTPException(status_code=403, detail="Download link expired or invalid.") from exc
     job = await owned_job(db, experiment_id, job_id, owner)
-    path = result_exports.export_path(job_id, metadata=metadata)
+    package = job.params.get("selection", {}).get("format") == "experiment_package"
+    path = result_exports.export_path(job_id, metadata=metadata, package=package)
     if (
         job.kind != "export"
         or job.status != "completed"
@@ -154,7 +184,9 @@ async def download(
         raise HTTPException(status_code=410, detail="Export expired or unavailable; request a new export.")
     return FileResponse(
         path,
-        media_type="application/json" if metadata else "text/csv",
-        filename=f"results-{job_id}.{'schema.json' if metadata else 'csv'}",
+        media_type="application/json" if metadata else "application/gzip" if package else "text/csv",
+        filename=(f"experiment-{job.experiment_id}-version-{job.protocol_revision_id}."
+                  f"{'manifest.json' if metadata else 'tar.gz'}" if package else
+                  f"results-{job_id}.{'schema.json' if metadata else 'csv'}"),
         headers={"Cache-Control": "private, no-store"},
     )

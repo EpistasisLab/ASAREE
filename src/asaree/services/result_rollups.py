@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from datetime import UTC, datetime
 from typing import Any
@@ -296,18 +295,14 @@ async def rebuild_result_summary(db: AsyncSession, scope: ResultScope, generatio
 
         dataset = await db.get(RegisteredDataset, uuid.UUID(dataset_id)) if dataset_id else None
         if dataset is not None:
-            from pathlib import Path
-
-            from asaree.config import get_settings
             from asaree.services.dataset_row_csv import DatasetRowCsvError
 
             try:
-                indexed = await asyncio.to_thread(
-                    read_indexed_row_source,
-                    dataset_id=str(dataset.id),
-                    raw_path=dataset.raw_path,
-                    raw_sha256=dataset.raw_sha256,
-                    cache_root=Path(get_settings().result_row_index_dir),
+                protocol = await db.get(Protocol, scope.protocol_id)
+                if protocol is None:
+                    raise DatasetRowCsvError("source_unavailable", "owning protocol is unavailable")
+                indexed = await read_indexed_row_source(
+                    db, dataset_id=dataset.id, owner_id=protocol.owner_id,
                 )
                 row_count = len(indexed.rows)
             except DatasetRowCsvError:

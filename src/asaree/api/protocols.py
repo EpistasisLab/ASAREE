@@ -24,7 +24,7 @@ from asaree.models.dataset import RegisteredDataset
 from asaree.models.protocol_revision import ProtocolRevision
 from asaree.models.protocol_run import ProtocolRun
 from asaree.services.dataset_factors import test_dataset_factor_values
-from asaree.services.dataset_row_csv import DatasetRowCsvError, project_row, read_row_source
+from asaree.services.dataset_row_csv import DatasetRowCsvError, project_row
 from asaree.services.dataset_row_inputs import DatasetRowInputError, resolve_dataset_row_plan
 from asaree.services.experiment_measurements import (
     blocking_measurement_plan_issues,
@@ -33,6 +33,7 @@ from asaree.services.experiment_measurements import (
 from asaree.services.experiment_versions import publication_matches_experiment, version_design_spec
 from asaree.services.experiments import get_experiment
 from asaree.services.factor_bindings import validate_factor_bindings
+from asaree.services.indexed_row_source import read_indexed_row_source
 from asaree.services.knowledge_factors import test_knowledge_factor_values
 from asaree.services.persona_factors import test_persona_factor_values
 from asaree.services.protocol_execution import (
@@ -691,15 +692,14 @@ async def create_test_run_endpoint(
             if registration is None:
                 raise HTTPException(status_code=422, detail="Registered row source is unavailable.")
             try:
-                source = read_row_source(
-                    dataset_id=str(registration.id),
-                    raw_path=registration.raw_path,
-                    raw_sha256=registration.raw_sha256,
+                source = await read_indexed_row_source(
+                    db, dataset_id=registration.id, owner_id=user.id,
                 )
                 columns = list(
                     dict.fromkeys(column for binding in row_plan["bindings"] for column in binding["columns"])
                 )
                 selected_index = 0 if row_index is None else row_index
+                source = await source.fetch_rows(db, [selected_index])
                 dataset_row = project_row(source, row_index=selected_index, columns=columns)
             except DatasetRowCsvError as exc:
                 raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -793,16 +793,15 @@ async def run_single_node_endpoint(
         if registration is None:
             raise HTTPException(status_code=422, detail="Registered row source is unavailable.")
         try:
-            source = read_row_source(
-                dataset_id=str(registration.id),
-                raw_path=registration.raw_path,
-                raw_sha256=registration.raw_sha256,
+            source = await read_indexed_row_source(
+                db, dataset_id=registration.id, owner_id=user.id,
             )
             columns = row_binding["columns"]
             if not columns or set(columns) - set(source.columns):
                 raise DatasetRowCsvError(
                     "invalid_columns", "row input columns must exist in the registered CSV header"
                 )
+            source = await source.fetch_rows(db, [0 if row_index is None else row_index])
             dataset_row = project_row(source, row_index=0 if row_index is None else row_index, columns=columns)
         except DatasetRowCsvError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -898,8 +897,8 @@ async def create_cell_runs_endpoint(
                     if dataset is None or not dataset.raw_path or Path(dataset.raw_path).stat().st_size > 1024 * 1024:
                         oversized = True
                     else:
-                        source = read_row_source(
-                            dataset_id=str(dataset.id), raw_path=dataset.raw_path, raw_sha256=dataset.raw_sha256
+                        source = await read_indexed_row_source(
+                            db, dataset_id=dataset.id, owner_id=user.id,
                         )
                         oversized = oversized or len(identifiers) * len(source.rows) > 100
                 except (OSError, DatasetRowCsvError) as exc:

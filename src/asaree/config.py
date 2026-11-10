@@ -65,7 +65,6 @@ class AsareeSettings(CoreSettings):
     dataset_storage_dir: str = ""
     dataset_workspace_dir: str = ""
     result_export_dir: str = ""
-    result_row_index_dir: str = ""
     backup_dir: str = ""
     scratch_dir: str = ""
 

@@ -305,9 +305,15 @@ async def delete_dataset(db: AsyncSession, dataset_id: uuid.UUID) -> bool:
     separate, not-yet-built concern (see design doc §9); this fixes the
     DB-visibility gap, not the filesystem GC gap.
     """
-    dataset = await get_dataset(db, dataset_id)
+    dataset = await db.scalar(select(RegisteredDataset).where(
+        RegisteredDataset.id == dataset_id,
+    ).with_for_update(of=RegisteredDataset))
     if dataset is None:
         return False
+    from asaree.services.dataset_row_retention import required_by_job
+
+    if await required_by_job(db, dataset_id, dataset.owner_id):
+        raise DatasetValidationError("Dataset is required by a retained result job and cannot be deleted")
     from asaree.models.dataset_input_reference import DatasetInputReference
 
     if await db.scalar(select(DatasetInputReference.id).where(

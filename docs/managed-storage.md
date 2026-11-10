@@ -1,8 +1,8 @@
 # Managed storage operations
 
 ASAREE keeps the existing ASAREE and Motoro PostgreSQL databases. Original
-CSVs, immutable splits and derived datasets remain files. SQLite row indexes
-remain supported; replacing them is issue #69. Portable experiment archives
+CSVs, immutable splits and derived datasets remain files. Derived row indexes
+live in ASAREE PostgreSQL. Portable experiment archives
 are issue #55. See [ADR 0003](adr/0003-immutable-dataset-inputs-and-managed-artifacts.md).
 
 ## Configuration and inventory
@@ -24,7 +24,6 @@ the same environment; explicit `Workspace(root=...)` takes precedence.
 | datasets | `DATASET_STORAGE_DIR` | datasets | `dataset_artifacts` UUID, namespace, key, hash, size, status; source/split FKs; immutable inputs |
 | workspaces | `DATASET_WORKSPACE_DIR` | workspaces | result workspace IDs, events, state formats 1/2, named slots, manifests, `dataset_inputs.json`; reusable state and durable outputs |
 | exports | `RESULT_EXPORT_DIR` | result-exports | `result_jobs` UUID; CSV and schema sidecar; existing export expiry |
-| row-indexes | `RESULT_ROW_INDEX_DIR` | result-row-indexes | original SHA-256 SQLite filename, metadata, lock; regenerable but retained during this migration |
 | documents | `OKF_DOCUMENT_DIR` | okf-documents | Motoro knowledge server command; mutable managed knowledge |
 | bundles | `OKF_BUNDLE_UPLOAD_DIR` | okf-bundles | Motoro knowledge server command; mutable managed knowledge |
 | backups | `BACKUP_DIR` | backups | pre-migration PostgreSQL dumps; explicit CLI `--dir` wins |
@@ -89,6 +88,11 @@ Retention policy:
   Dataset deletion checks publication/attempt reference edges and retained
   workspace seed references, including legacy state. Unknown/unreadable
   workspace state blocks input deletion. Inspect it before retrying.
+- PostgreSQL row indexes are retained for the lifetime of their registration,
+  then cascade with it. Pending, queued and awaiting-confirmation result jobs
+  protect their driver even when they predate publication/attempt pins.
+  Terminal job previews release this extra protection; publication, attempt and
+  workspace protections remain independent. No age-based row-index collector runs.
 - Reusable workspaces, derived generations, durable outputs and knowledge
   copies are retained by default. Unregistering knowledge removes its Motoro
   registration only, including for uploads. This intentionally favors history
@@ -163,7 +167,7 @@ and intended destination configuration, with both database URLs configured.
    keep services stopped and rerun the same plan (idempotent) or roll it back.
 5. Start API and workers with the same destination settings/mounts. Check a
    pinned historical attempt, a resumable workspace and a knowledge registration
-   before reopening traffic. Confirm row-index reads still work. Store the
+   before reopening traffic. Confirm PostgreSQL row-index reads work. Store the
    plan and operator validation with the coordinated backup. Retain the source
    tree until restore and resume validation are complete.
 
@@ -176,6 +180,76 @@ If new work was accepted after cutover, reconcile it or restore the complete
 coordinated backup; switching to the old tree alone would lose that work.
 Never downgrade only one database or roll back file bytes independently of
 their database references.
+
+## Retiring legacy SQLite row indexes
+
+`ASAREE_RESULT_ROW_INDEX_DIR` is no longer a runtime setting. Its files are
+derived data, not authoritative inputs. Keep the previous directory/mount and
+old settings in your coordinated backup until this offline migration and
+resume validation finish. Do not add its directory to a new storage relocation
+plan; finish or roll back any old relocation plan with its original application
+version first. New relocation plans use the namespace table above.
+
+With APIs, workers and MCP writers stopped, upgrade ASAREE migrations, then
+run the following commands in the new image with the ASAREE database configured.
+Pass `--legacy-dir` once for every previous default/override location. Use an
+existing empty directory if there were no SQLite indexes but saved jobs exist.
+
+```sh
+python -m asaree.row_index_migration inventory --legacy-dir /old/result-row-indexes --report row-inventory.json
+python -m asaree.row_index_migration rebuild --legacy-dir /old/result-row-indexes --report row-rebuild.json
+python -m asaree.row_index_migration verify --legacy-dir /old/result-row-indexes --report row-verified.json
+```
+
+Inventory reads SQLite only in read-only mode, hashes the originals, parses
+them with the recorded v1 CSV rules and compares every legacy row/position and
+header in bounded batches. It writes a private report, without changing files
+or database rows. Rebuild creates a separate PostgreSQL index per registration,
+never globally sharing by hash/owner. It verifies every row against originals
+and SQLite before converting active saved job progress to dataset UUID, source
+hash, parser version and count. Unprepared legacy jobs remain protected.
+Missing originals, changed hashes, inconsistent rows, unsupported parser
+versions and unavailable job registrations are explicit failures. Terminal job
+evidence appears in diagnostics and does not block unrelated work. Unassociated
+indexes, locks, partial writes, symlinks and unknown files remain untouched;
+review them separately. A mismatched legacy index must be retained for diagnosis
+or moved aside explicitly by the operator before rebuilding from its verified
+original; migration never trusts it instead of the original.
+
+Review the reports and repair failures using verified backups. No historical
+identity or source is inferred from a filename. Once verification passes and
+you have validated a pinned attempt and resumed batch, stop writers again and
+optionally run:
+
+```sh
+python -m asaree.row_index_migration retire --legacy-dir /old/result-row-indexes --report row-retired.json
+```
+
+Retire re-verifies originals, PostgreSQL and SQLite, preflights file hashes and
+destination conflicts, then renames verified `.sqlite` files to `.sqlite.retired`.
+It never deletes them or their lock files. Retain retired files with the backup;
+manual removal is a separate operator decision. On interruption inspect the
+report/files before retrying. A rollback uses the coordinated pre-cutover
+database/file backup and old image/settings, renaming retired files back if
+needed. New source descriptors omit legacy columns, so running the old image
+against newly accepted job progress is not a supported rollback.
+
+The index stores UTF-8 JSON bytes in BYTEA, preserving exact column order,
+NULs, empty strings, leading zeros, Unicode and multiline values. Parser
+`csv-utf8-sig-strict-v1` keeps the existing BOM, strict CSV, distinct nonempty
+header, equal field-count and skipped-empty-record rules. Job descriptors omit
+headers/values; schema cache headers containing NUL use a lossless binary
+encoding decoded at the API boundary. Existing execution graph/attempt JSONB
+fields still cannot represent NUL strings; this migration does not change that
+pre-existing execution limit or escape/change user strings to bypass it.
+
+Ready indexes always check their source registration and current original.
+Each new job, worker tick and process restart hashes original bytes; a job may
+reuse verification only for its bounded windows in that tick while file
+device/inode/size/modification/change times agree. A change invalidates the
+lease. Verification runs before progress/cancellation row locks. Ready indexes
+need no temporary copy; ingestion parses a verified temporary snapshot and
+publishes metadata and rows in one transaction under a PostgreSQL source lock.
 
 ## Coordinated backup and restore
 

@@ -16,7 +16,6 @@ NAMESPACES = {
     "datasets": ("dataset_storage_dir", "datasets"),
     "workspaces": ("dataset_workspace_dir", "workspaces"),
     "exports": ("result_export_dir", "result-exports"),
-    "row-indexes": ("result_row_index_dir", "result-row-indexes"),
     "documents": ("okf_document_dir", "okf-documents"),
     "bundles": ("okf_bundle_upload_dir", "okf-bundles"),
     "backups": ("backup_dir", "backups"),

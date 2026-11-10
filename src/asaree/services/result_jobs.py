@@ -7,13 +7,11 @@ delivery mechanism, never the source of truth for whether a run was created.
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import time
 import uuid
 from datetime import UTC, datetime, timedelta
 from math import prod
-from pathlib import Path
 from typing import Any
 
 from sqlalchemy import Text, cast, func, literal, select, update
@@ -21,7 +19,6 @@ from sqlalchemy.dialects.postgresql import ARRAY, JSONB, insert
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from asaree.config import get_settings
 from asaree.models.database import get_session
 from asaree.models.dataset import RegisteredDataset
 from asaree.models.factorial_cell import FactorialCell
@@ -30,8 +27,12 @@ from asaree.models.factorial_row_result import FactorialRowResult
 from asaree.models.protocol import Protocol
 from asaree.models.protocol_run import ProtocolRun
 from asaree.models.result_job import ResultJob, ResultJobMember
-from asaree.services.dataset_row_csv import RowSource
-from asaree.services.indexed_row_source import IndexedRows, read_indexed_row_source
+from asaree.services.indexed_row_source import (
+    PARSER_VERSION,
+    IndexedRowSource,
+    read_indexed_row_source,
+    verification_scope,
+)
 from asaree.services.protocol_execution import ProtocolValidationError, plan_cell_runs
 from asaree.services.protocol_runs import (
     RERUN_ON_REQUEST_STATUSES,
@@ -85,6 +86,15 @@ async def create_job(
         return previous
     if kind == "plan" and scope.protocol_revision_id is None:
         raise ValueError("Publish the protocol before preparing a production batch.")
+    if kind == "plan" and scope.row_plan is not None:
+        # Coordinate even pre-source legacy jobs with dataset deletion. No
+        # file IO is needed while recording intent; the worker verifies bytes.
+        source_id = await db.scalar(select(RegisteredDataset.id).where(
+            RegisteredDataset.id == uuid.UUID(scope.row_plan["driver_dataset_id"]),
+            RegisteredDataset.owner_id == owner_id,
+        ).with_for_update(read=True, key_share=True))
+        if source_id is None:
+            raise ValueError("Registered row source is unavailable.")
     job = ResultJob(
         owner_id=owner_id,
         experiment_id=scope.experiment_id,
@@ -163,36 +173,34 @@ async def job_scope(db: AsyncSession, job: ResultJob) -> ResultScope:
     )
 
 
-async def indexed_source(db: AsyncSession, scope: ResultScope, owner_id: uuid.UUID) -> RowSource | None:
+async def indexed_source(db: AsyncSession, scope: ResultScope, owner_id: uuid.UUID) -> IndexedRowSource | None:
     if scope.row_plan is None:
         return None
-    dataset = await db.scalar(
-        select(RegisteredDataset).where(
-            RegisteredDataset.id == uuid.UUID(scope.row_plan["driver_dataset_id"]),
-            RegisteredDataset.owner_id == owner_id,
-        )
-    )
-    if dataset is None:
-        raise ValueError("Registered row source is unavailable.")
-    return await asyncio.to_thread(
-        read_indexed_row_source,
-        dataset_id=str(dataset.id),
-        raw_path=dataset.raw_path,
-        raw_sha256=dataset.raw_sha256,
-        cache_root=Path(get_settings().result_row_index_dir),
+    return await read_indexed_row_source(
+        db, dataset_id=uuid.UUID(scope.row_plan["driver_dataset_id"]), owner_id=owner_id,
     )
 
 
-def restored_source(progress: dict[str, Any]) -> RowSource | None:
+async def restored_source(
+    db: AsyncSession, progress: dict[str, Any], scope: ResultScope, owner_id: uuid.UUID,
+) -> IndexedRowSource | None:
     source = progress.get("source")
     if not source:
         return None
-    return RowSource(
-        source["dataset_id"],
-        source["sha256"],
-        tuple(source["columns"]),
-        IndexedRows(Path(get_settings().result_row_index_dir) / f"{source['sha256']}.sqlite", source["count"]),
+    if scope.row_plan is None or source.get("dataset_id") != scope.row_plan["driver_dataset_id"]:
+        raise ValueError("Saved row source does not belong to the published row plan.")
+    restored = await read_indexed_row_source(
+        db, dataset_id=uuid.UUID(source["dataset_id"]), owner_id=owner_id,
+        expected_sha256=source["sha256"], parser_version=source.get("parser_version", PARSER_VERSION),
     )
+    # Legacy SQLite progress used this same v1 parser. Verify, never trust,
+    # saved metadata; neither columns nor values belong in JSONB descriptors.
+    if source.get("count") != len(restored.rows) or (
+        "columns" in source and tuple(source["columns"]) != restored.columns
+    ):
+        raise ValueError("Saved row source metadata is inconsistent with the verified original.")
+    progress["source"] = restored.descriptor()
+    return restored
 
 
 def selected_parents(scope: ResultScope, selection: dict[str, Any]) -> Any:
@@ -219,11 +227,16 @@ def eligible(status: str, slot_id: str, rerun_slots: set[str], rerun_completed: 
     return status in RETRYABLE or status in RERUN_ON_REQUEST_STATUSES and (rerun_completed or slot_id in rerun_slots)
 
 
-async def prepare_step(db: AsyncSession, job: ResultJob, scope: ResultScope) -> None:
+async def prepare_step(
+    db: AsyncSession, job: ResultJob, scope: ResultScope, source: IndexedRowSource | None = None,
+) -> None:
     progress = dict(job.progress)
+    source = source or await restored_source(db, progress, scope, job.owner_id)
+    if source:
+        progress["source"] = source.descriptor()
     selection = {**job.params["selection"], "excluded_cell_ids": job.params.get("excluded_cell_ids", [])}
     if not progress.get("validated"):
-        source = restored_source(progress) or await indexed_source(db, scope, job.owner_id)
+        source = source or await indexed_source(db, scope, job.owner_id)
         await plan_cell_runs(
             db,
             protocol_id=scope.protocol_id,
@@ -246,12 +259,7 @@ async def prepare_step(db: AsyncSession, job: ResultJob, scope: ResultScope) -> 
             if actual != expected:
                 raise ValueError("Published design cells are incomplete. Review and regenerate before running.")
         if source:
-            progress["source"] = {
-                "dataset_id": source.dataset_id,
-                "sha256": source.raw_sha256,
-                "columns": list(source.columns),
-                "count": len(source.rows),
-            }
+            progress["source"] = source.descriptor()
         progress["validated"] = True
         selected = selected_parents(scope, selection)
         progress["replicate_count"] = await db.scalar(
@@ -262,7 +270,6 @@ async def prepare_step(db: AsyncSession, job: ResultJob, scope: ResultScope) -> 
                 func.count(func.distinct(FactorialReplicateResult.cell_id)), maintain_column_froms=True
             ).order_by(None)
         )
-    source = restored_source(progress)
     indices = selection.get("row_indices")
     start = int(progress.get("row", 0))
     total_rows = (len(indices) if indices is not None else len(source.rows)) if source else 0
@@ -335,7 +342,11 @@ async def prepare_step(db: AsyncSession, job: ResultJob, scope: ResultScope) -> 
     job.progress = progress
 
 
-async def plan_step(db: AsyncSession, job: ResultJob, scope: ResultScope) -> None:
+async def plan_step(
+    db: AsyncSession, job: ResultJob, scope: ResultScope, source: IndexedRowSource | None = None,
+) -> None:
+    progress = dict(job.progress)
+    source = source or await restored_source(db, progress, scope, job.owner_id)
     protocol = await db.scalar(
         select(Protocol).where(Protocol.id == scope.protocol_id).with_for_update(key_share=True)
     )
@@ -354,8 +365,9 @@ async def plan_step(db: AsyncSession, job: ResultJob, scope: ResultScope) -> Non
     if not members:
         job.status = "completed"
         return
-    progress = dict(job.progress)
-    source = restored_source(progress)
+    if source:
+        progress["source"] = source.descriptor()
+        source = await source.fetch_rows(db, (member.row_index for member in members))
     for member in members:
         parent_record = (
             await db.execute(
@@ -451,20 +463,21 @@ async def _advance_command(identifier: uuid.UUID) -> bool:
             if not job or job.status not in ("pending", "queued"):
                 return False
             scope = await job_scope(db, job)
+            # Verify/prepare input before the HTTP-visible protocol/job locks.
+            # No saved flag is trusted after process restart or file changes.
+            source = None
+            if job.kind == "plan" and scope.row_plan is not None:
+                progress = dict(job.progress)
+                source = await restored_source(db, progress, scope, job.owner_id)
+                source = source or await indexed_source(db, scope, job.owner_id)
             if job.kind == "plan" and job.status == "pending":
                 # File verification can be slow. It must not hold the job
                 # or protocol row lock that HTTP progress/cancel needs.
                 if scope.row_plan is not None and not job.progress.get("source"):
-                    source = await indexed_source(db, scope, job.owner_id)
                     assert source is not None
                     progress = {
                         **job.progress,
-                        "source": {
-                            "dataset_id": source.dataset_id,
-                            "sha256": source.raw_sha256,
-                            "columns": list(source.columns),
-                            "count": len(source.rows),
-                        },
+                        "source": source.descriptor(),
                     }
                     await db.execute(
                         update(ResultJob)
@@ -472,7 +485,7 @@ async def _advance_command(identifier: uuid.UUID) -> bool:
                         .values(progress=progress, updated_at=datetime.now(UTC))
                     )
                     return True
-                await prepare_step(db, job, scope)
+                await prepare_step(db, job, scope, source)
                 status, progress = job.status, job.progress
                 db.expunge(job)
                 await db.execute(
@@ -491,7 +504,7 @@ async def _advance_command(identifier: uuid.UUID) -> bool:
             if job.kind == "cancel":
                 await cancel_step(db, job, scope)
             else:
-                await plan_step(db, job, scope)
+                await plan_step(db, job, scope, source)
             job.updated_at = datetime.now(UTC)
             return job.status in ("pending", "queued")
     except DBAPIError:
@@ -539,8 +552,9 @@ async def drain_result_commands(_ctx: dict[str, Any]) -> None:
         )
     deadline = time.monotonic() + TICK_BUDGET_SECONDS
     for identifier in ids:
-        while time.monotonic() < deadline and await _advance_command(identifier):
-            pass
+        with verification_scope():
+            while time.monotonic() < deadline and await _advance_command(identifier):
+                pass
     await deliver_planned_runs()
 
 

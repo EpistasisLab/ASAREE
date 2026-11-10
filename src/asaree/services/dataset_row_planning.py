@@ -7,7 +7,7 @@ the resolved row driver and its ordered Agent/column bindings unchanged.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from copy import deepcopy
 from typing import Any
 
@@ -15,7 +15,7 @@ from asaree.services.dataset_row_csv import RowSource
 from asaree.services.dataset_row_inputs import DatasetRowInputError, resolve_dataset_row_plan
 
 
-def enumerate_row_candidates(
+def iter_row_candidates(
     *,
     parents: Sequence[dict],
     source: RowSource,
@@ -23,7 +23,7 @@ def enumerate_row_candidates(
     design_spec: dict | None,
     protocol_revision_id: str,
     row_indices: Sequence[int] | None = None,
-) -> list[dict]:
+) -> Iterator[dict]:
     """Expand sorted replicate parents across original source rows.
 
     Earlier graph and measurement validation remains the caller's
@@ -87,7 +87,6 @@ def enumerate_row_candidates(
         parent["replicate_result_id"],
     ))
 
-    candidates: list[dict[str, Any]] = []
     for parent in ordered_parents:
         applied_graph = apply_factor_bindings(graph, parent["factor_values"])
         applied_plan = resolve_dataset_row_plan(applied_graph, design_spec)
@@ -107,5 +106,9 @@ def enumerate_row_candidates(
                 "raw_sha256": source.raw_sha256,
                 "row_index": row_index,
             }
-            candidates.append(candidate)
-    return candidates
+            yield candidate
+
+
+def enumerate_row_candidates(**kwargs: Any) -> list[dict]:
+    """Compatibility for pure callers that explicitly need a materialized list."""
+    return list(iter_row_candidates(**kwargs))

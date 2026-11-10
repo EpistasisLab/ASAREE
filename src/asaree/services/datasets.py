@@ -307,6 +307,14 @@ async def delete_dataset(db: AsyncSession, dataset_id: uuid.UUID) -> bool:
     dataset = await get_dataset(db, dataset_id)
     if dataset is None:
         return False
+    from asaree.models.dataset_input_reference import DatasetInputReference
+
+    if await db.scalar(select(DatasetInputReference.id).where(
+        DatasetInputReference.dataset_id == dataset_id
+    ).limit(1)) is not None:
+        raise DatasetValidationError(
+            "Dataset is referenced by published inputs or stored attempts and cannot be deleted"
+        )
     await db.delete(dataset)
     await db.flush()
     shutil.rmtree(Path(get_settings().dataset_storage_dir) / str(dataset_id), ignore_errors=True)

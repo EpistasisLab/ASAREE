@@ -1242,6 +1242,9 @@ async def read_attempt_detail(db: AsyncSession, scope: ResultScope, run_id: uuid
         ProtocolRun.completed_at,
         ProtocolRun.protocol_revision_id,
         ProtocolRun.dataset_row,
+        case((ProtocolRun.dataset_inputs.is_(None), "legacy.unknown"), else_="pinned").label(
+            "dataset_input_provenance"
+        ),
         ProtocolRun.usage_summary,
         func.asaree_attempt_preview(ProtocolRun.attempt_result).label("attempt_result"),
         func.asaree_node_preview(ProtocolRun.node_runs).label("node_runs"),
@@ -1321,7 +1324,7 @@ async def read_evidence(
     db: AsyncSession, scope: ResultScope, run_id: uuid.UUID, *, document: str, offset: int = 0, limit: int = 16384
 ) -> dict[str, Any]:
     if (
-        document not in {"attempt_result", "node_runs", "conversation", "dataset_row"}
+        document not in {"attempt_result", "node_runs", "conversation", "dataset_row", "dataset_inputs"}
         or offset < 0
         or not 1 <= limit <= 16384
     ):

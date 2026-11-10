@@ -128,6 +128,7 @@ async def seed_cell_workspace(
     target_column: str = "",
     slot: str | None = None,
     stage_plan: Any = None,
+    pinned_registration: dict[str, Any] | None = None,
 ) -> SeededWorkspace:
     """Open (creating if absent) a slot of *workspace_id*, seeded from a registration.
 
@@ -151,7 +152,8 @@ async def seed_cell_workspace(
     Raises :class:`WorkspaceSeedError` on anything that leaves the cell
     without usable data.
     """
-    reg = await fetch_owned_registration(dataset_name, owner_id)
+    reg = (pinned_registration if pinned_registration is not None
+           else await fetch_owned_registration(dataset_name, owner_id))
     if reg is None:
         raise WorkspaceSeedError(f"Dataset '{dataset_name}' not found in registry.")
 

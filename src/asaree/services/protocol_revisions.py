@@ -15,6 +15,7 @@ from asaree.models.factorial_replicate_result import FactorialReplicateResult
 from asaree.models.protocol import Protocol
 from asaree.models.protocol_revision import ProtocolRevision
 from asaree.models.protocol_run import ProtocolRun
+from asaree.services.dataset_inputs import freeze_dataset_inputs, retain_inputs
 from asaree.services.dataset_row_csv import DatasetRowCsvError, read_row_source
 from asaree.services.dataset_row_inputs import DatasetRowInputError, resolve_dataset_row_plan
 from asaree.services.datasets import get_dataset_by_name
@@ -53,6 +54,10 @@ async def publish_protocol(
         if protocol.experiment_id is not None else None
     )
     design = await get_current_revision(db, experiment.id) if experiment is not None else None
+    dataset_inputs = await freeze_dataset_inputs(
+        db, protocol.graph, owner_id=owner_id or protocol.owner_id,
+        design_spec=experiment.design_spec if experiment is not None else None,
+    )
     plan = resolve_dataset_row_plan(protocol.graph)
     if plan is not None:
         if owner_id is None:
@@ -142,6 +147,7 @@ async def publish_protocol(
     published = await get_published_revision(db, protocol)
     unchanged = (
         is_draft_published(protocol, published) and await publication_matches_experiment(db, protocol, published)
+        and published.dataset_inputs == dataset_inputs
     )
     if published is not None and unchanged:
         return published
@@ -186,11 +192,13 @@ async def publish_protocol(
             owner_id=owner_id or protocol.owner_id,
         ),
         experiment_snapshot=experiment_settings(experiment) if experiment is not None else None,
+        dataset_inputs=dataset_inputs,
         design_revision_id=design.id if design is not None else None,
         published_at=datetime.now(UTC),
     )
     db.add(revision)
     await db.flush()
+    retain_inputs(db, dataset_inputs, publication_id=revision.id)
     protocol.published_revision_id = revision.id
     await db.flush()
     # A published canvas creates a new definition of "current". Preserve any

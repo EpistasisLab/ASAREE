@@ -494,6 +494,22 @@ async def open_workspace(
     # (protocol_execution._resolve_node_dataset), so a run that never
     # calls this tool still lands in exactly the same on-disk state.
     try:
+        pinned_registration = None
+        pinned_inputs = ambient_value_from_ctx("dataset_inputs", ctx)
+        if pinned_inputs is not None:
+            from asaree.models.database import get_session
+            from asaree.services.dataset_inputs import resolve_pinned_registration
+
+            bound_workspace = resolve_workspace_id_from_ctx("", ctx)
+            if workspace_id != bound_workspace:
+                raise WorkspaceSeedError("Pinned inputs cannot be opened outside their attempt workspace.")
+            pin = next((pin for pin in pinned_inputs if pin["dataset_name"] == resolved_name), None)
+            if pin is None:
+                raise WorkspaceSeedError("Dataset has no pinned input for this Agent.")
+            if target_column and target_column != pin["target_column"]:
+                raise WorkspaceSeedError("target_column differs from the pinned input.")
+            async with get_session() as db:
+                pinned_registration = await resolve_pinned_registration(db, pin, owner_id)
         seeded = await seed_cell_workspace(
             workspace_id=workspace_id,
             dataset_name=resolved_name,
@@ -504,8 +520,9 @@ async def open_workspace(
             # Workspace.open absorbs this back into an existing single-slot
             # workspace when the seed matches, so the common case is unchanged.
             slot=slot or dataset_slot(resolved_name),
+            **({"pinned_registration": pinned_registration} if pinned_inputs is not None else {}),
         )
-    except WorkspaceSeedError as e:
+    except (WorkspaceSeedError, ValueError) as e:
         return json.dumps({"error": str(e), "workspace_id": workspace_id})
 
     ws, resolved_target = seeded.workspace, seeded.target_column

@@ -106,6 +106,7 @@ class ProtocolRun(Base, TimestampMixin):
         index=True,
     )
     dataset_row: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    dataset_inputs: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
     # Which design revision this run's cell belonged to when it was planned
     # (null for a plain graph run, same as replicate_label). Without it, a result
     # arriving after the user regenerated the design would be written against
@@ -141,6 +142,10 @@ class ProtocolRun(Base, TimestampMixin):
     # exists to observe a flag while they wait in the queue. Running work polls
     # this flag and safely stops itself, retaining completed work.
     cancel_requested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    @property
+    def dataset_input_provenance(self) -> str:
+        return "pinned" if self.dataset_inputs is not None else "legacy.unknown"
 
 
 __all__ = ["ProtocolRun"]

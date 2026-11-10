@@ -137,6 +137,18 @@ async def create_protocol_run(
     reference_values: dict[str, Any] = {}
     protocol = await db.get(Protocol, protocol_id)
     publication = await db.get(ProtocolRevision, protocol_revision_id) if protocol_revision_id else None
+    from asaree.services.dataset_inputs import resolve_attempt_inputs, retain_inputs
+    from asaree.services.protocol_execution import apply_factor_bindings
+
+    if publication is not None and (
+        publication.protocol_id != protocol_id or protocol is None or protocol.owner_id != owner_id
+    ):
+        raise ValueError("invalid_publication_scope")
+    dataset_inputs = resolve_attempt_inputs(
+        publication.dataset_inputs if publication is not None else None,
+        apply_factor_bindings(publication.graph, factor_values or {}) if publication is not None else {},
+        dataset_row=dataset_row, target_node_id=target_node_id,
+    )
     if protocol is not None and protocol.experiment_id is not None:
         experiment = await db.get(ResearchExperiment, protocol.experiment_id)
         if experiment is not None:
@@ -172,6 +184,7 @@ async def create_protocol_run(
         replicate_result_id=None if snapshot_only_row else replicate_result_id,
         row_result_id=row_result_id,
         dataset_row=dataset_row,
+        dataset_inputs=dataset_inputs,
         target_node_id=target_node_id,
         design_revision_id=design_revision_id,
         protocol_revision_id=protocol_revision_id,
@@ -204,6 +217,7 @@ async def create_protocol_run(
     )
     db.add(run)
     await db.flush()
+    retain_inputs(db, dataset_inputs, run_id=run.id)
     if row_slot is not None:
         row_slot.run_id = run.id
         row_slot.workspace_id = None

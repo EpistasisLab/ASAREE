@@ -227,7 +227,7 @@ async def evidence(
     run_id: uuid.UUID,
     db: DbSession,
     scope: Scope,
-    document: Annotated[str, Query(pattern="^(attempt_result|node_runs|conversation|dataset_row)$")],
+    document: Annotated[str, Query(pattern="^(attempt_result|node_runs|conversation|dataset_row|dataset_inputs)$")],
     offset: Annotated[int, Query(ge=0)] = 0,
     limit: Annotated[int, Query(ge=1, le=16384)] = 16384,
 ) -> dict[str, Any]:

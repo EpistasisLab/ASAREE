@@ -1690,6 +1690,13 @@ def _ambient_meta_for(
     )
     if dataset_names:
         meta["dataset_names"] = dataset_names
+    if "_dataset_input_scope" in graph:
+        meta["dataset_input_scope"] = graph["_dataset_input_scope"]
+        meta["dataset_inputs"] = [
+            pin for pin in graph.get("_attempt_dataset_inputs", {}).get("inputs", [])
+            if any(binding["agent_node_id"] == node_id and binding["dataset_node_id"] == pin["dataset_node_id"]
+                   for binding in graph.get("_attempt_dataset_inputs", {}).get("bindings", []))
+        ]
     if workspace_id:
         locators = slot_data_locators(workspace_id)
         if slots:
@@ -1827,8 +1834,11 @@ async def _resolve_node_dataset(
 
     seeded: list[tuple[str, str]] = []
     for name in names:
-        reg = await fetch_owned_registration(name, owner_id)
+        pinned = graph.get("_pinned_registrations")
+        reg = pinned.get(name) if pinned is not None else await fetch_owned_registration(name, owner_id)
         if reg is None:
+            if pinned is not None:
+                raise ProtocolValidationError("dataset_input.unpinned_selection: dataset has no resolved pin")
             logger.warning(
                 "workspace_preseed_failed", extra={"node_id": node_id, "dataset": name, "error": "not found"}
             )
@@ -1882,8 +1892,11 @@ async def _resolve_node_dataset(
                 owner_id=owner_id,
                 slot=slot,
                 stage_plan=stage_plan,
+                **({"pinned_registration": reg} if pinned is not None else {}),
             )
         except WorkspaceSeedError as e:
+            if pinned is not None:
+                raise ProtocolValidationError(f"Pinned dataset workspace failed: {e}") from e
             logger.warning(
                 "workspace_preseed_failed",
                 extra={"workspace_id": workspace_id, "node_id": node_id, "dataset": name, "error": str(e)},
@@ -5534,6 +5547,9 @@ async def _run_single_node(
     # synthetic per-run label (see _effective_cell_label).
     effective_cell_label = _effective_cell_label(None, protocol_run_id)
     workspace_id = _compute_workspace_id(experiment_id, None, protocol_run_id)
+    if "_dataset_input_scope" in graph:
+        from asaree.services.dataset_inputs import attempt_workspace_id
+        workspace_id = attempt_workspace_id(experiment_id, protocol_run_id)
     if dataset_row is not None:
         workspace_id = row_attempt_workspace_id(protocol_run_id)
     async with get_session() as db:
@@ -5690,6 +5706,23 @@ async def run_protocol(protocol_run_id: uuid.UUID) -> None:
             if pinned is not None and pinned.design_spec is not None:
                 pinned_spec = pinned.design_spec
 
+        from asaree.services.dataset_inputs import (
+            DatasetInputError,
+            attempt_workspace_id,
+            prepare_attempt_graph,
+            validate_workspace_inputs,
+        )
+        try:
+            graph = await prepare_attempt_graph(db, run, graph)
+            if run.dataset_inputs is not None:
+                workspace = row_attempt_workspace_id(run.id) if row_context_mode else attempt_workspace_id(
+                    experiment_id, run.id
+                )
+                validate_workspace_inputs(workspace, run.dataset_inputs, graph["_dataset_input_scope"])
+        except (DatasetInputError, ValueError, OSError) as exc:
+            await set_status(db, protocol_run_id, status="failed", error=f"Dataset input validation failed: {exc}")
+            return
+
         row_source = None
         row_plan = None
         if row_context_mode:
@@ -5729,7 +5762,10 @@ async def run_protocol(protocol_run_id: uuid.UUID) -> None:
                         "dataset_id": row_plan["driver_dataset_id"],
                         "dataset_name": str(config.get("dataset_name") or registration.name),
                         "row_index": dataset_row["row_index"],
-                        "target_column": registration.target_column or "",
+                        "target_column": next((
+                            pin["target_column"] for pin in (run.dataset_inputs or {}).get("inputs", [])
+                            if pin["dataset_id"] == row_plan["driver_dataset_id"]
+                        ), ""),
                     })
                 row_plan["bindings"] = bindings
                 if row_mode:
@@ -5783,6 +5819,8 @@ async def run_protocol(protocol_run_id: uuid.UUID) -> None:
 
     effective_cell_label = _effective_cell_label(replicate_label, protocol_run_id)
     workspace_id = _compute_workspace_id(experiment_id, replicate_label, protocol_run_id)
+    if "_dataset_input_scope" in graph:
+        workspace_id = attempt_workspace_id(experiment_id, protocol_run_id)
     if row_context_mode:
         # Every workspace-backed write in a row attempt (including direct
         # tool steps and Script materialization) belongs to this attempt's

@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import shutil
+import threading
 import uuid
 from copy import deepcopy
 from datetime import UTC, datetime
@@ -35,11 +36,53 @@ def identity(job: PackageImport, kind: str, source: Any) -> uuid.UUID:
     return uuid.uuid5(job.id, f'{kind}:{source}')
 
 
+def copy_knowledge(source: Path, destination: Path, stopping: threading.Event) -> None:
+    """Copy exact bytes with cooperative cancellation and atomic publication."""
+    from asaree.services.package_validation import digest
+
+    temporary = destination.with_suffix('.preparing')
+    shutil.rmtree(temporary, ignore_errors=True)
+    temporary.mkdir(parents=True, mode=0o700)
+    try:
+        for file in source.rglob('*'):
+            if stopping.is_set():
+                raise PackageError('Import cancelled')
+            if not file.is_file():
+                continue
+            relative = file.relative_to(source)
+            target = temporary / relative
+            target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+            with file.open('rb') as input_file, target.open('xb') as output:
+                target.chmod(0o600)
+                while block := input_file.read(1024 * 1024):
+                    if stopping.is_set():
+                        raise PackageError('Import cancelled')
+                    output.write(block)
+            if destination.exists() and (not (destination / relative).is_file()
+                                        or digest(destination / relative) != digest(file)):
+                raise PackageError('Staged knowledge bytes changed; refusing replacement')
+        if destination.exists():
+            for file in destination.rglob('*'):
+                if file.is_file() and not (temporary / file.relative_to(destination)).is_file():
+                    raise PackageError('Staged knowledge has unexpected files')
+        else:
+            temporary.replace(destination)
+    finally:
+        shutil.rmtree(temporary, ignore_errors=True)
+
+
 class Reconstruction:
-    def __init__(self, db: AsyncSession, job: PackageImport, root: Path, limits: Limits):
+    def __init__(self, db: AsyncSession, job: PackageImport, root: Path, limits: Limits,
+                 *, progress: Any = None, io: Any = None, stopping: threading.Event | None = None):
         self.db, self.job, self.root, self.limits = db, job, root, limits
+        self.progress, self.io = progress, io or asyncio.to_thread
+        self.stopping = stopping or threading.Event()
         self.maps: dict[tuple[str, str], str] = {}
         self.names: dict[tuple[str, str], str] = {}
+
+    async def report(self, phase: str, scanned: int) -> None:
+        if self.progress is not None and scanned % 25 == 0:
+            await self.progress(phase, scanned=scanned)
 
     def map(self, kind: str, source_id: Any, **provenance: Any) -> uuid.UUID:
         key = kind, str(source_id)
@@ -204,12 +247,8 @@ class Reconstruction:
             if knowledge.is_dir():
                 self.map('knowledge', source['id'], directory=knowledge.relative_to(self.root).as_posix())
                 destination = managed_storage.roots()['bundles'] / str(self.job.owner_id) / 'imports' / str(local)
-                if not destination.exists():
-                    destination.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-                    temporary = destination.with_suffix('.preparing')
-                    await asyncio.to_thread(shutil.rmtree, temporary, ignore_errors=True)
-                    await asyncio.to_thread(shutil.copytree, knowledge, temporary)
-                    temporary.replace(destination)
+                destination.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+                await self.io(copy_knowledge, knowledge, destination, self.stopping)
                 command = command_for_bundle(destination, managed=True)
                 name = server_name_for(self.job.owner_id, destination)
             self.names['mcp', source['id']] = name
@@ -332,7 +371,8 @@ class Reconstruction:
             self.db.add(ExperimentDesignRevision(id=design_id, experiment_id=experiment_id, revision=1,
                                                  design_spec=settings.get('design_spec')))
             await self.db.flush()
-            for source in records(self.root / 'design/cells.jsonl', self.limits):
+            for scanned, source in enumerate(records(self.root / 'design/cells.jsonl', self.limits)):
+                await self.report('restoring_cells', scanned)
                 cell_id = self.map('cell', source['id'], source=source)
                 factor_values = deepcopy(source.get('factor_values'))
                 original_factors = {factor['name']: factor for factor in
@@ -349,7 +389,8 @@ class Reconstruction:
                     cell_label=source['cell_label'], factor_values=factor_values))
                 await self.db.flush()
             await self.db.flush()
-            for source in records(self.root / 'design/replicates.jsonl', self.limits):
+            for scanned, source in enumerate(records(self.root / 'design/replicates.jsonl', self.limits)):
+                await self.report('restoring_replicates', scanned)
                 cell = identity(self.job, 'cell', source['cell_id'])
                 if await self.db.get(FactorialCell, cell) is None:
                     raise PackageError('Replicate references unknown cell')
@@ -366,7 +407,8 @@ class Reconstruction:
             source = document(path, self.limits)
             self.map('historical_row', source['id'], source=source)
             await self.db.flush()
-        for record in records(self.root / 'files.jsonl', self.limits):
+        for scanned, record in enumerate(records(self.root / 'files.jsonl', self.limits)):
+            await self.report('recording_provenance', scanned)
             if record['path'].startswith('results/artifacts/'):
                 self.map('historical_artifact', record['path'], source=record)
                 await self.db.flush()

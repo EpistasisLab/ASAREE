@@ -8,7 +8,7 @@ export interface PackageImport {
   created_at: string
   expires_at: string
   error: string | null
-  progress: { phase?: string; bytes?: number }
+  progress: { phase?: string; bytes?: number; scanned?: number }
   preflight: {
     manifest?: {
       schema_version: number

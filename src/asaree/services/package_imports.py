@@ -165,8 +165,15 @@ async def execute_package_import(_ctx: dict[str, Any], job_id: str) -> None:
             for path in (payload, root / 'payload-verified'):
                 await asyncio.to_thread(shutil.rmtree, path, ignore_errors=True)
             await joined(inspect, archive, payload, limits(), stopping, stopping=stopping, identifier=identifier)
+            async def progress(phase: str, **counts: Any) -> None:
+                await checkpoint(identifier, phase, **counts)
+
+            async def io(operation: Any, *args: Any) -> Any:
+                return await joined(operation, *args, stopping=stopping, identifier=identifier)
+
             async with system_session(reason='reconstruct user-owned portable package without execution') as motoro:
-                reconstruction = Reconstruction(db, job, payload, limits())
+                reconstruction = Reconstruction(db, job, payload, limits(), progress=progress,
+                                                io=io, stopping=stopping)
                 experiment_id = await reconstruction.activate(motoro)
                 await checkpoint(identifier, 'activating', experiment_id=str(experiment_id))
                 # Motoro commits first. On a crash before ASAREE commit, retry

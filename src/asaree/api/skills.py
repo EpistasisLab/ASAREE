@@ -48,6 +48,7 @@ from sqlalchemy.exc import IntegrityError
 
 from asaree.deps import CurrentUser
 from asaree.services import skill_sources
+from asaree.services.import_visibility import active_resources, resource_active
 from asaree.services.skill_sources import SkillSourceError
 
 router = APIRouter(prefix="/skills", tags=["skills"])
@@ -189,7 +190,7 @@ async def replace_skill_folder_endpoint(
     ``SKILL.md`` no longer mentions.
     """
     existing = await skill_service.get_skill(skill_id)
-    if existing is None or existing.owner_id != user.id:
+    if existing is None or existing.owner_id != user.id or not await resource_active(skill_id):
         raise HTTPException(status_code=404, detail="No such skill")
     payload = await _folder_payload(files)
     try:
@@ -283,6 +284,7 @@ async def create_skill_from_url_endpoint(body: SkillUrlRequest, user: CurrentUse
 @router.get("", response_model=SkillListResponse)
 async def list_skills_endpoint(user: CurrentUser, limit: int = 100) -> SkillListResponse:
     skills = await skill_service.list_skills(owner_id=user.id, limit=limit)
+    skills = await active_resources(skills)
     items = [SkillResponse.model_validate(s) for s in skills]
     return SkillListResponse(items=items, total=len(items))
 
@@ -290,7 +292,7 @@ async def list_skills_endpoint(user: CurrentUser, limit: int = 100) -> SkillList
 @router.get("/{skill_id}", response_model=SkillResponse)
 async def get_skill_endpoint(skill_id: uuid.UUID, user: CurrentUser) -> SkillResponse:
     skill = await skill_service.get_skill(skill_id)
-    if skill is None or not _readable(skill, user):
+    if skill is None or not _readable(skill, user) or not await resource_active(skill_id):
         raise HTTPException(status_code=404, detail="No such skill")
     return SkillResponse.model_validate(skill)
 
@@ -304,7 +306,7 @@ async def get_skill_markdown_endpoint(skill_id: uuid.UUID, user: CurrentUser) ->
     for it.
     """
     skill = await skill_service.get_skill(skill_id)
-    if skill is None or not _readable(skill, user):
+    if skill is None or not _readable(skill, user) or not await resource_active(skill_id):
         raise HTTPException(status_code=404, detail="No such skill")
     return {"markdown": skill_service.render_skill_md(skill)}
 
@@ -312,7 +314,7 @@ async def get_skill_markdown_endpoint(skill_id: uuid.UUID, user: CurrentUser) ->
 @router.patch("/{skill_id}", response_model=SkillResponse)
 async def update_skill_endpoint(skill_id: uuid.UUID, body: SkillUpdate, user: CurrentUser) -> SkillResponse:
     existing = await skill_service.get_skill(skill_id)
-    if existing is None or existing.owner_id != user.id:
+    if existing is None or existing.owner_id != user.id or not await resource_active(skill_id):
         raise HTTPException(status_code=404, detail="No such skill")
     try:
         skill = await skill_service.update_skill(skill_id, name=body.name, description=body.description, body=body.body)
@@ -330,7 +332,7 @@ async def replace_skill_markdown_endpoint(
 ) -> SkillResponse:
     """Replace a skill's contents from a re-uploaded ``SKILL.md``."""
     existing = await skill_service.get_skill(skill_id)
-    if existing is None or existing.owner_id != user.id:
+    if existing is None or existing.owner_id != user.id or not await resource_active(skill_id):
         raise HTTPException(status_code=404, detail="No such skill")
     try:
         skill = await skill_service.update_skill_from_markdown(skill_id, _decode(await file.read()))
@@ -343,6 +345,6 @@ async def replace_skill_markdown_endpoint(
 @router.delete("/{skill_id}", status_code=204)
 async def delete_skill_endpoint(skill_id: uuid.UUID, user: CurrentUser) -> None:
     existing = await skill_service.get_skill(skill_id)
-    if existing is None or existing.owner_id != user.id:
+    if existing is None or existing.owner_id != user.id or not await resource_active(skill_id):
         raise HTTPException(status_code=404, detail="No such skill")
     await skill_service.delete_skill(skill_id)

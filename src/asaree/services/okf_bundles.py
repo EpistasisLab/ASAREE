@@ -409,6 +409,8 @@ async def list_bundles(owner_id: uuid.UUID) -> list[Any]:
     shared to include.
     """
     servers = await mcp_service.list_servers(owner_id=owner_id)
+    from asaree.services.import_visibility import active_resources
+    servers = await active_resources(servers)
     servers = [server for server in servers
                if not (server.error_message or '').startswith('Import staging:')]
     return [s for s in servers if is_bundle_server(s) and s.owner_id == owner_id]

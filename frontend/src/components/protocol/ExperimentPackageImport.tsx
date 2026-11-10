@@ -14,6 +14,9 @@ export function ExperimentPackageImport({ experimentId }: { experimentId?: strin
   const [offset, setOffset] = useState(0)
   const [acknowledged, setAcknowledged] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [preview, setPreview] = useState<{ importId: string; path: string; text: string } | null>(null)
+  const selectedRef = useRef(selected)
+  selectedRef.current = selected
   const uploadController = useRef<AbortController | null>(null)
   const list = useQuery({ queryKey: ['package-imports', experimentId], queryFn: () => packageImportsApi.list(experimentId),
     refetchInterval: 3000 })
@@ -51,7 +54,16 @@ export function ExperimentPackageImport({ experimentId }: { experimentId?: strin
     }
     catch (cause) { setError(String(cause)) }
   }
-  const select = (item: PackageImport) => { setSelected(item.id); setOffset(0); setAcknowledged(false); setError(null) }
+  const inspectFile = async (id: string, path: string) => {
+    try {
+      const blob = await packageImportsApi.source(id, path)
+      const text = await blob.text()
+      if (selectedRef.current === id) setPreview({ importId: id, path, text })
+    } catch (cause) { if (selectedRef.current === id) setError(String(cause)) }
+  }
+  const select = (item: PackageImport) => {
+    setSelected(item.id); setOffset(0); setAcknowledged(false); setError(null); setPreview(null)
+  }
 
   return <Card>
     <CardHeader><CardTitle>{experimentId ? 'Imported source evidence' : 'Import experiment package'}</CardTitle></CardHeader>
@@ -69,7 +81,7 @@ export function ExperimentPackageImport({ experimentId }: { experimentId?: strin
       </Button>)}</div>
       {(error || job.error || list.error) && <p role="alert" className="text-destructive">{error ?? String(job.error ?? list.error)}</p>}
       {current && <div className="space-y-3">
-        <p role="status">{current.status} · {current.progress.phase}</p>
+        <p role="status">{current.status} · {current.progress.phase}{current.progress.scanned !== undefined ? ` · ${current.progress.scanned} processed` : ''}</p>
         {current.error && <p role="alert" className="text-destructive">{current.error}</p>}
         {current.preflight.manifest && <>
           <p>Source version {current.preflight.manifest.publication.version} · schema {current.preflight.manifest.schema_version} · {current.preflight.manifest.results_included ? 'Historical results included' : 'No historical results'}</p>
@@ -82,10 +94,18 @@ export function ExperimentPackageImport({ experimentId }: { experimentId?: strin
           <Button variant="outline" onClick={() => void download(current.id)}>Download original source package</Button>
           <details><summary className="cursor-pointer">Inspect source files and historical evidence</summary>
             <div className="overflow-x-auto"><table className="w-full text-left text-xs"><thead><tr><th>File</th><th>Bytes</th><th>Provenance</th><th /></tr></thead>
-              <tbody>{files.data?.items.map((file) => <tr key={file.path}><td className="break-all font-mono" title={file.sha256}>{file.path}</td><td>{file.bytes}</td><td>{file.provenance}</td><td><Button variant="ghost" onClick={() => void download(current.id, file.path)}>Download</Button></td></tr>)}</tbody></table></div>
+              <tbody>{files.data?.items.map((file) => <tr key={file.path}><td className="break-all font-mono" title={file.sha256}>{file.path}</td><td>{file.bytes}</td><td>{file.provenance}</td><td>
+                {file.path.endsWith('.json') && file.bytes <= 16 * 1024 * 1024 && <Button variant="ghost" onClick={() => void inspectFile(current.id, file.path)}>Inspect JSON</Button>}
+                <Button variant="ghost" onClick={() => void download(current.id, file.path)}>Download</Button>
+              </td></tr>)}</tbody></table></div>
             <Button variant="ghost" disabled={offset === 0} onClick={() => setOffset(Math.max(0, offset - 50))}>Previous</Button>
             <Button variant="ghost" disabled={files.data?.next_offset == null} onClick={() => setOffset(files.data!.next_offset!)}>Next</Button>
           </details>
+          {preview?.importId === current.id && <div className="space-y-2">
+            <p className="break-all font-mono text-xs">Immutable source evidence: {preview.path}</p>
+            <pre className="max-h-80 overflow-auto rounded border p-3 text-xs">{preview.text}</pre>
+            <Button variant="ghost" onClick={() => setPreview(null)}>Close source inspection</Button>
+          </div>}
         </>}
         <div className="flex flex-wrap gap-2">
           {current.status === 'awaiting_confirmation' && <Button disabled={action.isPending} onClick={() => action.mutate({ id: current.id, command: 'confirm' })}>Confirm import into a new experiment</Button>}

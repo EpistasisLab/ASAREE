@@ -44,7 +44,10 @@ def payload(job: PackageImport) -> dict[str, Any]:
 async def owned(db: DbSession, identifier: uuid.UUID, owner: uuid.UUID, *, lock: bool = False) -> PackageImport:
     query = select(PackageImport).where(PackageImport.id == identifier, PackageImport.owner_id == owner)
     if lock:
-        query = query.with_for_update()
+        # Import mappings hold FK key-share locks while staging. State changes
+        # never alter the request key, so NO KEY UPDATE permits cancellation
+        # without waiting for the entire staging transaction to finish.
+        query = query.with_for_update(key_share=True)
     job = await db.scalar(query.execution_options(populate_existing=True))
     if job is None:
         raise HTTPException(404, 'Import not found')

@@ -77,6 +77,15 @@ def legacy_connection(path: Path) -> closing[sqlite3.Connection]:
     return closing(connection)
 
 
+def legacy_row(data: Any) -> tuple[str, ...]:
+    if not isinstance(data, str):
+        raise ValueError("Invalid SQLite row payload type")
+    values = json.loads(data)
+    if not isinstance(values, list) or any(not isinstance(value, str) for value in values):
+        raise ValueError("Invalid SQLite row payload; expected an array of strings")
+    return tuple(values)
+
+
 async def verify_source(
     db: AsyncSession, dataset: RegisteredDataset, files: list[JsonDict], *, postgres: bool,
 ) -> JsonDict:
@@ -113,7 +122,7 @@ async def verify_source(
                         for cursor in cursors:
                             legacy = cursor.fetchmany(BATCH_SIZE)
                             if len(legacy) != len(batch) or any(
-                                index != count + i or tuple(json.loads(data)) != batch[i]
+                                index != count + i or legacy_row(data) != batch[i]
                                 for i, (index, data) in enumerate(legacy)
                             ):
                                 raise ValueError("SQLite row positions/values disagree with original")

@@ -120,14 +120,18 @@ async def test_rebuild_compares_all_rows_and_migrates_active_job_progress(result
     assert not report['problems'] and legacy.with_suffix('.sqlite.retired').exists()
 
 
-async def test_inconsistent_sqlite_is_reported_without_retirement(results_db, tmp_path):
+@pytest.mark.parametrize('rows', [
+    [['changed', 'a'], ['002', 'b']],
+    [{'001': None, 'a': None}, {'002': None, 'b': None}],
+])
+async def test_inconsistent_sqlite_is_reported_without_retirement(results_db, tmp_path, rows):
     db, _, _, user = results_db
     dataset, _ = await catalog(db, user, tmp_path)
-    legacy = legacy_index(tmp_path, rows=[['changed', 'a'], ['002', 'b']])
+    legacy = legacy_index(tmp_path, rows=rows)
     entries = migration.inventory_files([tmp_path])
     entries = [entry for entry in entries if entry['path'] == str(legacy)]
     result = await migration.verify_source(db, dataset, entries, postgres=True)
-    assert result['status'] == 'unavailable' and 'values disagree' in result['error']
+    assert result['status'] == 'unavailable' and 'SQLite row' in result['error']
     assert legacy.exists()
 
 

@@ -7,6 +7,7 @@ import csv
 import io
 import json
 import logging
+import shutil
 import time
 import uuid
 from collections.abc import Awaitable, Callable
@@ -34,10 +35,10 @@ logger = logging.getLogger(__name__)
 RETENTION = timedelta(hours=24)
 
 
-def export_path(identifier: uuid.UUID, *, metadata: bool = False) -> Path:
+def export_path(identifier: uuid.UUID, *, metadata: bool = False, package: bool = False) -> Path:
     root = Path(get_settings().result_export_dir)
     root.mkdir(parents=True, exist_ok=True, mode=0o700)
-    return root / f"{identifier}.{'schema.json' if metadata else 'csv'}"
+    return root / f"{identifier}.{'schema.json' if metadata else 'tar.gz' if package else 'csv'}"
 
 
 def download_token(job: ResultJob) -> str:
@@ -93,8 +94,12 @@ async def relay_exports(_ctx: dict[str, Any]) -> None:
                 export_path(identifier),
                 export_path(identifier, metadata=True),
                 export_path(identifier).with_suffix(".part"),
+                export_path(identifier, package=True),
+                export_path(identifier, package=True).with_suffix(".part"),
             ):
                 await asyncio.to_thread(path.unlink, missing_ok=True)
+            for staging in export_path(identifier).parent.glob(f".{identifier}-package-*"):
+                await asyncio.to_thread(shutil.rmtree, staging, ignore_errors=True)
         if expired:
             await db.execute(update(ResultJob).where(ResultJob.id.in_(expired)).values(status="expired"))
     pool = await _get_pool()
@@ -226,6 +231,13 @@ async def execute_result_export(_ctx: dict[str, Any], job_id: str) -> None:
             job = await db.get(ResultJob, identifier)
             if job is None or job.kind != "export" or job.status not in ("pending", "running"):
                 return
+            if job.params.get("selection", {}).get("format") == "experiment_package":
+                from asaree.services.experiment_packages import execute_package
+
+                destination = export_path(identifier, package=True)
+                temporary = destination.with_suffix(".part")
+                await execute_package(db, job, temporary, destination)
+                return
             scope = await job_scope(db, job)
             async with get_session() as status_db:
                 await status_db.execute(
@@ -270,7 +282,7 @@ async def execute_result_export(_ctx: dict[str, Any], job_id: str) -> None:
                     .where(ResultJob.id == identifier, ResultJob.status != "cancelled")
                     .values(status="completed", progress={"bytes": written}, error=None)
                 )
-    except Exception:
+    except (Exception, asyncio.CancelledError) as exc:
         logger.exception("result_export_failed", extra={"job_id": job_id})
         async with get_session() as db:
             await db.execute(
@@ -279,3 +291,5 @@ async def execute_result_export(_ctx: dict[str, Any], job_id: str) -> None:
                 .values(status="failed", error="Export failed. Request a new export to retry.")
             )
         await asyncio.to_thread(temporary.unlink, missing_ok=True)
+        if isinstance(exc, asyncio.CancelledError):
+            raise

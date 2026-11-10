@@ -238,7 +238,7 @@ export const experimentsApi = {
     request<{ items: { id: string; sequence: number; iteration: number | null; phase: string; preview: string | null }[]; next_after: number | null }>(`/experiments/${id}/execution-results/attempts/${runId}/nodes/${encodeURIComponent(nodeId)}/trace${resultPageQuery(scope, { after })}`, { signal }),
   getExecutionStep: (id: string, runId: string, nodeId: string, stepId: string, scope: ResultsScope, offset: number, signal?: AbortSignal) =>
     request<{ text: string; next_offset: number | null }>(`/experiments/${id}/execution-results/attempts/${runId}/nodes/${encodeURIComponent(nodeId)}/trace/${stepId}${resultPageQuery(scope, { offset })}`, { signal }),
-  createResultJob: (id: string, scope: ResultsScope, command: { kind: ResultJob['kind']; request_key: string; cell_id?: string; replicate_ids?: string[]; row_indices?: number[]; rerun_slot_ids?: string[]; rerun_completed?: boolean }, signal?: AbortSignal) =>
+  createResultJob: (id: string, scope: ResultsScope, command: { kind: ResultJob['kind']; request_key: string; cell_id?: string; replicate_ids?: string[]; row_indices?: number[]; rerun_slot_ids?: string[]; rerun_completed?: boolean; format?: 'analysis_csv' | 'experiment_package'; include_results?: boolean }, signal?: AbortSignal) =>
     request<ResultJob>(`/experiments/${id}/execution-results/jobs${scopeQuery(scope)}`, { method: 'POST', body: command, signal }),
   getResultJob: (id: string, jobId: string, signal?: AbortSignal) =>
     request<ResultJob>(`/experiments/${id}/execution-results/jobs/${jobId}`, { signal }),

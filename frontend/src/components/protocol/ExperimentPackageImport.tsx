@@ -5,6 +5,7 @@ import { packageImportsApi } from '@/api/client'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import type { PackageImport } from '@/types/packageImports'
+import { newRequestKey } from '@/lib/requestKey'
 import { FileDropInput } from './FileDropInput'
 
 /** Persistent imports can be resumed after navigation or a browser restart. */
@@ -44,7 +45,7 @@ export function ExperimentPackageImport({ experimentId }: { experimentId?: strin
     setUploading(true)
     try {
       const created = current && ['uploading', 'failed'].includes(current.status) && !current.preflight.manifest
-        ? current : await packageImportsApi.create(crypto.randomUUID())
+        ? current : await packageImportsApi.create(newRequestKey())
       setSelected(created.id)
       setOffset(0)
       const controller = new AbortController()
@@ -82,7 +83,7 @@ export function ExperimentPackageImport({ experimentId }: { experimentId?: strin
     <CardContent className="space-y-4">
       {!experimentId && <>
         <p className="text-sm text-muted-foreground">Upload a published experiment package. Review its contents before creating a new editable experiment. Import never runs packaged scripts or tools.</p>
-        <FileDropInput id={fileInputId} accept=".tar.gz,.tgz" ariaLabel="Experiment package"
+        <FileDropInput id={fileInputId} accept=".tar.gz,.tgz,.gz,application/gzip,application/x-gzip" ariaLabel="Experiment package"
           file={file} disabled={uploading} placeholder="Drop a .tar.gz or .tgz package or click to browse"
           onChange={(picked) => {
             if (picked) { setFile(picked); void upload(picked) }

@@ -169,3 +169,77 @@ async def test_legacy_split_upgrade_rerun_and_rollback(
         async with admin.connect() as conn:
             await conn.execute(text(f'DROP DATABASE IF EXISTS "{db_name}"'))
         await admin.dispose()
+
+
+@pytest.mark.skipif(
+    not os.environ.get("ASAREE_MIGRATIONS_TEST_DATABASE_URL"), reason="Migration PostgreSQL not configured"
+)
+async def test_migrated_split_can_be_published_and_executed_without_rewriting_provenance(tmp_path, monkeypatch):
+    import pandas as pd
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+    from asaree import config
+    from asaree.migrations import upgrade
+    from asaree.models.dataset import RegisteredDataset
+    from asaree.services import protocol_execution as execution
+    from asaree.services.dataset_inputs import attempt_workspace_id, prepare_attempt_graph
+    from asaree.services.dataset_workspaces import head_data_locator
+    from asaree.services.protocol_revisions import publish_protocol
+    from asaree.services.protocol_runs import create_protocol_run
+    from asaree.services.protocols import create_protocol
+
+    admin_url = os.environ["ASAREE_MIGRATIONS_TEST_DATABASE_URL"]
+    db_name = f"split_publication_{uuid.uuid4().hex}"
+    url = f"{admin_url.rpartition('/')[0]}/{db_name}"
+    admin = create_async_engine(admin_url, isolation_level="AUTOCOMMIT")
+    engine = create_async_engine(url)
+    settings = config.AsareeSettings(_env_file=None, dataset_storage_dir=str(tmp_path))
+    monkeypatch.setattr(config, "_instance", settings)
+    monkeypatch.setattr("asaree_workspace_core.workspace.WORKSPACE_ROOT", str(tmp_path / "workspaces"))
+    dataset_id, owner_id = uuid.uuid4(), uuid.uuid4()
+    raw, train, test = (tmp_path / name for name in ("raw.csv", "train.parquet", "test.parquet"))
+    raw.write_bytes(b"x,y\n1,0\n2,1\n")
+    for path in (train, test):
+        pd.DataFrame({"x": [1, 2], "y": [0, 1]}).to_parquet(path)
+    try:
+        async with admin.connect() as connection:
+            await connection.execute(text(f'CREATE DATABASE "{db_name}"'))
+        await asyncio.to_thread(upgrade, url, "a4b5c6d7e8f0")
+        async with engine.begin() as connection:
+            await connection.execute(text("""INSERT INTO users (id, email, hashed_password, display_name)
+                VALUES (:id, 'migration@example.com', 'unused', 'Migration')"""), {"id": owner_id})
+            await connection.execute(text("""INSERT INTO registered_datasets
+                (id, owner_id, name, raw_path, train_path, test_path, target_column)
+                VALUES (:id, :owner, 'legacy', :raw, :train, :test, 'y')"""),
+                dict(id=dataset_id, owner=owner_id, raw=str(raw), train=str(train), test=str(test)))
+        await asyncio.to_thread(upgrade, url, "head")
+        async with AsyncSession(engine, expire_on_commit=False) as db:
+            dataset = await db.get(RegisteredDataset, dataset_id)
+            split = dataset.current_split
+            assert split.legacy and split.target_column is None
+            graph = {"nodes": [
+                {"id": "data", "type": "dataset", "data": {"config": {
+                    "dataset_id": str(dataset_id), "dataset_name": "legacy",
+                }}},
+                {"id": "agent", "type": "agent", "data": {}},
+            ], "edges": [{"source": "data", "target": "agent", "targetHandle": "dataset"}]}
+            protocol = await create_protocol(db, name="Migrated publication", owner_id=owner_id, graph=graph)
+            publication = await publish_protocol(db, protocol, owner_id=owner_id)
+            run = await create_protocol_run(db, protocol_id=protocol.id, owner_id=owner_id,
+                                            protocol_revision_id=publication.id)
+            dataset.target_column = "later"
+            await db.flush()
+            workspace = attempt_workspace_id(None, run.id)
+            for _ in range(2):
+                prepared = await prepare_attempt_graph(db, run, publication.graph)
+                opened = await execution._resolve_node_dataset(prepared, "agent", workspace, owner_id)
+                assert opened.seeded_names == ("legacy",)
+                assert head_data_locator(workspace)[1] == "y"
+            assert publication.dataset_inputs["inputs"][0]["target_column"] == "y"
+            await db.refresh(split)
+            assert split.legacy and split.target_column is None and split.method is None and split.seed is None
+    finally:
+        await engine.dispose()
+        async with admin.connect() as connection:
+            await connection.execute(text(f'DROP DATABASE IF EXISTS "{db_name}"'))
+        await admin.dispose()

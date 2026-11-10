@@ -124,6 +124,8 @@ class ProtocolRunResponse(BaseModel):
     replicate_result_id: uuid.UUID | None
     row_result_id: uuid.UUID | None = None
     dataset_row: dict[str, Any] | None = None
+    dataset_inputs: dict[str, Any] | None = Field(default=None, description="Null means unknown legacy provenance")
+    dataset_input_provenance: str = "legacy.unknown"
     factor_values: dict[str, Any] | None
     design_revision_id: uuid.UUID | None
     protocol_revision_id: uuid.UUID | None
@@ -264,6 +266,8 @@ class ProtocolRevisionResponse(BaseModel):
     run_count: int = 0
     result_count: int = 0
     graph: dict[str, Any]
+    dataset_inputs: dict[str, Any] | None = Field(default=None, description="Null means unknown legacy provenance")
+    dataset_input_provenance: str = "legacy.unknown"
     published_at: datetime
     experiment_snapshot: dict[str, Any] | None = None
     design_revision_id: uuid.UUID | None = None

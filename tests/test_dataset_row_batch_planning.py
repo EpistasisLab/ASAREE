@@ -37,6 +37,8 @@ async def row_batch(tmp_path: Path, request: pytest.FixtureRequest) -> AsyncIter
             user = await get_user_by_email(db, "test@test.com")
             assert user is not None, "run scripts/seed_row_test_users.py before row database tests"
             raw = b"question,answer\n" + b"prompt,response\n" * 30
+            if getattr(request, "param", None) == "two_parents":
+                raw = b"question,answer\nq1,a1\nq2,a2\nq3,a3\n"
             raw_path = tmp_path / "batch.csv"
             raw_path.write_bytes(raw)
             dataset_id = uuid.uuid4()
@@ -192,14 +194,6 @@ async def test_parent_selection_expands_every_source_row(row_batch, monkeypatch:
         queued.append(run_id)
 
     monkeypatch.setattr(protocol_api, "enqueue_protocol_run", enqueue)
-    dataset_id = uuid.UUID(
-        ctx["revision"].graph["nodes"][0]["data"]["config"]["dataset_id"]
-    )
-    dataset = await db.get(RegisteredDataset, dataset_id)
-    assert dataset is not None
-    raw = b"question,answer\nq1,a1\nq2,a2\nq3,a3\n"
-    Path(dataset.raw_path).write_bytes(raw)
-    dataset.raw_sha256 = hashlib.sha256(raw).hexdigest()
     result = await create_cell_runs_endpoint(
         ctx["protocol"].id,
         ctx["user"],

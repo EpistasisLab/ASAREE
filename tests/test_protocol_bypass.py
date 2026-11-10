@@ -34,6 +34,7 @@ async def test_inactive_agent_passes_output_through_and_records_bypass(monkeypat
         row_result_id=None,
         replicate_result_id=None,
         dataset_row=None,
+        dataset_inputs=None,
         attempt_result=None,
         protocol_revision_id=None,
         design_revision_id=None,

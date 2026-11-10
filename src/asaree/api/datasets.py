@@ -345,13 +345,19 @@ async def delete_dataset_endpoint(dataset_id: uuid.UUID, db: DbSession, user: Cu
     await _get_owned_dataset(db, dataset_id, user)
     try:
         await delete_dataset(db, dataset_id)
+    except DatasetValidationError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except IntegrityError as exc:
-        if _integrity_constraint_name(exc) != "fk_factorial_row_results_dataset":
+        if _integrity_constraint_name(exc) not in {"fk_factorial_row_results_dataset", "fk_pinned_input_dataset"}:
             raise
         await db.rollback()
         raise HTTPException(
             status_code=409,
-            detail="Dataset is referenced by stored row results and cannot be deleted",
+            detail=(
+                "Dataset is referenced by stored row results and cannot be deleted"
+                if _integrity_constraint_name(exc) == "fk_factorial_row_results_dataset"
+                else "Dataset is referenced by published inputs or stored attempts and cannot be deleted"
+            ),
         ) from exc
 
 

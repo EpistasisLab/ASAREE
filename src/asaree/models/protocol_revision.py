@@ -37,6 +37,8 @@ class ProtocolRevision(Base, TimestampMixin):
     # An experiment publication freezes the declaration alongside its canvas.
     # Null means a legacy canvas-only publication; never invent its settings.
     experiment_snapshot: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    # Null is unknown legacy provenance, never today's current selections.
+    dataset_inputs: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
     design_revision_id: Mapped[uuid.UUID | None] = mapped_column(
         # Defer the check so deleting an experiment can cascade through both
         # its designs and publications in either order. Direct deletion of a
@@ -46,6 +48,10 @@ class ProtocolRevision(Base, TimestampMixin):
         ), nullable=True
     )
     published_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    @property
+    def dataset_input_provenance(self) -> str:
+        return "pinned" if self.dataset_inputs is not None else "legacy.unknown"
 
 
 __all__ = ["ProtocolRevision"]

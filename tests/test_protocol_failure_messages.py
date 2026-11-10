@@ -17,7 +17,7 @@ async def test_failed_execution_preserves_node_label_and_underlying_error(monkey
     run = SimpleNamespace(
         id=run_id, protocol_id=uuid.uuid4(), owner_id=uuid.uuid4(),
         status='pending', row_result_id=None, replicate_result_id=None, dataset_row=None,
-        attempt_result=None, cancel_requested_at=None, protocol_revision_id=None,
+        attempt_result=None, dataset_inputs=None, cancel_requested_at=None, protocol_revision_id=None,
         design_revision_id=None, replicate_label=None, factor_values={}, target_node_id=None,
     )
     node = {'id': 'score', 'type': 'tool_step' if kind == 'tool_step' else 'agent',

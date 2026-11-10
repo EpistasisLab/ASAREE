@@ -54,10 +54,6 @@ async def publish_protocol(
         if protocol.experiment_id is not None else None
     )
     design = await get_current_revision(db, experiment.id) if experiment is not None else None
-    dataset_inputs = await freeze_dataset_inputs(
-        db, protocol.graph, owner_id=owner_id or protocol.owner_id,
-        design_spec=experiment.design_spec if experiment is not None else None,
-    )
     plan = resolve_dataset_row_plan(protocol.graph)
     if plan is not None:
         if owner_id is None:
@@ -144,6 +140,10 @@ async def publish_protocol(
             missing = [column for column in binding["columns"] if column not in source.columns]
             if missing:
                 raise DatasetRowCsvError("invalid_columns", "selected columns are not present in the registered CSV")
+    dataset_inputs = await freeze_dataset_inputs(
+        db, protocol.graph, owner_id=owner_id or protocol.owner_id,
+        design_spec=experiment.design_spec if experiment is not None else None,
+    )
     published = await get_published_revision(db, protocol)
     unchanged = (
         is_draft_published(protocol, published) and await publication_matches_experiment(db, protocol, published)

@@ -6,6 +6,7 @@ import hashlib
 import itertools
 import json
 import uuid
+from collections.abc import Iterator
 from copy import deepcopy
 from pathlib import Path
 from typing import Any
@@ -45,7 +46,9 @@ def _artifact_pin(artifact: DatasetArtifact | None) -> dict[str, Any] | None:
     return {"id": str(artifact.id), "sha256": artifact.sha256}
 
 
-def _dataset_edges(graph: dict[str, Any]):
+def _dataset_edges(
+    graph: dict[str, Any],
+) -> Iterator[tuple[dict[str, Any], dict[str, Any], dict[str, Any]]]:
     nodes = {node["id"]: node for node in graph.get("nodes") or []}
     for edge in graph.get("edges") or []:
         node = nodes.get(edge.get("source"), {})
@@ -100,7 +103,7 @@ async def freeze_dataset_inputs(
             seen.add(key)
             _verify_file(registration.raw_path, registration.raw_sha256)
             raw = _artifact_pin(registration.raw_artifact)
-            if raw and (raw["sha256"] != registration.raw_sha256
+            if raw and (raw["sha256"] != registration.raw_sha256 or registration.raw_artifact is None
                         or registration.raw_artifact.dataset_id != registration.id):
                 raise DatasetInputError("dataset_input.identity_mismatch: source artifact does not match registration")
             split = registration.current_split if mode == "whole_dataset" else None
@@ -110,7 +113,7 @@ async def freeze_dataset_inputs(
             test = _artifact_pin(split.test_artifact) if split else None
             if split and (train is None or test is None):
                 raise DatasetInputError("dataset_input.source_unavailable: split artifacts are missing")
-            if split and any(artifact.dataset_id != registration.id for artifact in (
+            if split and any(artifact is None or artifact.dataset_id != registration.id for artifact in (
                 split.train_artifact, split.test_artifact
             )):
                 raise DatasetInputError("dataset_input.identity_mismatch: split artifacts belong to another source")
@@ -258,7 +261,22 @@ async def prepare_attempt_graph(db: AsyncSession, run: Any, graph: dict[str, Any
     graph = apply_factor_bindings(graph, run.factor_values or {})
     manifest = run.dataset_inputs
     if manifest is None:
-        if any(_dataset_edges(graph)):
+        for edge, node, agent in _dataset_edges(graph):
+            config = (node.get("data") or {}).get("config") or {}
+            data = agent.get("data") or {}
+            selection = (data.get("dataset_selection")
+                         if data.get("factor_bindings", {}).get("dataset_selection") else None)
+            if selection is not None:
+                if config.get("dataset_id") not in selection:
+                    continue
+            elif not config.get("enabled", True):
+                continue
+            mode = ((edge.get("data") or {}).get("dataset_input") or {}).get("mode", "whole_dataset")
+            # Existing row snapshots are recorded evidence. Their original
+            # source/hash and projections are verified by the row executor;
+            # they say nothing about any historical whole-dataset selection.
+            if mode == "per_row" and run.dataset_row is not None:
+                continue
             raise DatasetInputError("dataset_input.legacy_unknown: historical inputs were not recorded; republish")
         return graph
     selected = resolve_attempt_inputs(manifest, graph, dataset_row=run.dataset_row, target_node_id=run.target_node_id)

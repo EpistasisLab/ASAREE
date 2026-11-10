@@ -206,6 +206,14 @@ async def test_legacy_publication_never_infers_current_split(catalog):
     assert resolve_attempt_inputs(None, graph) is None
     with pytest.raises(DatasetInputError, match="legacy_unknown"):
         await prepare_attempt_graph(catalog.db, run_for(catalog, None), graph)
+    graph["edges"][0]["data"] = {"dataset_input": {"mode": "per_row", "columns": ["x"]}}
+    snapshot = {"dataset_id": str(dataset.id), "raw_sha256": dataset.raw_sha256,
+                "row_index": 0, "columns": ["x"], "values": {"x": "001"}}
+    run = run_for(catalog, None, dataset_row=snapshot)
+    prepared = await prepare_attempt_graph(catalog.db, run, graph)
+    assert "_pinned_registrations" not in prepared
+    assert run.dataset_inputs is None
+    assert run.dataset_row == snapshot
 
 
 async def test_workspace_rejects_same_bytes_with_different_scope_or_identity(catalog):

@@ -173,6 +173,8 @@ def resolve_attempt_inputs(
             if (dataset_row is None or dataset_row["dataset_id"] != pin["dataset_id"]
                     or dataset_row["raw_sha256"] != pin["raw_sha256"]):
                 raise DatasetInputError("dataset_input.identity_mismatch: row snapshot differs from pinned source")
+            if any(column not in dataset_row["values"] for column in columns):
+                raise DatasetInputError("dataset_input.invalid_columns: row snapshot is missing selected columns")
             binding.update(row_index=dataset_row["row_index"], columns=list(columns),
                            values={column: dataset_row["values"][column] for column in columns})
         bindings.append(binding)

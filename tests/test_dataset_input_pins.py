@@ -177,6 +177,8 @@ async def test_per_row_pins_source_and_original_projection_without_split(catalog
     assert row["values"] == {"x": "002"}
     with pytest.raises(DatasetInputError, match="identity_mismatch"):
         resolve_attempt_inputs(publication, graph, dataset_row={**row, "raw_sha256": "0" * 64})
+    with pytest.raises(DatasetInputError, match="invalid_columns"):
+        resolve_attempt_inputs(publication, graph, dataset_row={**row, "values": {}})
 
 
 @pytest.mark.parametrize("damage", ["missing", "hash", "identity", "owner"])

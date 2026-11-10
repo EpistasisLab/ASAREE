@@ -297,8 +297,8 @@ async def test_create_test_run_persists_snapshot_without_row_slot(test_run_conte
             "dataset_id": str(ctx["dataset_id"]),
             "raw_sha256": dataset.raw_sha256,
             "row_index": 2,
-            "columns": ["prompt"],
-            "values": {"prompt": "third"},
+            "columns": ["prompt", "reference"],
+            "values": {"prompt": "third", "reference": "gold-c"},
         }
         run = await create_test_run(
             db, protocol_id=ctx["protocol"].id, owner_id=ctx["user"].id,

@@ -17,6 +17,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 import pytest_asyncio
+from fastapi import HTTPException
 from motoro.models.mcp_server import MCPServerConfig, MCPTransport
 from motoro.models.skill import Skill, SkillFile
 from sqlalchemy import func, select, text
@@ -46,6 +47,101 @@ from asaree.services.package_reconstruction import Reconstruction, require_confi
 from asaree.services.package_validation import Limits, inspect
 
 results_db = _results_db
+
+
+@pytest.mark.parametrize('repair', ['split', 'rebind'])
+async def test_missing_pinned_split_blocks_configuration_until_repaired(
+    results_db, resource_db, tmp_path, monkeypatch, repair,
+):
+    from motoro.schemas.agent import ModelConfig
+    from test_package_import_validation import package
+
+    from asaree.services import package_reconstruction, sampling_snapshots
+
+    db, _, _, owner = results_db
+    settings = AsareeSettings(_env_file=None, data_root=str(tmp_path / 'storage'))
+    monkeypatch.setattr('asaree.config.get_settings', lambda: settings)
+    monkeypatch.setattr('asaree.services.datasets.get_settings', lambda: settings)
+    source, split = str(uuid.uuid4()), str(uuid.uuid4())
+    graph = {'nodes': [
+        {'id': 'd', 'type': 'dataset', 'data': {'config': {'dataset_id': source}}},
+        {'id': 'a', 'type': 'agent', 'data': {}},
+        {'id': 'm', 'type': 'model_openai', 'data': {'config': {'model': 'gpt-test'}}},
+    ], 'edges': [{'source': 'd', 'target': 'a', 'targetHandle': 'dataset'},
+                 {'source': 'm', 'target': 'a', 'targetHandle': 'model'}]}
+    content = b'x,y\n1,0\n2,1\n3,0\n4,1\n5,0\n6,1\n7,0\n8,1\n'
+
+    def modify(writer):
+        refs = {}
+        # Keep both partition members: the split record alone is unavailable.
+        for role in ('raw_artifact', 'train_artifact', 'test_artifact'):
+            identifier = str(uuid.uuid4())
+            file = tmp_path / role
+            file.write_bytes(content)
+            member = f'inputs/files/{identifier}.csv'
+            writer.add(file, member, provenance='publication_pinned', identity=identifier)
+            writer.dependency(identifier, 'dataset_file', 'publication_pinned',
+                              file=member, role=role, dataset_id=source)
+            refs[role] = {'id': identifier, 'sha256': hashlib.sha256(content).hexdigest()}
+        writer.json('inputs/bindings.json', {'schema_version': 1, 'inputs': [{
+            'dataset_node_id': 'd', 'dataset_id': source, 'dataset_name': 'Source',
+            'mode': 'whole_dataset', 'split_id': split, 'raw_sha256': refs['raw_artifact']['sha256'],
+            'target_column': 'y', **refs,
+        }]})
+        writer.dependency(split, 'split', 'publication_pinned', status='missing')
+
+    archive = package(tmp_path, graph=graph, modify=modify)
+    job = PackageImport(id=uuid.uuid4(), owner_id=owner.id, request_key=uuid.uuid4().hex,
+        status='queued', progress={}, expires_at=datetime.now(UTC) + timedelta(days=1))
+    db.add(job)
+    await db.flush()
+    payload = imports.directory(job.id) / 'payload'
+    payload.parent.mkdir(parents=True)
+    job.preflight = inspect(archive, payload, Limits(), threading.Event())
+    assert job.preflight['unresolved_count'] == 1
+    importer = Reconstruction(db, job, payload, Limits())
+    job.experiment_id = await importer.activate(resource_db)
+    job.status = 'completed'
+    await db.flush()
+    protocol = await db.scalar(select(Protocol).where(Protocol.experiment_id == job.experiment_id))
+    dataset = await db.get(RegisteredDataset, uuid.UUID(importer.maps['dataset', source]))
+    assert dataset.current_split_id is None
+
+    @asynccontextmanager
+    async def resources(**kwargs):
+        yield resource_db
+
+    monkeypatch.setattr(package_reconstruction, 'system_session', resources)
+    monkeypatch.setattr(sampling_snapshots, 'build_model_config', AsyncMock(return_value=ModelConfig(model='gpt-test')))
+    monkeypatch.setattr(sampling_snapshots, 'resolve_discovery_context', AsyncMock(return_value={}))
+    command = api.Configuration(connections_configured=True, dependencies_resolved=True)
+    with pytest.raises(HTTPException, match='split') as error:
+        await api.configuration(job.id, command, db, owner)
+    assert error.value.status_code == 422 and job.configured_at is None
+    with pytest.raises(HTTPException) as error:
+        await publish_protocol_endpoint(protocol.id, owner, db)
+    assert error.value.status_code == 422 and protocol.published_revision_id is None
+    requirement = await db.get(ImportedIdentity, (job.id, 'unresolved_split', split))
+    assert requirement.provenance['pin']['split_id'] == split
+
+    if repair == 'split':
+        await quick_split_dataset(db, dataset=dataset, seed=17)
+        expected_split = dataset.current_split_id
+    else:
+        replacement = await create_dataset(db, name='Explicitly rebound original', csv_bytes=content,
+                                           owner_id=owner.id, target_column='y')
+        draft = copy.deepcopy(protocol.graph)
+        draft['nodes'][0]['data']['config'].update(dataset_id=str(replacement.id), dataset_name=replacement.name)
+        protocol.graph = draft
+        expected_split = None
+    await db.flush()
+    await api.configuration(job.id, command, db, owner)
+    await publish_protocol_endpoint(protocol.id, owner, db)
+    publication = await db.get(ProtocolRevision, protocol.published_revision_id)
+    pin = publication.dataset_inputs['inputs'][0]
+    assert pin['split_id'] == (str(expected_split) if expected_split else None)
+    assert bool(pin['train_artifact']) == (repair == 'split')
+    assert pin['dataset_id'] == str(dataset.id if repair == 'split' else replacement.id)
 
 
 @pytest_asyncio.fixture

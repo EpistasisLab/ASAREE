@@ -35,6 +35,24 @@ def member_path(value: str) -> str:
     return value
 
 
+def canonical_identity(value: Any) -> str:
+    """Typed UUIDs have one spelling, including when used in archive paths."""
+    try:
+        if not isinstance(value, str) or str(uuid.UUID(value)) != value:
+            raise ValueError('Noncanonical UUID')
+    except (ValueError, AttributeError) as exc:
+        raise PackageError('Invalid canonical UUID identity') from exc
+    return value
+
+
+def payload_path(root: Path, value: str) -> Path:
+    """Resolve only archive-relative paths contained in the private payload."""
+    path = root / member_path(value)
+    if not path.resolve().is_relative_to(root.resolve()):
+        raise PackageError('Source path resolves outside payload containment boundary')
+    return path
+
+
 def invalid(message: str) -> Any:
     raise PackageError(message)
 
@@ -337,13 +355,26 @@ def validate_references(root: Path, limits: Limits, manifest: dict[str, Any], ma
         return result
 
     for key in ('experiment_id', 'protocol_id'):
-        uuid.UUID(manifest[key])
-    uuid.UUID(manifest['publication']['id'])
+        canonical_identity(manifest[key])
+    canonical_identity(manifest['publication']['id'])
+    for file in (root / 'requirements/mcp').glob('*.json'):
+        requirement = document(payload_path(root, file.relative_to(root).as_posix()), limits)
+        source = canonical_identity(requirement['id'])
+        if file.name != f'{source}.json':
+            raise PackageError('MCP requirement filename and identity disagree')
+        remember('mcp', source, requirement)
     for dep in records(root / 'dependencies.jsonl', limits):
+        if dep.get('kind') in {'mcp', 'knowledge'} and dep.get('status') == 'included':
+            source = canonical_identity(dep['id'])
+            require('mcp', source)
+            if dep['kind'] == 'knowledge':
+                if dep.get('directory') != f'resources/knowledge/{source}':
+                    raise PackageError('Knowledge directory and identity disagree')
+                payload_path(root, dep['directory'])
         if dep.get('kind') in {'dataset_file', 'skill_file'} and dep.get('status') == 'included':
             remember(dep['kind'], dep['id'], dep)
         if dep.get('kind') == 'skill' and dep.get('status') == 'included':
-            source = str(uuid.UUID(dep['id']))
+            source = canonical_identity(dep['id'])
             if dep.get('directory') != f'resources/skills/{source}':
                 raise PackageError('Skill directory and identity disagree')
             if not (root / dep['directory'] / 'SKILL.md').is_file():
@@ -376,7 +407,7 @@ def validate_references(root: Path, limits: Limits, manifest: dict[str, Any], ma
             raise PackageError('Unsupported pinned input schema')
         seen: dict[tuple[str, str], Any] = {}
         for pin in bindings.get('inputs', []):
-            uuid.UUID(pin['dataset_id'])
+            canonical_identity(pin['dataset_id'])
             if pin.get('mode') not in {'whole_dataset', 'per_row'}:
                 raise PackageError('Unknown dataset input mode')
             for field in ('raw_artifact', 'train_artifact', 'test_artifact'):
@@ -404,7 +435,7 @@ def validate_references(root: Path, limits: Limits, manifest: dict[str, Any], ma
                                for d in records(root / 'dependencies.jsonl', limits)):
                         raise PackageError('Pinned file is absent without missing-dependency evidence')
             if pin.get('split_id'):
-                split_path = root / f'inputs/splits/{uuid.UUID(pin["split_id"])}.json'
+                split_path = payload_path(root, f'inputs/splits/{canonical_identity(pin["split_id"])}.json')
                 if split_path.exists():
                     split = document(split_path, limits)
                     if (split['dataset_id'] != pin['dataset_id'] or split['source_sha256'] != pin['raw_sha256']

@@ -29,7 +29,15 @@ from asaree.models.protocol import Protocol
 from asaree.services import managed_storage
 from asaree.services.experiment_packages import node_variants, portable_definition
 from asaree.services.experiments import set_experiment_datasets
-from asaree.services.package_validation import Limits, PackageError, document, member_path, records
+from asaree.services.package_validation import (
+    Limits,
+    PackageError,
+    canonical_identity,
+    document,
+    member_path,
+    payload_path,
+    records,
+)
 
 
 def identity(job: PackageImport, kind: str, source: Any) -> uuid.UUID:
@@ -50,6 +58,7 @@ def copy_knowledge(source: Path, destination: Path, stopping: threading.Event) -
             if not file.is_file():
                 continue
             relative = file.relative_to(source)
+            file = payload_path(source, relative.as_posix())
             target = temporary / relative
             target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
             with file.open('rb') as input_file, target.open('xb') as output:
@@ -97,7 +106,7 @@ class Reconstruction:
         return local
 
     def read(self, path: str) -> Any:
-        return document(self.root / member_path(path), self.limits)
+        return document(payload_path(self.root, path), self.limits)
 
     def name(self, kind: str, source: str, name: str, maximum: int = 255) -> str:
         # Import UUID namespaces avoid name collisions without cross-owner lookup.
@@ -113,12 +122,12 @@ class Reconstruction:
         bindings = self.read('inputs/bindings.json')
         dataset_ids = []
         for pin in bindings.get('inputs', []):
-            source = pin['dataset_id']
+            source = canonical_identity(pin['dataset_id'])
             if ('dataset', source) in self.maps:
                 continue
             local = self.map('dataset', source, pin=pin)
             metadata_path = f'inputs/datasets/{source}.json'
-            metadata = self.read(metadata_path) if (self.root / metadata_path).exists() else pin
+            metadata = self.read(metadata_path) if payload_path(self.root, metadata_path).exists() else pin
             dataset = RegisteredDataset(id=local, owner_id=self.job.owner_id,
                 name=self.name('dataset', source, metadata.get('name') or pin['dataset_name']),
                 description=pin.get('description', metadata.get('description')),
@@ -136,7 +145,7 @@ class Reconstruction:
             if dataset_id is None:
                 raise PackageError('Dataset file has no pinned registration')
             # Dataset namespace stores stable relative keys to retained verified bytes.
-            file = self.root / member_path(dep['file'])
+            file = payload_path(self.root, dep['file'])
             relative = file.relative_to(managed_storage.roots()['datasets'])
             from asaree.services.package_validation import digest
 
@@ -182,13 +191,16 @@ class Reconstruction:
         for dep in records(self.root / 'dependencies.jsonl', self.limits):
             if dep.get('kind') != 'skill' or dep.get('status') != 'included':
                 continue
-            metadata = self.root / f'resources/skill-metadata/{dep["id"]}.json'
+            source_id = canonical_identity(dep['id'])
+            if dep['directory'] != f'resources/skills/{source_id}':
+                raise PackageError('Skill directory and identity disagree')
+            metadata = payload_path(self.root, f'resources/skill-metadata/{source_id}.json')
             if metadata.exists():
                 source = document(metadata, self.limits)
             else:
                 # v1's rendered frontmatter contains explicit discovery facts.
                 # Parse those facts, preserving unavailable filename/order as unknown.
-                entrypoint = self.root / member_path(dep['directory']) / 'SKILL.md'
+                entrypoint = payload_path(self.root, f'{dep["directory"]}/SKILL.md')
                 if entrypoint.stat().st_size > self.limits.document:
                     raise PackageError('Skill entrypoint exceeds resource limit')
                 parsed = parse_skill_markdown(entrypoint.read_text(encoding='utf-8'))
@@ -208,11 +220,14 @@ class Reconstruction:
                 source_filename=source.get('source_filename'), deleted_at=datetime.now(UTC)))
         await motoro.flush()
         for record in records(self.root / 'files.jsonl', self.limits):
-            if not record['path'].startswith('resources/skills/') or record['path'].endswith('/SKILL.md'):
+            if not record['path'].startswith('resources/skills/'):
                 continue
             parts = record['path'].split('/')
             source_skill = parts[2]
             relative = '/'.join(parts[3:])
+            canonical_identity(source_skill)
+            if relative == 'SKILL.md':
+                continue
             file_dep: dict[str, Any] | None = next((entry for entry in records(
                 self.root / 'dependencies.jsonl', self.limits) if entry.get('kind') == 'skill_file'
                 and entry.get('file') == record['path'] and entry.get('status') == 'included'), None)
@@ -228,7 +243,7 @@ class Reconstruction:
             local = self.map('skill_file', file_dep['id'], dependency=file_dep)
             if await motoro.get(SkillFile, local) is not None:
                 continue
-            path = self.root / member_path(file_dep['file'])
+            path = payload_path(self.root, file_dep['file'])
             if path.stat().st_size > self.limits.document:
                 raise PackageError('Skill resource exceeds per-resource limit')
             raw = path.read_bytes()
@@ -242,15 +257,21 @@ class Reconstruction:
         from asaree.services.okf_bundles import command_for_bundle, server_name_for
 
         for file in (self.root / 'requirements/mcp').glob('*.json'):
-            source = document(file, self.limits)
+            source = self.read(file.relative_to(self.root).as_posix())
+            source_id = canonical_identity(source['id'])
+            if file.name != f'{source_id}.json':
+                raise PackageError('MCP requirement filename and identity disagree')
             local = self.map('mcp', source['id'], source=source)
             command = None
             name = self.name('mcp', source['id'], source['name'])
-            knowledge = self.root / f'resources/knowledge/{source["id"]}'
-            included = any(dep.get('kind') == 'knowledge' and dep.get('id') == source['id']
-                           and dep.get('status') == 'included'
-                           for dep in records(self.root / 'dependencies.jsonl', self.limits))
-            if included:
+            knowledge = payload_path(self.root, f'resources/knowledge/{source_id}')
+            included = next((
+                dep for dep in records(self.root / 'dependencies.jsonl', self.limits)
+                if dep.get('kind') == 'knowledge' and dep.get('id') == source_id and dep.get('status') == 'included'
+            ), None)
+            if included is not None:
+                if included.get('directory') != f'resources/knowledge/{source_id}':
+                    raise PackageError('Knowledge directory and identity disagree')
                 knowledge_kind = source.get('knowledge_kind')
                 if knowledge_kind not in {'bundle', 'document'}:
                     source_graph = self.read('publication/canvas.json')

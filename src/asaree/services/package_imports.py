@@ -60,6 +60,10 @@ async def joined(operation: Any, *args: Any, stopping: threading.Event, identifi
 
 async def compensate(job: PackageImport) -> None:
     """Delete only this command's deterministic Motoro records, never library matches."""
+    # No resources can be staged until inspection has persisted both preflight
+    # and archive hash. Failed/partial extraction is untrusted cleanup input.
+    if not job.sha256 or not job.preflight.get('manifest'):
+        return
     root = directory(job.id) / 'payload'
     if not root.exists():
         return
@@ -227,20 +231,41 @@ async def relay_imports(ctx: dict[Any, Any], *args: Any, **kwargs: Any) -> None:
         identifiers = (await db.scalars(select(PackageImport.id).where(
             PackageImport.status.in_(['validating', 'queued', 'activating']),
         ).order_by(PackageImport.created_at).limit(4))).all()
-        expired = (await db.scalars(select(PackageImport).where(
+        expired = (await db.scalars(select(PackageImport.id).where(
             PackageImport.status.not_in(['completed', 'expired']),
             or_(PackageImport.status == 'cancelled', PackageImport.expires_at < datetime.now(UTC)),
         ).limit(10))).all()
-        for job in expired:
-            lock = int.from_bytes(job.id.bytes[:8], 'big', signed=True)
-            if not await db.scalar(select(func.pg_try_advisory_xact_lock(lock))):
-                continue
-            await compensate(job)
-            await remove_staged_product(db, job)
-            await asyncio.to_thread(shutil.rmtree, directory(job.id), ignore_errors=True)
-            job.status = 'expired'
+    for identifier in expired:
+        try:
+            # Each request has its own rollback/lock boundary. A broken resource
+            # or unavailable resource database must not poison the whole relay.
+            async with get_session() as db:
+                lock = int.from_bytes(identifier.bytes[:8], 'big', signed=True)
+                if not await db.scalar(select(func.pg_try_advisory_xact_lock(lock))):
+                    continue
+                job = await db.get(PackageImport, identifier)
+                if job is None or job.status in {'completed', 'expired'}:
+                    continue
+                if job.status != 'cancelled' and job.expires_at >= datetime.now(UTC):
+                    continue
+                await compensate(job)
+                await remove_staged_product(db, job)
+                await asyncio.to_thread(shutil.rmtree, directory(job.id), ignore_errors=True)
+                job.status = 'expired'
+        except Exception:
+            logger.exception('package_import_cleanup_failed', extra={'import_id': str(identifier)})
+            try:
+                async with get_session() as db:
+                    job = await db.get(PackageImport, identifier)
+                    if job is not None and job.status not in {'completed', 'expired'}:
+                        job.progress = {'phase': 'compensation_required'}
+            except Exception:
+                logger.exception('package_import_cleanup_status_failed', extra={'import_id': str(identifier)})
     if identifiers:
         pool = await _get_pool()
         for identifier in identifiers:
-            await pool.enqueue_job('execute_package_import', str(identifier),
-                                   _job_id=f'package-import:{identifier}', _queue_name='arq:results')
+            try:
+                await pool.enqueue_job('execute_package_import', str(identifier),
+                                       _job_id=f'package-import:{identifier}', _queue_name='arq:results')
+            except Exception:
+                logger.exception('package_import_enqueue_failed', extra={'import_id': str(identifier)})

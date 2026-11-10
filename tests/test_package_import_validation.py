@@ -158,3 +158,85 @@ def test_opaque_resource_extensions_do_not_imply_a_schema_or_rewrite_bytes(tmp_p
         writer.add(file, name, identity='source', provenance='captured_at_download')
     inspect(package(tmp_path, modify=modify), tmp_path / 'read', Limits(), threading.Event())
     assert (tmp_path / 'read' / name).read_bytes() == raw
+
+
+@pytest.mark.parametrize('version', [1, 2])
+@pytest.mark.parametrize('fault', ['traversal', 'noncanonical', 'filename', 'directory', 'requirement_missing'])
+async def test_knowledge_identity_and_directory_must_agree_before_reconstruction(tmp_path, version, fault):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from asaree.services.package_reconstruction import Reconstruction
+
+    source = str(uuid.uuid4())
+    identifier = {'traversal': '../../../safe-sibling', 'noncanonical': source.upper()}.get(fault, source)
+    sibling = tmp_path / 'safe-sibling'
+    sibling.mkdir()
+    (sibling / 'sentinel.txt').write_bytes(b'outside extracted archive')
+
+    def modify(writer):
+        if fault != 'requirement_missing':
+            filename = 'safe' if fault in {'traversal', 'filename'} else identifier
+            writer.json(f'requirements/mcp/{filename}.json', {
+                'id': identifier, 'name': 'fixture', 'transport': 'stdio', 'knowledge_kind': 'bundle'})
+        writer.json(f'resources/knowledge/{source}/content.json', {})
+        writer.dependency(identifier, 'knowledge', 'captured_at_download',
+                          directory='publication' if fault in {'traversal', 'directory'}
+                          else f'resources/knowledge/{identifier}', file_count=1)
+
+    with pytest.raises(PackageError):
+        inspect(package(tmp_path, version=version, modify=modify), tmp_path / 'read', Limits(), threading.Event())
+    # Reconstruction also refuses inconsistent metadata, even when called with
+    # the rejected, partially extracted fixture instead of a verified payload.
+    if fault != 'requirement_missing':
+        job = SimpleNamespace(id=uuid.uuid4(), owner_id=uuid.uuid4())
+        db = SimpleNamespace(add=lambda record: None)
+        motoro = SimpleNamespace(get=AsyncMock(return_value=None), add=lambda record: None, flush=AsyncMock())
+        with pytest.raises(PackageError):
+            await Reconstruction(db, job, tmp_path / 'read', Limits()).servers(motoro)
+    assert (sibling / 'sentinel.txt').read_bytes() == b'outside extracted archive'
+
+
+@pytest.mark.parametrize('version', [1, 2])
+def test_missing_name_only_dependencies_remain_explicit_diagnostics(tmp_path, version):
+    def modify(writer):
+        writer.dependency('unavailable legacy name', 'knowledge', 'captured_at_download', status='missing')
+        writer.dependency('unavailable external tool', 'mcp', 'captured_at_download', status='missing')
+    summary = inspect(package(tmp_path, version=version, modify=modify), tmp_path / 'read', Limits(), threading.Event())
+    assert summary['unresolved_count'] == 2
+    assert {record['id'] for record in summary['diagnostics']} == {
+        'unavailable legacy name', 'unavailable external tool'}
+
+
+@pytest.mark.parametrize('version', [1, 2])
+async def test_verified_knowledge_source_containment_is_rechecked_before_copy(tmp_path, version, monkeypatch):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from asaree.services import managed_storage
+    from asaree.services.package_reconstruction import Reconstruction
+
+    source = str(uuid.uuid4())
+    folder = f'resources/knowledge/{source}'
+    def modify(writer):
+        writer.json(f'requirements/mcp/{source}.json', {
+            'id': source, 'name': 'fixture', 'transport': 'stdio', 'knowledge_kind': 'bundle'})
+        writer.json(f'{folder}/content.json', {})
+        writer.dependency(source, 'knowledge', 'captured_at_download', directory=folder, file_count=1)
+    payload = tmp_path / 'read'
+    assert inspect(package(tmp_path, version=version, modify=modify), payload, Limits(),
+                   threading.Event())['unresolved_count'] == 0
+    # Defense at the copy boundary even if the private verified tree is changed.
+    sibling = tmp_path / 'safe-sibling'
+    sibling.mkdir()
+    (sibling / 'sentinel.txt').write_bytes(b'outside extracted archive')
+    (payload / folder / 'content.json').unlink()
+    (payload / folder / 'sentinel.txt').symlink_to(sibling / 'sentinel.txt')
+    namespaces = {name: tmp_path / 'managed' / name for name in ('bundles', 'documents')}
+    monkeypatch.setattr(managed_storage, 'roots', lambda: namespaces)
+    db = SimpleNamespace(add=lambda record: None)
+    motoro = SimpleNamespace(get=AsyncMock(return_value=None), add=lambda record: None, flush=AsyncMock())
+    job = SimpleNamespace(id=uuid.uuid4(), owner_id=uuid.uuid4())
+    with pytest.raises(PackageError, match='outside|containment'):
+        await Reconstruction(db, job, payload, Limits()).servers(motoro)
+    assert not list((tmp_path / 'managed').rglob('sentinel.txt'))

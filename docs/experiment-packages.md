@@ -35,6 +35,15 @@ slot facts. Such omissions are explicitly reported in preflight. A v1 binary
 Skill resource is represented locally as base64 without claiming that was its
 original storage encoding.
 
+Both versions require canonical UUIDs for typed archive identities. MCP
+requirement filenames, their IDs and included knowledge directory names must
+agree; inconsistent packages are rejected rather than assigning new meanings to
+their paths. Explicit missing/unresolved dependencies remain diagnostics, including
+legacy name-only lookups. Only a Skill's exact root `SKILL.md` is its entrypoint;
+nested files such as `references/SKILL.md` are ordinary bundled resources. Version
+2 retains their recorded encoding/order; version 1 retains their bytes with the
+same explicit unknown source metadata as other v1 resources.
+
 The common archive layout is:
 
 The `.tar.gz` archive contains:
@@ -227,6 +236,13 @@ only its staging paths and resources. Completed imports are durable evidence and
 do not inherit download-export expiry. Include their files and database records
 in coordinated backups. The API and results worker must share the same managed
 storage configuration.
+
+Never-validated uploads have no staged resources: cleanup discards their private
+files without parsing partially extracted inventories. Each expired request has
+its own cleanup transaction. A compensation failure retains that request with
+`compensation_required` progress for retry while other requests continue through
+cleanup and enqueueing. Staged resources still receive owned deterministic-ID
+compensation; their cleanup is not skipped when another upload is malformed.
 
 Configurable environment limits (positive integers):
 

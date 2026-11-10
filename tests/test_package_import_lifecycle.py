@@ -1,10 +1,15 @@
 """Real cross-database crash/retry and cancel/cleanup boundaries; CI PostgreSQL."""
+import io
 import os
 import shutil
+import tarfile
+import threading
 import uuid
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 import pytest_asyncio
@@ -25,6 +30,8 @@ from asaree.services import import_visibility
 from asaree.services import package_imports as imports
 from asaree.services.experiment_packages import PackageWriter
 from asaree.services.experiments import get_experiment
+from asaree.services.package_reconstruction import Reconstruction, identity
+from asaree.services.package_validation import Limits, digest, inspect
 
 
 @pytest_asyncio.fixture
@@ -81,11 +88,11 @@ def write_archive(job, root, *, version=2):
     writer.add(raw, f'resources/skills/{skill_id}/SKILL.md', identity=skill_id, provenance='captured_at_download')
     resource_id = str(uuid.uuid4())
     raw.write_bytes(b'\x00\xffnot JSON\r\n')
-    resource_path = f'resources/skills/{skill_id}/assets/binary.json'
+    resource_path = f'resources/skills/{skill_id}/references/SKILL.md'
     writer.add(raw, resource_path, identity=resource_id, provenance='captured_at_download')
     if version >= 2:
         writer.dependency(resource_id, 'skill_file', 'captured_at_download', skill_id=skill_id,
-                          file=resource_path, relative_path='assets/binary.json', encoding='base64', position=9)
+                          file=resource_path, relative_path='references/SKILL.md', encoding='base64', position=9)
     writer.dependency(skill_id, 'skill', 'captured_at_download', directory=f'resources/skills/{skill_id}')
     writer.finish({'format': 'asaree.experiment-package', 'schema_version': version,
                    'experiment_id': str(uuid.uuid4()), 'protocol_id': str(uuid.uuid4()),
@@ -219,3 +226,103 @@ async def test_durable_crash_retry_cancel_cleanup_and_ownership(import_databases
     assert not imports.directory(cancelled.id).exists()
     async with resources.begin() as db:
         assert await db.scalar(select(func.count()).select_from(Skill)) == 2
+
+
+async def test_expiry_isolates_malformed_upload_and_compensation_failure_from_pending_import(
+    import_databases, tmp_path, monkeypatch,
+):
+    product, resources = import_databases
+    settings = AsareeSettings(_env_file=None, data_root=str(tmp_path / 'storage'))
+    monkeypatch.setattr('asaree.config.get_settings', lambda: settings)
+
+    @asynccontextmanager
+    async def product_session():
+        async with product.begin() as db:
+            yield db
+
+    @asynccontextmanager
+    async def resource_session(**kwargs):
+        async with resources.begin() as db:
+            yield db
+
+    monkeypatch.setattr(imports, 'get_session', product_session)
+    monkeypatch.setattr(imports, 'system_session', resource_session)
+    async with product.begin() as db:
+        owner = User(email='relay@example.test', hashed_password='test', display_name='Importer')
+        db.add(owner)
+    jobs = []
+    async with product.begin() as db:
+        for key in ('malformed', 'compensation-fails', 'staged-cancelled', 'pending-valid'):
+            job = PackageImport(id=uuid.uuid4(), owner_id=owner.id, request_key=key,
+                status='validating', preflight={}, progress={}, expires_at=datetime.now(UTC) + timedelta(days=1))
+            jobs.append(job)
+            db.add(job)
+    bad, failing, staged, pending = jobs
+    root = imports.directory(bad.id)
+    root.mkdir(parents=True)
+    with tarfile.open(root / 'archive.tar.gz', 'w:gz') as output:
+        for name, data in [('manifest.json', b'{}'), ('dependencies.jsonl', b'{not-json\n')]:
+            member = tarfile.TarInfo(name)
+            member.size = len(data)
+            output.addfile(member, io.BytesIO(data))
+    await imports.execute_package_import({}, str(bad.id))
+    assert (root / 'payload/dependencies.jsonl').is_file()
+    staged_ids = []
+    staged_experiments = {}
+    for job in (failing, staged):
+        job_root = imports.directory(job.id)
+        write_archive(job, job_root)
+        preflight = inspect(job_root / 'archive.tar.gz', job_root / 'payload', Limits(), threading.Event())
+        source_skill = next((job_root / 'payload/resources/skills').iterdir()).name
+        local_id = identity(job, 'skill', source_skill)
+        staged_ids.append(local_id)
+        async with product.begin() as db:
+            current = await db.get(PackageImport, job.id)
+            current.preflight = preflight
+            current.sha256 = digest(job_root / 'archive.tar.gz')
+            async with resources.begin() as motoro:
+                reconstruction = Reconstruction(db, current, job_root / 'payload', Limits())
+                current.experiment_id = await reconstruction.activate(motoro)
+            staged_experiments[job.id] = current.experiment_id
+            current.status = 'cancelled'
+    write_archive(pending, imports.directory(pending.id))
+    async with product.begin() as db:
+        current = await db.get(PackageImport, bad.id)
+        assert current.status == 'failed'
+        current.expires_at = datetime.now(UTC) - timedelta(seconds=1)
+
+    original_remove = imports.remove_staged_product
+    async def interrupted_compensation(db, job):
+        await original_remove(db, job)
+        if job.id == failing.id:
+            raise RuntimeError('Disposable compensation failure')
+    monkeypatch.setattr(imports, 'remove_staged_product', interrupted_compensation)
+    from asaree.worker import enqueue
+    async def run_enqueued(function, job_id, **kwargs):
+        await imports.execute_package_import({}, job_id)
+    pool = SimpleNamespace(enqueue_job=AsyncMock(side_effect=run_enqueued))
+    monkeypatch.setattr(enqueue, '_get_pool', AsyncMock(return_value=pool))
+    await imports.relay_imports({})
+    async with product.begin() as db:
+        assert (await db.get(PackageImport, bad.id)).status == 'expired'
+        assert (await db.get(PackageImport, staged.id)).status == 'expired'
+        retained = await db.get(PackageImport, failing.id)
+        assert retained.status == 'cancelled'
+        assert retained.progress['phase'] == 'compensation_required'
+        assert retained.experiment_id == staged_experiments[failing.id]
+        assert await db.get(ResearchExperiment, retained.experiment_id) is not None
+        assert await db.get(ResearchExperiment, staged_experiments[staged.id]) is None
+        assert (await db.get(PackageImport, pending.id)).status == 'awaiting_confirmation'
+    assert not root.exists()
+    assert not imports.directory(staged.id).exists()
+    assert imports.directory(failing.id).exists()
+    pool.enqueue_job.assert_awaited_once()
+    async with resources.begin() as db:
+        assert all([await db.get(Skill, identifier) is None for identifier in staged_ids])
+    # A failure rolls back only its product transaction; cleanup remains retryable.
+    monkeypatch.setattr(imports, 'remove_staged_product', original_remove)
+    await imports.relay_imports({})
+    async with product.begin() as db:
+        assert (await db.get(PackageImport, failing.id)).status == 'expired'
+        assert await db.get(ResearchExperiment, staged_experiments[failing.id]) is None
+    assert not imports.directory(failing.id).exists()

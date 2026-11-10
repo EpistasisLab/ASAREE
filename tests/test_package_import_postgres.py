@@ -4,6 +4,7 @@ from __future__ import annotations
 import base64
 import copy
 import hashlib
+import json
 import os
 import threading
 import uuid
@@ -96,6 +97,11 @@ async def test_export_import_independent_owner_and_reexport(
     await resource_db.flush()
     resource_db.add(SkillFile(skill_id=skill.id, path='assets/binary.bin', encoding='base64',
                               content=base64.b64encode(binary).decode(), position=7))
+    nested_resources = [('references/SKILL.md', 'utf-8', 'Nested reference\r\nλ', 8),
+                        ('references/deep/SKILL.md', 'base64', base64.b64encode(binary).decode(), 9)]
+    for path, encoding, content, position in nested_resources:
+        resource_db.add(SkillFile(skill_id=skill.id, path=path, encoding=encoding,
+                                  content=content, position=position))
     await resource_db.flush()
     async def read_fixture_skill(identifier):
         value = await resource_db.get(Skill, uuid.UUID(str(identifier)))
@@ -272,8 +278,14 @@ async def test_export_import_independent_owner_and_reexport(
     local_skill = await resource_db.get(Skill, uuid.UUID(importer.maps['skill', str(skill.id)]))
     assert local_skill.owner_id == destination_owner.id and not local_skill.is_system
     assert local_skill.body == skill.body and local_skill.frontmatter == skill.frontmatter
-    local_file = await resource_db.scalar(select(SkillFile).where(SkillFile.skill_id == local_skill.id))
+    local_files = {file.path: file for file in (await resource_db.scalars(
+        select(SkillFile).where(SkillFile.skill_id == local_skill.id))).all()}
+    assert set(local_files) == {'assets/binary.bin', *(entry[0] for entry in nested_resources)}
+    local_file = local_files['assets/binary.bin']
     assert base64.b64decode(local_file.content) == binary and local_file.position == 7
+    for path, encoding, content, position in nested_resources:
+        restored = local_files[path]
+        assert (restored.encoding, restored.content, restored.position) == (encoding, content, position)
     with pytest.raises(ValueError, match='local dependency'):
         await require_configured(db, experiment_id)
     assert await db.scalar(select(func.count()).select_from(ProtocolRun).where(
@@ -352,9 +364,16 @@ async def test_export_import_independent_owner_and_reexport(
     inspect(root / 'second.tar.gz', root / 'second-payload', Limits(), threading.Event())
     import tarfile
     with tarfile.open(root / 'second.tar.gz') as reexport:
+        reexport_dependencies = [json.loads(line) for line in reexport.extractfile('dependencies.jsonl')]
         pin = local_publication.dataset_inputs['inputs'][0]
         assert reexport.extractfile(f'inputs/files/{pin["raw_artifact"]["id"]}.csv').read() == source
         assert reexport.extractfile(f'resources/skills/{local_skill.id}/assets/binary.bin').read() == binary
+        for path, encoding, content, position in nested_resources:
+            expected = base64.b64decode(content) if encoding == 'base64' else content.encode('utf-8')
+            assert reexport.extractfile(f'resources/skills/{local_skill.id}/{path}').read() == expected
+            dependency = next(entry for entry in reexport_dependencies if entry.get('kind') == 'skill_file'
+                              and entry.get('file') == f'resources/skills/{local_skill.id}/{path}')
+            assert (dependency['encoding'], dependency['position']) == (encoding, position)
         if include_results:
             nested = reexport.extractfile(f'sources/{job.id}/source.tar.gz').read()
             assert hashlib.sha256(nested).hexdigest() == job.sha256
@@ -382,6 +401,7 @@ async def test_v1_skill_binary_content_is_restored_with_explicit_unknown_source_
     source = await db.scalar(select(ImportedIdentity).where(ImportedIdentity.import_id == job.id,
                                                            ImportedIdentity.kind == 'skill_file'))
     file = await resource_db.get(SkillFile, source.local_id)
+    assert file.path == 'references/SKILL.md'
     assert file.encoding == 'base64' and base64.b64decode(file.content) == b'\x00\xffnot JSON\r\n'
     assert source.provenance['dependency']['source_encoding'] == 'legacy.unknown'
     assert source.provenance['dependency']['source_position'] == 'legacy.unknown'

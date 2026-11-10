@@ -15,6 +15,7 @@ A single seed; multi-seed generation is a factorial-experiment concern
 from __future__ import annotations
 
 import io
+import os
 import shutil
 import uuid
 from collections.abc import Sequence
@@ -28,6 +29,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from asaree.config import get_settings
 from asaree.models.dataset import RegisteredDataset
+from asaree.models.dataset_split import DatasetArtifact, DatasetSplit
 from asaree.security.hashing import sha256_file
 
 
@@ -63,10 +65,98 @@ def _split(
 
 
 def _dataset_dir(dataset_id: uuid.UUID) -> Path:
-    # Absolute, not just resolved relative to *this* process's cwd — the
-    # stored path is read back by other processes (e.g. the workspace MCP
-    # server), whose own cwd need not match this one's.
+    # Resolve the configured namespace root only when preparing/reading files.
     return Path(get_settings().dataset_storage_dir).resolve() / str(dataset_id)
+
+
+def _artifact(dataset_id: uuid.UUID, path: Path, format: str) -> DatasetArtifact:
+    return DatasetArtifact(
+        id=uuid.uuid4(), dataset_id=dataset_id, namespace="datasets",
+        storage_key=path.relative_to(Path(get_settings().dataset_storage_dir).resolve()).as_posix(),
+        sha256=sha256_file(path), byte_size=path.stat().st_size, format=format, status="ready",
+    )
+
+
+def _verify_source(dataset: RegisteredDataset) -> str:
+    raw_path = dataset.raw_path
+    if raw_path is None:
+        raise DatasetValidationError("this dataset has no raw file registered to split")
+    try:
+        observed = sha256_file(Path(raw_path))
+    except OSError as exc:
+        raise DatasetValidationError(f"Original source unavailable: {exc}") from exc
+    if not dataset.raw_sha256 or observed != dataset.raw_sha256:
+        raise DatasetValidationError("Original source hash does not match its registered identity")
+    return raw_path
+
+
+async def _publish_split(
+    db: AsyncSession, dataset: RegisteredDataset, train: pd.DataFrame, test: pd.DataFrame, **provenance: object
+) -> RegisteredDataset:
+    split_id = uuid.uuid4()
+    parent = _dataset_dir(dataset.id) / "splits"
+    parent.mkdir(parents=True, exist_ok=True)
+    staging = parent / f".{split_id}.preparing"
+    dest = parent / str(split_id)
+    staging.mkdir()
+    published = False
+    try:
+        train.to_parquet(staging / "train.parquet", index=False)
+        test.to_parquet(staging / "test.parquet", index=False)
+        # The directory rename publishes the complete pair; no reader sees a half pair.
+        os.rename(staging, dest)
+        published = True
+        train_artifact = _artifact(dataset.id, dest / "train.parquet", "parquet")
+        test_artifact = _artifact(dataset.id, dest / "test.parquet", "parquet")
+        async with db.begin_nested():
+            split = DatasetSplit(
+                id=split_id, dataset_id=dataset.id, source_sha256=dataset.raw_sha256,
+                train_artifact=train_artifact, test_artifact=test_artifact, **provenance,
+            )
+            db.add(split)
+            await db.flush()
+            dataset.current_split = split
+            dataset.current_split_id = split_id
+            await db.flush()
+    except BaseException:
+        shutil.rmtree(staging, ignore_errors=True)
+        if published:
+            shutil.rmtree(dest, ignore_errors=True)
+        raise
+    return dataset
+
+
+async def list_splits(db: AsyncSession, *, dataset_id: uuid.UUID, owner_id: uuid.UUID) -> Sequence[DatasetSplit]:
+    return (await db.execute(
+        select(DatasetSplit).join(RegisteredDataset, RegisteredDataset.id == DatasetSplit.dataset_id)
+        .where(DatasetSplit.dataset_id == dataset_id, RegisteredDataset.owner_id == owner_id)
+        .order_by(DatasetSplit.created_at, DatasetSplit.id)
+    )).scalars().all()
+
+
+async def get_split(
+    db: AsyncSession, *, dataset_id: uuid.UUID, split_id: uuid.UUID, owner_id: uuid.UUID
+) -> DatasetSplit | None:
+    return (await db.execute(
+        select(DatasetSplit).join(RegisteredDataset, RegisteredDataset.id == DatasetSplit.dataset_id)
+        .where(
+            DatasetSplit.dataset_id == dataset_id, DatasetSplit.id == split_id, RegisteredDataset.owner_id == owner_id
+        )
+    )).scalar_one_or_none()
+
+
+async def select_split(
+    db: AsyncSession, *, dataset_id: uuid.UUID, split_id: uuid.UUID, owner_id: uuid.UUID
+) -> RegisteredDataset | None:
+    split = await get_split(db, dataset_id=dataset_id, split_id=split_id, owner_id=owner_id)
+    if split is None:
+        return None
+    dataset = await get_dataset(db, dataset_id)
+    assert dataset is not None
+    dataset.current_split = split
+    dataset.current_split_id = split.id
+    await db.flush()
+    return dataset
 
 
 async def create_dataset(
@@ -99,7 +189,6 @@ async def create_dataset(
     dataset = RegisteredDataset(
         id=dataset_id,
         name=name,
-        raw_path=str(raw_path),
         raw_sha256=sha256_file(raw_path),
         target_column=target_column,
         description=description,
@@ -108,6 +197,8 @@ async def create_dataset(
     )
     db.add(dataset)
     try:
+        await db.flush()
+        dataset.raw_artifact = _artifact(dataset_id, raw_path, "csv")
         await db.flush()
     except IntegrityError as exc:
         shutil.rmtree(dest, ignore_errors=True)
@@ -125,55 +216,32 @@ async def quick_split_dataset(
     test_size: float = 0.2,
     seed: int = 0,
 ) -> RegisteredDataset:
-    """(Re-)split *dataset*'s own raw file with ASAREE's built-in strategy.
-
-    Safe to call again -- e.g. to try a different seed/test_size -- each call
-    overwrites whichever split currently exists (train.parquet/test.parquet
-    live at a fixed, deterministic path per dataset, so a re-split simply
-    overwrites them in place rather than accumulating orphaned files). Only
-    ever reads/writes this dataset's own raw file; the raw file itself is
-    never touched.
-    """
+    """Create and select a new immutable split of the registered source."""
     if not 0.0 < test_size < 1.0:
         raise DatasetValidationError("test_size must be between 0 and 1")
-    if not dataset.raw_path:
-        raise DatasetValidationError("this dataset has no raw file registered to split")
+    raw_path = _verify_source(dataset)
 
     effective_target = target_column or dataset.target_column
     try:
-        df = pd.read_csv(dataset.raw_path)
+        df = pd.read_csv(raw_path)
     except Exception as exc:
         raise DatasetValidationError(f"could not read this dataset's raw file: {exc}") from exc
     if effective_target and effective_target not in df.columns:
         raise DatasetValidationError(f"target_column '{effective_target}' is not a column in this dataset")
 
-    train_df, test_df, used_group_column = _split(
-        df, test_size=test_size, seed=seed, target_column=effective_target, group_column=group_column
+    try:
+        train_df, test_df, used_group_column = _split(
+            df, test_size=test_size, seed=seed, target_column=effective_target, group_column=group_column
+        )
+    except ValueError as exc:
+        raise DatasetValidationError(str(exc)) from exc
+
+    return await _publish_split(
+        db, dataset, train_df, test_df, method="quick", target_column=effective_target,
+        strategy="group_shuffle" if used_group_column else "stratified" if effective_target else "random",
+        group_column=used_group_column, stratify_column=None if used_group_column else effective_target,
+        test_size=test_size, seed=seed,
     )
-
-    dest = _dataset_dir(dataset.id)
-    dest.mkdir(parents=True, exist_ok=True)
-    train_path = dest / "train.parquet"
-    test_path = dest / "test.parquet"
-    train_df.to_parquet(train_path, index=False)
-    test_df.to_parquet(test_path, index=False)
-
-    dataset.train_path = str(train_path)
-    dataset.test_path = str(test_path)
-    dataset.train_sha256 = sha256_file(train_path)
-    dataset.test_sha256 = sha256_file(test_path)
-    # Overwritten wholesale on every re-split, like the paths/hashes above --
-    # these describe the split that currently exists, not a history of the
-    # ones that came before it.
-    dataset.split_method = "quick"
-    dataset.split_group_column = used_group_column
-    dataset.split_test_size = test_size
-    dataset.split_seed = seed
-    if target_column:
-        dataset.target_column = target_column
-    await db.flush()
-    await db.refresh(dataset)
-    return dataset
 
 
 async def register_manual_split(
@@ -203,28 +271,8 @@ async def register_manual_split(
     except Exception as exc:
         raise DatasetValidationError(f"could not parse the test CSV: {exc}") from exc
 
-    dest = _dataset_dir(dataset.id)
-    dest.mkdir(parents=True, exist_ok=True)
-    train_path = dest / "train.parquet"
-    test_path = dest / "test.parquet"
-    train_df.to_parquet(train_path, index=False)
-    test_df.to_parquet(test_path, index=False)
-
-    dataset.train_path = str(train_path)
-    dataset.test_path = str(test_path)
-    dataset.train_sha256 = sha256_file(train_path)
-    dataset.test_sha256 = sha256_file(test_path)
-    dataset.split_method = "manual"
-    # Cleared, not left behind: a manual split replaces whatever quick split
-    # was there, and stale group/test_size/seed values would describe a split
-    # that no longer exists. ASAREE didn't compute this one and has no honest
-    # values to put here -- "unknown" is the true answer, and null says it.
-    dataset.split_group_column = None
-    dataset.split_test_size = None
-    dataset.split_seed = None
-    await db.flush()
-    await db.refresh(dataset)
-    return dataset
+    # Association records the supplied origin, without claiming source-row membership.
+    return await _publish_split(db, dataset, train_df, test_df, method="manual", target_column=dataset.target_column)
 
 
 async def get_dataset(db: AsyncSession, dataset_id: uuid.UUID) -> RegisteredDataset | None:

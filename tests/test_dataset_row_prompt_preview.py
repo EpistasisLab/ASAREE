@@ -32,7 +32,7 @@ def draft(tmp_path, monkeypatch):
         async def execute(self, statement):
             params = statement.compile().params
             assert registration.id in params.values()
-            return SimpleNamespace(one_or_none=lambda: registration)
+            return SimpleNamespace(scalar_one_or_none=lambda: registration)
     @asynccontextmanager
     async def session():
         yield Session()

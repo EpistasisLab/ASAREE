@@ -150,6 +150,9 @@ services:
       ASAREE_PRODUCT_DATABASE_URL: postgresql+asyncpg://agentic:agentic@motoro-postgres:5432/asaree
     entrypoint: ["python", "-m", "asaree.migrations"]
     command: ["upgrade"]
+    volumes:
+      # File-aware dataset migrations must see the same inputs as the API and workers.
+      - ./data:/app/data:ro
     restart: "no"
 
   asaree-app:

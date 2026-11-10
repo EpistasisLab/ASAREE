@@ -3991,12 +3991,10 @@ async def preview_node_prompt(
     dataset_row = None
     if row_binding is not None:
         async with get_session() as db:
-            registration = (await db.execute(select(
-                RegisteredDataset.id, RegisteredDataset.raw_path, RegisteredDataset.raw_sha256,
-            ).where(
+            registration = (await db.execute(select(RegisteredDataset).where(
                 RegisteredDataset.id == uuid.UUID(row_plan["driver_dataset_id"]),
                 RegisteredDataset.owner_id == owner_id,
-            ))).one_or_none()
+            ))).scalar_one_or_none()
         if registration is None:
             raise ProtocolValidationError("Registered row source is unavailable.")
         source = read_row_source(

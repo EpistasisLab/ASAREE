@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, expect, it, vi } from 'vitest'
 import { experimentsApi, protocolsApi } from '@/api/client'
 import type { Protocol, ProtocolRevision } from '@/types/protocols'
@@ -56,4 +56,56 @@ it('defaults to the published version and sends results excluded', async () => {
     { protocol_id: 'p', protocol_revision_id: 'current' },
     expect.objectContaining({ include_results: false })))
   expect(await screen.findByRole('alert')).toHaveTextContent('Package unavailable')
+})
+
+const completed = { id: 'job', kind: 'export', status: 'completed', protocol_revision_id: 'old',
+  progress: {}, error: null, download_url: '/package?token=expired', schema_url: '/manifest?token=expired' } as const
+
+async function prepareCompletedPackage() {
+  vi.spyOn(protocolsApi, 'listRevisions').mockResolvedValue(versions)
+  vi.spyOn(experimentsApi, 'createResultJob').mockResolvedValue(completed)
+  const status = vi.spyOn(experimentsApi, 'getResultJob').mockResolvedValue(completed)
+  show('old')
+  fireEvent.click(screen.getByRole('button', { name: 'Download experiment package' }))
+  await waitFor(() => expect(screen.getAllByRole('option')).toHaveLength(2))
+  fireEvent.click(screen.getByRole('button', { name: 'Prepare package' }))
+  await screen.findByRole('link', { name: 'Download prepared package' })
+  return status
+}
+
+it('renews stale archive and manifest URLs on activation and uses native navigation', async () => {
+  const status = await prepareCompletedPackage()
+  const navigated: string[] = []
+  vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (this: HTMLAnchorElement) {
+    navigated.push(this.getAttribute('href') ?? '')
+  })
+  status.mockResolvedValue({ ...completed, download_url: '/package?token=fresh', schema_url: '/manifest?token=fresh' })
+  fireEvent.click(screen.getByRole('link', { name: 'Download prepared package' }))
+  await waitFor(() => expect(navigated).toEqual(['/package?token=fresh']))
+  fireEvent.click(screen.getByRole('link', { name: 'Manifest' }))
+  await waitFor(() => expect(navigated).toEqual(['/package?token=fresh', '/manifest?token=fresh']))
+  expect(status).toHaveBeenCalledTimes(3)
+  expect(status).toHaveBeenLastCalledWith('e', 'job', expect.any(AbortSignal))
+})
+
+it('reports link renewal failure without navigating to the expired URL', async () => {
+  const status = await prepareCompletedPackage()
+  const navigate = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
+  status.mockRejectedValue(new Error('Status unavailable'))
+  fireEvent.click(screen.getByRole('link', { name: 'Download prepared package' }))
+  expect(await screen.findByRole('alert')).toHaveTextContent('Could not refresh the download link. Try again.')
+  expect(navigate).not.toHaveBeenCalled()
+})
+
+it('does not navigate after the selected version changes while renewal is pending', async () => {
+  const status = await prepareCompletedPackage()
+  const navigate = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
+  let finish!: (value: Awaited<ReturnType<typeof experimentsApi.getResultJob>>) => void
+  status.mockImplementation(() => new Promise(resolve => { finish = resolve }))
+  fireEvent.click(screen.getByRole('link', { name: 'Download prepared package' }))
+  await waitFor(() => expect(status).toHaveBeenCalledTimes(2))
+  fireEvent.change(screen.getByRole('combobox', { name: 'Published version' }), { target: { value: 'current' } })
+  await act(async () => { finish({ ...completed, download_url: '/package?token=fresh' }) })
+  expect(navigate).not.toHaveBeenCalled()
+  expect(screen.queryByRole('link', { name: 'Download prepared package' })).not.toBeInTheDocument()
 })

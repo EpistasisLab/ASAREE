@@ -334,7 +334,17 @@ async def test_knowledge_capture_is_not_suppressed_by_tool_alias_or_node_order(t
                              command=f"python -m asaree.mcp_servers.okf_bundle --bundle {root}",
                              capabilities={"tools": [{"name": "read_concept"}]},
                              transport=SimpleNamespace(value="stdio"))
-    db = SimpleNamespace(scalar=AsyncMock(return_value=server))
+    class EmptyRows:
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            raise StopAsyncIteration
+
+        async def close(self):
+            pass
+
+    db = SimpleNamespace(scalar=AsyncMock(return_value=server), stream=AsyncMock(return_value=EmptyRows()))
     calls = [(True, {"bundle_id": str(identity)}), (False, {"server_name": server.name})]
     for knowledge, config in calls if knowledge_first else reversed(calls):
         await packages._server(db, writer, config, owner, knowledge=knowledge)

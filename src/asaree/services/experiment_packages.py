@@ -914,7 +914,9 @@ async def execute_package(db: AsyncSession, job: ResultJob, temporary: Path, des
     experiment = await db.scalar(select(ResearchExperiment).where(
         ResearchExperiment.id == job.experiment_id, ResearchExperiment.owner_id == job.owner_id,
     ))
-    publication = await db.scalar(select(ProtocolRevision).join(Protocol).where(
+    publication = await db.scalar(select(ProtocolRevision).join(
+        Protocol, ProtocolRevision.protocol_id == Protocol.id,
+    ).where(
         ProtocolRevision.id == job.protocol_revision_id, ProtocolRevision.protocol_id == job.protocol_id,
         Protocol.experiment_id == job.experiment_id, Protocol.owner_id == job.owner_id,
     ))

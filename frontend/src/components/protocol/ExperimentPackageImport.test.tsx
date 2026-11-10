@@ -6,7 +6,7 @@ import { packageImportsApi } from '@/api/client'
 import type { PackageImport } from '@/types/packageImports'
 import { ExperimentPackageImport } from './ExperimentPackageImport'
 
-afterEach(() => { cleanup(); vi.restoreAllMocks() })
+afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals() })
 
 const ready: PackageImport = { id: 'request', status: 'awaiting_confirmation', sha256: 'source-hash',
   experiment_id: null, configured_at: null, created_at: '', expires_at: '', error: null,
@@ -25,12 +25,15 @@ function show(items: PackageImport[] = []) {
 }
 
 it('uploads for inspection and requires an explicit confirmation after showing requirements', async () => {
+  vi.stubGlobal('crypto', { getRandomValues: crypto.getRandomValues.bind(crypto) })
   const create = vi.spyOn(packageImportsApi, 'create').mockResolvedValue({ ...ready, status: 'uploading', preflight: {} })
   const upload = vi.spyOn(packageImportsApi, 'upload').mockResolvedValue({ ...ready, status: 'validating' })
   const command = vi.spyOn(packageImportsApi, 'command').mockResolvedValue({ ...ready, status: 'queued' })
   show()
   const file = new File(['archive bytes'], 'package.tar.gz', { type: 'application/gzip' })
-  fireEvent.change(screen.getByLabelText('Experiment package'), { target: { files: [file] } })
+  const input = screen.getByLabelText<HTMLInputElement>('Experiment package')
+  expect(input.accept.split(',')).toEqual(expect.arrayContaining(['.gz', 'application/gzip']))
+  fireEvent.change(input, { target: { files: [file] } })
   await waitFor(() => expect(upload).toHaveBeenCalledWith('request', file, expect.any(AbortSignal)))
   expect(create).toHaveBeenCalledOnce()
   expect(command).not.toHaveBeenCalled()
@@ -47,6 +50,37 @@ it('resumes persisted requests and allows cancellation before activation', async
   fireEvent.click(await screen.findByRole('button', { name: /request.*awaiting_confirmation/ }))
   fireEvent.click(await screen.findByRole('button', { name: 'Cancel import' }))
   await waitFor(() => expect(command).toHaveBeenCalledWith('request', 'cancel'))
+})
+
+it('drops a package into the existing inspection flow without confirming import', async () => {
+  const create = vi.spyOn(packageImportsApi, 'create').mockResolvedValue({ ...ready, status: 'uploading', preflight: {} })
+  const upload = vi.spyOn(packageImportsApi, 'upload').mockResolvedValue({ ...ready, status: 'validating' })
+  const command = vi.spyOn(packageImportsApi, 'command')
+  show()
+  const file = new File(['archive bytes'], 'experiment.tgz', { type: 'application/gzip' })
+  const target = screen.getByText('Drop a .tar.gz or .tgz package or click to browse').closest('label')!
+  fireEvent.dragOver(target)
+  fireEvent.drop(target, { dataTransfer: { files: [file] } })
+  await waitFor(() => expect(upload).toHaveBeenCalledWith('request', file, expect.any(AbortSignal)))
+  expect(create).toHaveBeenCalledOnce()
+  expect(command).not.toHaveBeenCalled()
+  expect(screen.getByText('experiment.tgz')).toBeInTheDocument()
+  expect(await screen.findByText(/Source version 7/)).toBeInTheDocument()
+})
+
+it('prevents additional drops and file selection while uploading', async () => {
+  const create = vi.spyOn(packageImportsApi, 'create').mockResolvedValue({ ...ready, status: 'uploading', preflight: {} })
+  const upload = vi.spyOn(packageImportsApi, 'upload').mockReturnValue(new Promise(() => {}))
+  show()
+  const input = screen.getByLabelText('Experiment package')
+  const target = input.closest('label')!
+  const file = new File(['archive bytes'], 'experiment.tar.gz')
+  fireEvent.drop(target, { dataTransfer: { files: [file] } })
+  await waitFor(() => expect(upload).toHaveBeenCalledOnce())
+  expect(input).toBeDisabled()
+  fireEvent.drop(target, { dataTransfer: { files: [new File(['other'], 'other.tgz')] } })
+  expect(create).toHaveBeenCalledOnce()
+  expect(upload).toHaveBeenCalledOnce()
 })
 
 it('keeps source history and local-configuration acknowledgement distinct', async () => {

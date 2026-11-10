@@ -184,6 +184,10 @@ class Reconstruction:
             split = self.maps.get(('split', pin.get('split_id')))
             if split:
                 loaded.current_split_id = uuid.UUID(split)
+            elif pin.get('split_id'):
+                # A missing source split is a requirement, never an explicit
+                # original-only selection. Keep it across worker restarts.
+                self.map('unresolved_split', pin['split_id'], pin=pin)
         await self.db.flush()
         return dataset_ids
 
@@ -483,6 +487,13 @@ async def validate_local_dependencies(db: AsyncSession, job: PackageImport) -> N
     experiment = await db.get(ResearchExperiment, job.experiment_id)
     if protocol is None or experiment is None:
         raise PackageError('Imported editable draft is unavailable')
+    unresolved_splits = (await db.scalars(select(ImportedIdentity).where(
+        ImportedIdentity.import_id == job.id, ImportedIdentity.kind == 'unresolved_split',
+    ))).all()
+    split_datasets = {
+        identity(job, 'dataset', requirement.provenance['pin']['dataset_id'])
+        for requirement in unresolved_splits
+    }
     async with system_session(
         reason='validate owned import dependency configuration without execution',
     ) as resources:
@@ -498,6 +509,15 @@ async def validate_local_dependencies(db: AsyncSession, job: PackageImport) -> N
                         dataset = None
                     if dataset is None or dataset.raw_artifact is None or dataset.raw_artifact.status != 'ready':
                         raise PackageError(f'Dataset dependency remains unresolved: {node["id"]}')
+                    if dataset.id in split_datasets:
+                        split = dataset.current_split
+                        if (split is None or split.dataset_id != dataset.id
+                            or split.source_sha256 != dataset.raw_sha256
+                            or any(artifact is None or artifact.status != 'ready'
+                                   or artifact.dataset_id != dataset.id
+                                   for artifact in (split.train_artifact, split.test_artifact))):
+                            raise PackageError(f'Pinned split dependency remains unresolved: {node["id"]}. '
+                                               'Restore a local split or explicitly rebind the dataset.')
                 elif kind == 'skill':
                     try:
                         skill = await resources.scalar(select(Skill).where(

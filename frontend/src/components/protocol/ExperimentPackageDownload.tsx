@@ -1,17 +1,21 @@
 import { useEffect, useRef, useState, type MouseEvent } from 'react'
-import { useMutation, useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import type { Edge, Node } from '@xyflow/react'
 import { Download } from 'lucide-react'
 import { experimentsApi, protocolsApi } from '@/api/client'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { jobActive, useResultJob } from '@/lib/resultJobs'
 import { newRequestKey } from '@/lib/requestKey'
+import { protocolForExperimentQueryKey, protocolGraphQueryKey, toPersistedGraph } from '@/lib/protocolGraph'
+import { executionKeys } from '@/lib/executionQueries'
 import type { Protocol } from '@/types/protocols'
 import { ExperimentPackageImport } from './ExperimentPackageImport'
 
 export function ExperimentPackageDownload({ experimentId, protocol, selectedVersionId }: {
   experimentId: string; protocol: Protocol; selectedVersionId?: string
 }) {
+  const client = useQueryClient()
   const [open, setOpen] = useState(false)
   const [versionId, setVersionId] = useState('')
   const [includeResults, setIncludeResults] = useState(false)
@@ -27,13 +31,32 @@ export function ExperimentPackageDownload({ experimentId, protocol, selectedVers
     if (open && !versionId && versions.data?.length) setVersionId(versions.data[0].id)
   }, [open, versionId, versions.data])
   const create = useMutation({
-    mutationFn: () => experimentsApi.createResultJob(experimentId,
-      { protocol_id: protocol.id, protocol_revision_id: versionId },
+    mutationFn: (revisionId: string) => experimentsApi.createResultJob(experimentId,
+      { protocol_id: protocol.id, protocol_revision_id: revisionId },
       { kind: 'export', request_key: newRequestKey(), format: 'experiment_package', include_results: includeResults }),
     onSuccess: result => setJobId(result.id),
   })
-  const busy = create.isPending || jobActive(job.data) || (!!jobId && !job.data && !job.error)
-  const error = linkError ?? create.error?.message ?? job.error?.message ?? job.data?.error
+  const publish = useMutation({
+    mutationFn: async () => {
+      const live = client.getQueryData<{ nodes: Node[]; edges: Edge[] }>(protocolGraphQueryKey(protocol.id))
+      if (live) await protocolsApi.update(protocol.id, { graph: toPersistedGraph(live.nodes, live.edges) })
+      const published = await protocolsApi.publish(protocol.id)
+      if (!published.published_revision_id) throw new Error('Publication did not return a downloadable version.')
+      return published
+    },
+    onSuccess: async published => {
+      client.setQueryData(protocolForExperimentQueryKey(experimentId), published)
+      void client.invalidateQueries({ queryKey: ['experiments', experimentId] })
+      void client.invalidateQueries({ queryKey: executionKeys.root(experimentId) })
+      setVersionId(published.published_revision_id!)
+      setJobId(undefined)
+      await client.invalidateQueries({ queryKey: ['protocols', protocol.id, 'revisions'] })
+      create.mutate(published.published_revision_id!)
+    },
+  })
+  const needsPublish = !protocol.published_revision_id || protocol.has_unpublished_changes
+  const busy = publish.isPending || create.isPending || jobActive(job.data) || (!!jobId && !job.data && !job.error)
+  const error = linkError ?? publish.error?.message ?? create.error?.message ?? job.error?.message ?? job.data?.error
   async function download(event: MouseEvent<HTMLAnchorElement>, metadata: boolean) {
     event.preventDefault()
     if (linkPending || !jobId) return
@@ -66,6 +89,7 @@ export function ExperimentPackageDownload({ experimentId, protocol, selectedVers
       setJobId(undefined)
       setLinkError(undefined)
       create.reset()
+      publish.reset()
       setOpen(true)
     }}><Download className="size-3.5" /> Download experiment package</Button>
     <Dialog open={open} onOpenChange={setOpen}>
@@ -74,7 +98,7 @@ export function ExperimentPackageDownload({ experimentId, protocol, selectedVers
         <ExperimentPackageImport experimentId={experimentId} />
         <label className="space-y-1 text-sm">Published version
           <select className="w-full rounded-md border bg-background px-2 py-2 font-mono text-sm" value={versionId}
-            disabled={busy} onChange={event => { setVersionId(event.target.value); setJobId(undefined); setLinkError(undefined); create.reset() }}>
+            disabled={busy} onChange={event => { setVersionId(event.target.value); setJobId(undefined); setLinkError(undefined); create.reset(); publish.reset() }}>
             {!versions.data && <option value={versionId}>Loading versions…</option>}
             {versions.data?.map(version => <option key={version.id} value={version.id}>
               v{version.revision}{version.name ? ` · ${version.name}` : ''} · {new Date(version.published_at).toLocaleString()}
@@ -88,6 +112,10 @@ export function ExperimentPackageDownload({ experimentId, protocol, selectedVers
         <p className="text-xs text-muted-foreground">Credentials are excluded. Prepared downloads expire after 24 hours.</p>
         {versions.isError && <p role="alert" className="text-xs text-destructive">Could not load published versions.</p>}
         {versions.data?.length === 0 && <p role="status" className="text-xs text-muted-foreground">Publish the experiment to create its first downloadable version.</p>}
+        {needsPublish && <div className="space-y-1 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm">
+          <p className="font-medium">{protocol.published_revision_id ? 'Experiment has unpublished changes' : 'Experiment has not been published'}</p>
+          <p className="text-xs text-muted-foreground">Publish the draft to include its current canvas, design settings, and dataset inputs in a new package. Preparing a selected published version includes only that version’s recorded configuration and inputs.</p>
+        </div>}
         {error && <p role="alert" className="text-xs text-destructive">{error}</p>}
         {job.data?.status === 'expired' && <p role="status" className="text-xs">This package expired. Prepare another download.</p>}
         {job.data?.status === 'cancelled' && <p role="status" className="text-xs">Package preparation cancelled.</p>}
@@ -95,9 +123,14 @@ export function ExperimentPackageDownload({ experimentId, protocol, selectedVers
         {linkPending && <p role="status" className="text-xs text-muted-foreground">Refreshing download link…</p>}
         {job.data?.status === 'completed' && job.data.progress.sha256 && <p className="break-all font-mono text-xs text-muted-foreground">SHA-256: {job.data.progress.sha256}</p>}
         <div className="flex flex-wrap gap-2">
+          {needsPublish && <Button size="sm" disabled={busy} onClick={() => {
+            setLinkError(undefined)
+            create.reset()
+            publish.mutate()
+          }}>{publish.isPending ? 'Publishing…' : 'Publish & prepare package'}</Button>}
           <Button size="sm" disabled={busy || !versionId || !versions.data || versions.isError} onClick={() => {
             setLinkError(undefined)
-            create.mutate()
+            create.mutate(versionId)
           }}>
             {busy ? 'Preparing…' : 'Prepare package'}
           </Button>

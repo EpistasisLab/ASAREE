@@ -208,6 +208,32 @@ def test_missing_name_only_dependencies_remain_explicit_diagnostics(tmp_path, ve
         'unavailable legacy name', 'unavailable external tool'}
 
 
+@pytest.mark.parametrize('referenced', [False, True])
+@pytest.mark.parametrize('fault', ['different_id', 'noncanonical_id', 'noncanonical_filename'])
+def test_split_identity_must_match_filename_and_pin(tmp_path, referenced, fault):
+    source, split = str(uuid.uuid4()), str(uuid.uuid4())
+    identifier = str(uuid.uuid4()) if fault == 'different_id' else split
+    if fault == 'noncanonical_id':
+        identifier = identifier.upper()
+    filename = split.upper() if fault == 'noncanonical_filename' else split
+
+    def modify(writer):
+        writer.dependency(source, 'dataset', 'publication_pinned', status='missing')
+        writer.json(f'inputs/splits/{filename}.json', {
+            'id': identifier, 'dataset_id': source, 'source_sha256': '0' * 64,
+            'train_artifact_id': None, 'test_artifact_id': None,
+        })
+        if referenced:
+            writer.json('inputs/bindings.json', {'schema_version': 1, 'inputs': [{
+                'dataset_id': source, 'mode': 'whole_dataset', 'raw_artifact': None,
+                'raw_sha256': '0' * 64, 'split_id': split,
+                'train_artifact': None, 'test_artifact': None,
+            }]})
+
+    with pytest.raises(PackageError, match='identity|canonical'):
+        inspect(package(tmp_path, modify=modify), tmp_path / 'read', Limits(), threading.Event())
+
+
 @pytest.mark.parametrize('version', [1, 2])
 async def test_verified_knowledge_source_containment_is_rechecked_before_copy(tmp_path, version, monkeypatch):
     from types import SimpleNamespace

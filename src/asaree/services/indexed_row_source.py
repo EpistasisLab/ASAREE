@@ -89,6 +89,7 @@ class LoadedRows(Sequence[tuple[str, ...]]):
 
 @dataclass(frozen=True)
 class IndexedRowSource(RowSource):
+    rows: LoadedRows
     owner_id: uuid.UUID
     index_id: uuid.UUID
     parser_version: str = PARSER_VERSION
@@ -106,7 +107,7 @@ class IndexedRowSource(RowSource):
             raise DatasetRowCsvError("empty_source" if not self.rows else "row_out_of_range",
                                      "row index is outside the source")
         selected = list(dict.fromkeys(selected))
-        cached = self.rows.values if isinstance(self.rows, LoadedRows) else {}
+        cached = self.rows.values
         missing = [i for i in selected if i not in cached]
         values = {i: cached[i] for i in selected if i in cached}
         if missing:

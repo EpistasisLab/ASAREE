@@ -4849,7 +4849,7 @@ async def plan_cell_runs(
     replicate_ids: set[uuid.UUID] | None = None,
     prevalidated: bool = False,
     validate_design_impact: bool = True,
-    indexed_source: Any | None = None,
+    indexed_source: IndexedRowSource | None = None,
 ) -> tuple[list[ProtocolRun], int]:
     """ "Run all cells": creates one pending :class:`ProtocolRun` per
     not-yet-completed replicate row under *experiment_id*, each carrying its

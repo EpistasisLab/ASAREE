@@ -63,9 +63,9 @@ from asaree.services import prompt_references
 from asaree.services.agent_cards import AgentCard, build_agent_card
 from asaree.services.coordination import coordination_strategy_slug
 from asaree.services.dataset_factors import validate_dataset_factors
-from asaree.services.dataset_row_csv import DatasetRowCsvError, project_row, read_row_source
+from asaree.services.dataset_row_csv import DatasetRowCsvError, project_row
 from asaree.services.dataset_row_inputs import DatasetRowInputError, resolve_dataset_row_plan
-from asaree.services.dataset_row_planning import enumerate_row_candidates
+from asaree.services.dataset_row_planning import iter_row_candidates
 from asaree.services.dataset_row_workspaces import prepare_agent_row_inputs, row_attempt_workspace_id
 from asaree.services.dataset_workspaces import (
     WorkspaceSeedError,
@@ -85,6 +85,7 @@ from asaree.services.experiments import get_experiment
 from asaree.services.factor_bindings import validate_factor_bindings
 from asaree.services.factorial_cells import get_replicate, list_replicates, upsert_replicate
 from asaree.services.factorial_row_results import claim_row_attempt, ensure_row_result, get_row_result
+from asaree.services.indexed_row_source import BATCH_SIZE, IndexedRowSource, next_batch, read_indexed_row_source
 from asaree.services.knowledge_factors import knowledge_id, validate_knowledge_factors
 from asaree.services.model_config import build_model_config
 from asaree.services.persona_factors import validate_persona_factors
@@ -4034,12 +4035,10 @@ async def preview_node_prompt(
                 RegisteredDataset.id == uuid.UUID(row_plan["driver_dataset_id"]),
                 RegisteredDataset.owner_id == owner_id,
             ))).scalar_one_or_none()
-        if registration is None:
-            raise ProtocolValidationError("Registered row source is unavailable.")
-        source = read_row_source(
-            dataset_id=str(registration.id), raw_path=registration.raw_path,
-            raw_sha256=registration.raw_sha256,
-        )
+            if registration is None:
+                raise ProtocolValidationError("Registered row source is unavailable.")
+            source = await read_indexed_row_source(db, dataset_id=registration.id, owner_id=owner_id)
+            source = await source.fetch_rows(db, [0 if row_index is None else row_index])
         dataset_row = project_row(
             source, row_index=0 if row_index is None else row_index, columns=row_binding["columns"],
         )
@@ -5063,10 +5062,8 @@ async def plan_cell_runs(
             if registration is None or experiment_owner != owner_id:
                 raise ProtocolValidationError("Registered row source is unavailable.")
             try:
-                source = indexed_source or read_row_source(
-                    dataset_id=str(registration.id),
-                    raw_path=registration.raw_path,
-                    raw_sha256=registration.raw_sha256,
+                source = indexed_source or await read_indexed_row_source(
+                    db, dataset_id=registration.id, owner_id=owner_id,
                 )
             except DatasetRowCsvError as exc:
                 raise ProtocolValidationError(str(exc)) from exc
@@ -5085,16 +5082,23 @@ async def plan_cell_runs(
                 raise ProtocolValidationError(str(exc)) from exc
             if retry_row_result_ids is not None:
                 planned_retries: list[tuple[uuid.UUID, uuid.UUID, str, dict, dict, uuid.UUID]] = []
+                # Retries are bounded by their requested slots; fetch each window
+                # before projection rather than querying once for every row.
+                retry_views = {}
+                retry_positions = [slot.row_index for slot, _, _ in retry_targets or []]
+                for start in range(0, len(retry_positions), BATCH_SIZE):
+                    window = await source.fetch_rows(db, retry_positions[start:start + BATCH_SIZE])
+                    retry_views.update(window.rows.values)
+                pinned_source = IndexedRowSource(
+                    source.dataset_id, source.raw_sha256, source.columns,
+                    type(source.rows)(len(source.rows), retry_views), source.owner_id, source.index_id,
+                )
                 for slot, latest, parent in retry_targets or []:
                     if slot.dataset_id != registration.id:
                         raise ProtocolValidationError("invalid_retry_target")
                     try:
-                        pinned_source = indexed_source or read_row_source(
-                            dataset_id=str(slot.dataset_id),
-                            raw_path=registration.raw_path,
-                            raw_sha256=registration.raw_sha256,
-                            expected_sha256=slot.raw_sha256,
-                        )
+                        if slot.raw_sha256 != source.raw_sha256:
+                            raise DatasetRowCsvError("source_hash_mismatch", "retry source differs from original")
                         patched_graph = apply_factor_bindings(revision.graph, parent.factor_values or {})
                         validate_coordination_strategy(design_spec, graph=patched_graph)
                         patched_plan = resolve_dataset_row_plan(patched_graph, design_spec)
@@ -5164,7 +5168,7 @@ async def plan_cell_runs(
                 for parent in selected_parents
             ]
             try:
-                candidates = enumerate_row_candidates(
+                candidates = iter_row_candidates(
                     parents=parent_values,
                     source=source,
                     graph=revision.graph,
@@ -5172,61 +5176,56 @@ async def plan_cell_runs(
                     protocol_revision_id=str(revision.id),
                     row_indices=row_indices,
                 )
-                planned = []
-                for candidate in candidates:
-                    patched_graph = apply_factor_bindings(revision.graph, candidate["factor_values"])
-                    validate_coordination_strategy(design_spec, graph=patched_graph)
-                    patched_plan = resolve_dataset_row_plan(patched_graph, design_spec)
-                    if patched_plan is None or patched_plan["driver_dataset_id"] != str(registration.id):
-                        raise DatasetRowInputError("driver_mismatch", "factor substitution changed the row driver")
-                    columns = list(
-                        dict.fromkeys(column for binding in patched_plan["bindings"] for column in binding["columns"])
-                    )
-                    view = project_row(source, row_index=candidate["dataset_row"]["row_index"], columns=columns)
-                    planned.append((candidate, view))
+                created: list[ProtocolRun] = []
+                skipped = 0
+                # Each window bounds row fetches, projections and slot claims.
+                # The returned runs are the existing public API's output.
+                while batch := next_batch(candidates):
+                    window = await source.fetch_rows(db, (item["dataset_row"]["row_index"] for item in batch))
+                    claims = []
+                    for candidate in batch:
+                        patched_graph = apply_factor_bindings(revision.graph, candidate["factor_values"])
+                        validate_coordination_strategy(design_spec, graph=patched_graph)
+                        patched_plan = resolve_dataset_row_plan(patched_graph, design_spec)
+                        if patched_plan is None or patched_plan["driver_dataset_id"] != str(registration.id):
+                            raise DatasetRowInputError("driver_mismatch", "factor substitution changed the row driver")
+                        columns = list(dict.fromkeys(
+                            column for binding in patched_plan["bindings"] for column in binding["columns"]
+                        ))
+                        view = project_row(window, row_index=candidate["dataset_row"]["row_index"], columns=columns)
+                        row_result = await ensure_row_result(
+                            db, experiment_id=experiment_id,
+                            design_revision_id=uuid.UUID(candidate["design_revision_id"]),
+                            protocol_revision_id=revision.id,
+                            replicate_result_id=uuid.UUID(candidate["replicate_result_id"]),
+                            dataset_id=registration.id, raw_sha256=source.raw_sha256,
+                            row_index=candidate["dataset_row"]["row_index"],
+                        )
+                        expected = row_result.run_id if candidate["replicate_label"] in requested_reruns else None
+                        claims.append((row_result.id, candidate, view, expected))
+                    window_runs = []
+                    for row_result_id, candidate, view, expected in sorted(claims, key=lambda item: item[0].int):
+                        run = await claim_row_attempt(
+                            db, row_result_id=row_result_id, expected_run_id=expected,
+                            allow_completed=candidate["replicate_label"] in requested_reruns,
+                            create_kwargs={
+                                "protocol_id": protocol_id, "owner_id": owner_id,
+                                "replicate_label": candidate["replicate_label"],
+                                "factor_values": candidate["factor_values"],
+                                "replicate_result_id": uuid.UUID(candidate["replicate_result_id"]),
+                                "design_revision_id": uuid.UUID(candidate["design_revision_id"]),
+                                "protocol_revision_id": revision.id, "dataset_row": view,
+                            },
+                        )
+                        if run is None:
+                            skipped += 1
+                        else:
+                            window_runs.append(run)
+                    order = {row_id: i for i, (row_id, _, _, _) in enumerate(claims)}
+                    created.extend(sorted(window_runs, key=lambda run: order[run.row_result_id]))
+                return created, skipped
             except (DatasetRowInputError, DatasetRowCsvError) as exc:
                 raise ProtocolValidationError(str(exc)) from exc
-
-            created: list[ProtocolRun] = []
-            skipped = 0
-            claims = []
-            for candidate, view in planned:
-                row_result = await ensure_row_result(
-                    db,
-                    experiment_id=experiment_id,
-                    design_revision_id=uuid.UUID(candidate["design_revision_id"]),
-                    protocol_revision_id=revision.id,
-                    replicate_result_id=uuid.UUID(candidate["replicate_result_id"]),
-                    dataset_id=registration.id,
-                    raw_sha256=source.raw_sha256,
-                    row_index=candidate["dataset_row"]["row_index"],
-                )
-                expected_run_id = row_result.run_id if candidate["replicate_label"] in requested_reruns else None
-                claims.append((row_result.id, candidate, view, expected_run_id))
-            for row_result_id, candidate, view, expected_run_id in sorted(claims, key=lambda item: item[0].int):
-                run = await claim_row_attempt(
-                    db,
-                    row_result_id=row_result_id,
-                    expected_run_id=expected_run_id,
-                    allow_completed=candidate["replicate_label"] in requested_reruns,
-                    create_kwargs={
-                        "protocol_id": protocol_id,
-                        "owner_id": owner_id,
-                        "replicate_label": candidate["replicate_label"],
-                        "factor_values": candidate["factor_values"],
-                        "replicate_result_id": uuid.UUID(candidate["replicate_result_id"]),
-                        "design_revision_id": uuid.UUID(candidate["design_revision_id"]),
-                        "protocol_revision_id": revision.id,
-                        "dataset_row": view,
-                    },
-                )
-                if run is None:
-                    skipped += 1
-                else:
-                    created.append(run)
-            candidate_order = {row_id: index for index, (row_id, _, _, _) in enumerate(claims)}
-            created.sort(key=lambda run: candidate_order[run.row_result_id])
-            return created, skipped
     elif resolve_dataset_row_plan(revision.graph if revision is not None else graph, design_spec) is not None:
         raise ProtocolValidationError("Published protocol revision does not match the requested protocol and graph.")
 
@@ -5422,12 +5421,12 @@ async def plan_single_replicate_run(
         if registration is None or experiment.owner_id != owner_id:
             raise ProtocolValidationError("Registered row source is unavailable.")
         try:
-            source = read_row_source(dataset_id=str(registration.id), raw_path=registration.raw_path,
-                                     raw_sha256=registration.raw_sha256)
+            source = await read_indexed_row_source(db, dataset_id=registration.id, owner_id=owner_id)
             columns = list(dict.fromkeys(column for binding in row_plan["bindings"] for column in binding["columns"]))
             if not columns or set(columns) - set(source.columns):
                 raise DatasetRowCsvError("invalid_columns", "row input columns must exist in the registered CSV header")
             selected_index = 0 if row_index is None else row_index
+            source = await source.fetch_rows(db, [selected_index])
             view = project_row(source, row_index=selected_index, columns=columns)
         except (DatasetRowCsvError, IndexError) as exc:
             raise ProtocolValidationError(str(exc)) from exc
@@ -5770,12 +5769,10 @@ async def run_protocol(protocol_run_id: uuid.UUID) -> None:
                 ).scalar_one_or_none()
                 if registration is None:
                     raise DatasetRowCsvError("source_unavailable", "registered row source is unavailable")
-                row_source = read_row_source(
-                    dataset_id=str(registration.id),
-                    raw_path=registration.raw_path,
-                    raw_sha256=registration.raw_sha256,
-                    expected_sha256=dataset_row["raw_sha256"],
+                row_source = await read_indexed_row_source(
+                    db, dataset_id=registration.id, owner_id=owner_id, expected_sha256=dataset_row["raw_sha256"],
                 )
+                row_source = await row_source.fetch_rows(db, [dataset_row["row_index"]])
                 projected = project_row(
                     row_source, row_index=dataset_row["row_index"], columns=dataset_row["columns"]
                 )

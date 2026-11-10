@@ -35,6 +35,7 @@ from asaree.services.datasets import (
     register_manual_split,
     select_split,
 )
+from asaree.services.row_schema_reads import schema_columns
 
 router = APIRouter(prefix="/datasets", tags=["datasets"])
 
@@ -335,7 +336,7 @@ async def get_dataset_row_schema_endpoint(
     return DatasetRowSchemaResponse(
         dataset_id=dataset.id,
         raw_sha256=dataset.raw_sha256,
-        columns=metadata["columns"],
+        columns=schema_columns(metadata),
         row_count=metadata["row_count"],
     )
 

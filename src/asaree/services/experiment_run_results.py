@@ -27,11 +27,12 @@ from asaree.models.factorial_row_result import FactorialRowResult
 from asaree.models.protocol import Protocol
 from asaree.models.protocol_revision import ProtocolRevision
 from asaree.models.protocol_run import ProtocolRun
-from asaree.services.dataset_row_csv import DatasetRowCsvError, read_row_source
+from asaree.services.dataset_row_csv import DatasetRowCsvError
 from asaree.services.dataset_row_inputs import resolve_dataset_row_plan
 from asaree.services.dataset_row_workspaces import row_attempt_workspace_id
 from asaree.services.factorial_cells import list_replicates
 from asaree.services.factorial_row_results import list_row_results
+from asaree.services.indexed_row_source import read_indexed_row_source
 from asaree.services.measurement_migration import LegacyResultFacets, legacy_measurement_facets
 from asaree.services.metrics import normalize_metrics
 from asaree.services.protocol_runs import list_experiment_trials
@@ -364,11 +365,8 @@ async def _source_row_count(db: AsyncSession, *, dataset_id: uuid.UUID | None, r
     if dataset is None:
         return None
     try:
-        source = read_row_source(
-            dataset_id=str(dataset.id),
-            raw_path=dataset.raw_path,
-            raw_sha256=dataset.raw_sha256,
-            expected_sha256=raw_sha256,
+        source = await read_indexed_row_source(
+            db, dataset_id=dataset.id, owner_id=dataset.owner_id, expected_sha256=raw_sha256,
         )
     except DatasetRowCsvError:
         return None

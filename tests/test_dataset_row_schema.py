@@ -14,8 +14,7 @@ from fastapi import FastAPI
 from asaree.api import datasets
 from asaree.deps import get_current_user
 from asaree.models.database import get_db
-from asaree.services.dataset_row_csv import DatasetRowCsvError
-from asaree.services.indexed_row_source import read_indexed_row_source
+from asaree.services.dataset_row_csv import DatasetRowCsvError, read_row_source
 from asaree.services.row_schema_reads import schema_payload
 
 
@@ -49,8 +48,8 @@ def _dataset(dataset_id: uuid.UUID, owner_id: uuid.UUID, path: Path, content: by
     sha = hashlib.sha256(content).hexdigest()
     try:
         cached = schema_payload(
-            read_indexed_row_source(
-                dataset_id=str(dataset_id), raw_path=str(path), raw_sha256=sha, cache_root=path.parent / "indexes"
+            read_row_source(
+                dataset_id=str(dataset_id), raw_path=str(path), raw_sha256=sha,
             )
         )
     except DatasetRowCsvError as exc:

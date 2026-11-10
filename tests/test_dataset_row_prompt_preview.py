@@ -37,6 +37,14 @@ def draft(tmp_path, monkeypatch):
     async def session():
         yield Session()
     monkeypatch.setattr(execution, 'get_session', session)
+    class PreviewSource:
+        async def fetch_rows(self, _db, _indices):
+            return read_row_source(dataset_id=str(registration.id), raw_path=str(source),
+                                   raw_sha256=registration.raw_sha256)
+    async def indexed(_db, *, dataset_id, owner_id):
+        assert dataset_id == registration.id
+        return PreviewSource()
+    monkeypatch.setattr(execution, 'read_indexed_row_source', indexed)
     async def forbidden(*args, **kwargs):
         pytest.fail('preview must not execute, seed, enqueue or fetch full metadata')
     for name in ('execute_run', 'fetch_owned_registration', 'create_protocol_run', 'seed_cell_workspace'):

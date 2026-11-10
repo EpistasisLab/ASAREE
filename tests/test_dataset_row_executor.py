@@ -75,9 +75,9 @@ async def row_protocol(tmp_path: Path):
             revision = await publish_protocol(db, protocol, owner_id=user.id)
             protocol.published_revision_id = revision.id
             row = execution.project_row(
-                execution.read_row_source(
-                    dataset_id=str(dataset.id), raw_path=str(source_path), raw_sha256=dataset.raw_sha256,
-                ), row_index=0, columns=["prompt", "reference"],
+                await (await execution.read_indexed_row_source(
+                    db, dataset_id=dataset.id, owner_id=user.id,
+                )).fetch_rows(db, [0]), row_index=0, columns=["prompt", "reference"],
             )
             # Production row creation validates and claims the stable row slot.
             slot = await ensure_row_result(

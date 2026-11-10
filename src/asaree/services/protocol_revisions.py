@@ -16,11 +16,12 @@ from asaree.models.protocol import Protocol
 from asaree.models.protocol_revision import ProtocolRevision
 from asaree.models.protocol_run import ProtocolRun
 from asaree.services.dataset_inputs import freeze_dataset_inputs, retain_inputs
-from asaree.services.dataset_row_csv import DatasetRowCsvError, read_row_source
+from asaree.services.dataset_row_csv import DatasetRowCsvError
 from asaree.services.dataset_row_inputs import DatasetRowInputError, resolve_dataset_row_plan
 from asaree.services.datasets import get_dataset_by_name
 from asaree.services.design_revisions import get_current_revision
 from asaree.services.experiment_versions import experiment_settings, publication_matches_experiment
+from asaree.services.indexed_row_source import read_indexed_row_source
 from asaree.services.protocol_graph_schema import functional_protocol_graph_hash
 from asaree.services.sampling_snapshots import freeze_sampling, sampling_policy_is_current
 
@@ -133,8 +134,8 @@ async def publish_protocol(
                 raise DatasetRowInputError(
                     "mixed_driver_modes", "one dataset cannot use both per_row and whole_dataset inputs"
                 )
-        source = read_row_source(
-            dataset_id=str(registration.id), raw_path=registration.raw_path, raw_sha256=registration.raw_sha256
+        source = await read_indexed_row_source(
+            db, dataset_id=registration.id, owner_id=protocol.owner_id,
         )
         for binding in plan["bindings"]:
             missing = [column for column in binding["columns"] if column not in source.columns]

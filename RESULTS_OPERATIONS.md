@@ -138,8 +138,9 @@ hash; execution still verifies the pinned source identity before running.
    production execution worker. Compose defines `asaree-results-worker`, which
    waits for both migration steps. Both workers and the API must share the data
    volume and configured export/row-index paths.
-4. Keep `ASAREE_RESULT_EXPORT_DIR` and `ASAREE_RESULT_ROW_INDEX_DIR` on persistent
-   shared storage (defaults are `./data/result-exports` and `./data/result-row-indexes`).
+4. Keep `ASAREE_RESULT_EXPORT_DIR` on persistent shared storage (default
+   `./data/result-exports`). Derived row indexes live in ASAREE PostgreSQL;
+   migrate previous SQLite directories using [the operator guide](docs/managed-storage.md#retiring-legacy-sqlite-row-indexes).
 5. To requeue all existing overview projections, run
    `python scripts/rebuild_result_summaries.py`. The worker rebuilds from facts
    and retries unfinished accounting; no evidence or execution timestamps change.

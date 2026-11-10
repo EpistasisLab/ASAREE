@@ -1,15 +1,17 @@
-import { useRef, useState } from 'react'
+import { useId, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
 import { packageImportsApi } from '@/api/client'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { Input } from '@/components/ui/input'
 import type { PackageImport } from '@/types/packageImports'
+import { FileDropInput } from './FileDropInput'
 
 /** Persistent imports can be resumed after navigation or a browser restart. */
 export function ExperimentPackageImport({ experimentId }: { experimentId?: string }) {
   const client = useQueryClient()
+  const fileInputId = useId()
+  const [file, setFile] = useState<File | null>(null)
   const [selected, setSelected] = useState<string | null>(null)
   const [offset, setOffset] = useState(0)
   const [acknowledged, setAcknowledged] = useState(false)
@@ -80,11 +82,11 @@ export function ExperimentPackageImport({ experimentId }: { experimentId?: strin
     <CardContent className="space-y-4">
       {!experimentId && <>
         <p className="text-sm text-muted-foreground">Upload a published experiment package. Review its contents before creating a new editable experiment. Import never runs packaged scripts or tools.</p>
-        <Input type="file" accept=".tar.gz,.tgz" aria-label="Experiment package" disabled={uploading} onChange={(event) => {
-          const file = event.target.files?.[0]
-          if (file) void upload(file)
-          event.target.value = ''
-        }} />
+        <FileDropInput id={fileInputId} accept=".tar.gz,.tgz" ariaLabel="Experiment package"
+          file={file} disabled={uploading} placeholder="Drop a .tar.gz or .tgz package or click to browse"
+          onChange={(picked) => {
+            if (picked) { setFile(picked); void upload(picked) }
+          }} />
         {current?.status === 'uploading' && <p className="text-sm">To retry an interrupted upload, choose the package file again.</p>}
       </>}
       <div className="flex flex-wrap gap-2">{list.data?.map((item) => <Button key={item.id} variant={selected === item.id ? 'secondary' : 'outline'} onClick={() => select(item)}>

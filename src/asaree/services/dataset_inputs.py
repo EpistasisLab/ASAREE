@@ -124,7 +124,9 @@ async def freeze_dataset_inputs(
                 "dataset_name": registration.name, "mode": mode, "raw_sha256": registration.raw_sha256,
                 "raw_artifact": raw, "split_id": str(split.id) if split else None,
                 "train_artifact": train, "test_artifact": test,
-                "target_column": (split.target_column if split else registration._target_column) or "",
+                # This is the new publication's effective target, not a
+                # claim about a legacy split's unknown historical target.
+                "target_column": (registration.target_column if split else registration._target_column) or "",
                 "description": registration.description, "dictionary_json": registration.dictionary_json,
             })
     return {"schema_version": 1, "provenance": "pinned", "inputs": inputs, "bindings": bindings}

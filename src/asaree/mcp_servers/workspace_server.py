@@ -89,6 +89,16 @@ logger = logging.getLogger(__name__)
 # the working pair until they're ready to produce their result.
 
 
+def _resolve_workspace(workspace_id: str, ctx: Context[Any, Any, Any] | None) -> str:
+    """Pinned calls stay in their ambient attempt; notebooks may select explicitly."""
+    resolved = resolve_workspace_id_from_ctx(workspace_id, ctx)
+    if any(ambient_value_from_ctx(key, ctx) is not None for key in ("dataset_inputs", "dataset_input_scope")):
+        bound = resolve_workspace_id_from_ctx("", ctx)
+        if resolved != bound:
+            raise WorkspaceError("Pinned workspace operations cannot access outside their attempt workspace.")
+    return resolved
+
+
 def _resolve_stage(ws: Workspace, stage: str) -> Stage:
     """This workspace's descriptor for *stage*, or a WorkspaceError naming the plan's.
 
@@ -460,6 +470,7 @@ async def open_workspace(
             workspace_id = resolve_workspace_id_from_ctx("", ctx)
         else:
             workspace_id = make_workspace_id(experiment_id, cell_label)
+        workspace_id = _resolve_workspace(workspace_id, ctx)
     except WorkspaceError as e:
         return json.dumps({"error": f"workspace: {e}"})
 
@@ -500,9 +511,6 @@ async def open_workspace(
             from asaree.models.database import get_session
             from asaree.services.dataset_inputs import resolve_pinned_registration
 
-            bound_workspace = resolve_workspace_id_from_ctx("", ctx)
-            if workspace_id != bound_workspace:
-                raise WorkspaceSeedError("Pinned inputs cannot be opened outside their attempt workspace.")
             pin = next((pin for pin in pinned_inputs if pin["dataset_name"] == resolved_name), None)
             if pin is None:
                 raise WorkspaceSeedError("Dataset has no pinned input for this Agent.")
@@ -602,7 +610,7 @@ def workspace_status(workspace_id: str = "", ctx: Context[Any, Any, Any] | None 
                                        "columns": item.get("columns"), "target_column": item.get("target_column")}
                                       for item in row_inputs if isinstance(item, dict)]})
     try:
-        wid = resolve_workspace_id_from_ctx(workspace_id, ctx)
+        wid = _resolve_workspace(workspace_id, ctx)
         ws = Workspace(wid)
     except WorkspaceError as e:
         return json.dumps({"error": f"workspace: {e}"})
@@ -675,7 +683,7 @@ def accept_stage(
             keys are in your prompt and in workspace_status().
     """
     try:
-        wid = resolve_workspace_id_from_ctx(workspace_id, ctx)
+        wid = _resolve_workspace(workspace_id, ctx)
         ws = Workspace(wid, slot=resolve_slot_from_ctx(slot, ctx))
         if not ws.exists():
             return json.dumps({"error": f"workspace {wid!r} not initialized."})
@@ -747,7 +755,7 @@ def reset_stage(
             keys are in your prompt and in workspace_status().
     """
     try:
-        wid = resolve_workspace_id_from_ctx(workspace_id, ctx)
+        wid = _resolve_workspace(workspace_id, ctx)
         ws = Workspace(wid, slot=resolve_slot_from_ctx(slot, ctx))
         if not ws.exists():
             return json.dumps({"error": f"workspace {wid!r} not initialized."})
@@ -796,7 +804,7 @@ def check_stage_gate(
             keys are in your prompt and in workspace_status().
     """
     try:
-        wid = resolve_workspace_id_from_ctx(workspace_id, ctx)
+        wid = _resolve_workspace(workspace_id, ctx)
         ws = Workspace(wid, slot=resolve_slot_from_ctx(slot, ctx))
         if not ws.exists():
             return json.dumps({"passed": False, "errors": [f"workspace {wid!r} not initialized."]})
@@ -845,7 +853,7 @@ def read_stage_manifest(
             keys are in your prompt and in workspace_status().
     """
     try:
-        wid = resolve_workspace_id_from_ctx(workspace_id, ctx)
+        wid = _resolve_workspace(workspace_id, ctx)
         ws = Workspace(wid, slot=resolve_slot_from_ctx(slot, ctx))
         if not ws.exists():
             return json.dumps({"error": f"workspace {wid!r} not initialized."})
@@ -884,7 +892,7 @@ def read_scratch_learned(
             keys are in your prompt and in workspace_status().
     """
     try:
-        wid = resolve_workspace_id_from_ctx(workspace_id, ctx)
+        wid = _resolve_workspace(workspace_id, ctx)
         ws = Workspace(wid, slot=resolve_slot_from_ctx(slot, ctx))
         if not ws.exists():
             return json.dumps({"error": f"workspace {wid!r} not initialized."})

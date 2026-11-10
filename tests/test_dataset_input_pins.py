@@ -125,6 +125,28 @@ async def test_unsplit_remains_explicit_after_split_creation(catalog):
     assert run.dataset_inputs["inputs"][0]["split_id"] is None
 
 
+async def test_new_publication_executes_legacy_split_with_effective_target(catalog):
+    dataset = catalog.datasets["a"]
+    split = catalog.split(dataset, "legacy")
+    split.legacy = True
+    split.target_column = None
+    assert dataset.target_column == "y"
+    graph = graph_for(dataset)
+    publication = await freeze_dataset_inputs(catalog.db, graph, owner_id=catalog.owner)
+    run = run_for(catalog, resolve_attempt_inputs(publication, graph))
+    dataset.target_column = "later"
+    workspace = attempt_workspace_id(None, run.id)
+    for _ in range(2):
+        prepared = await prepare_attempt_graph(catalog.db, run, graph)
+        opened = await pe._resolve_node_dataset(prepared, "agent", workspace, catalog.owner)
+        assert opened.seeded_names == ("a",)
+        from asaree.services.dataset_workspaces import head_data_locator
+
+        assert head_data_locator(workspace)[1] == "y"
+    assert publication["inputs"][0]["target_column"] == "y"
+    assert split.target_column is None and split.legacy
+
+
 async def test_connector_factor_alternatives_pin_all_and_preserve_wiring_order(catalog):
     a, b = catalog.datasets.values()
     a_split, b_split = catalog.split(a, "A"), catalog.split(b, "A")

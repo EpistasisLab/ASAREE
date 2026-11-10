@@ -1885,6 +1885,7 @@ async def _resolve_node_dataset(
             slot = slot_prefix if solo else f"{slot_prefix}:{name}"
         else:
             slot = None if solo else dataset_slot(name)
+        seed_kwargs: dict[str, Any] = {"pinned_registration": reg} if pinned is not None else {}
         try:
             opened = await seed_cell_workspace(
                 workspace_id=workspace_id,
@@ -1892,7 +1893,7 @@ async def _resolve_node_dataset(
                 owner_id=owner_id,
                 slot=slot,
                 stage_plan=stage_plan,
-                **({"pinned_registration": reg} if pinned is not None else {}),
+                **seed_kwargs,
             )
         except WorkspaceSeedError as e:
             if pinned is not None:

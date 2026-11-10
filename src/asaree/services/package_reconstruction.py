@@ -79,6 +79,7 @@ class Reconstruction:
         self.stopping = stopping or threading.Event()
         self.maps: dict[tuple[str, str], str] = {}
         self.names: dict[tuple[str, str], str] = {}
+        self.knowledge_namespaces: dict[str, str] = {}
 
     async def report(self, phase: str, scanned: int) -> None:
         if self.progress is not None and scanned % 25 == 0:
@@ -236,6 +237,7 @@ class Reconstruction:
             await motoro.flush()
 
     async def servers(self, motoro: AsyncSession) -> None:
+        from asaree.services import okf_documents
         from asaree.services.okf_bundles import command_for_bundle, server_name_for
 
         for file in (self.root / 'requirements/mcp').glob('*.json'):
@@ -244,13 +246,32 @@ class Reconstruction:
             command = None
             name = self.name('mcp', source['id'], source['name'])
             knowledge = self.root / f'resources/knowledge/{source["id"]}'
-            if knowledge.is_dir():
+            included = any(dep.get('kind') == 'knowledge' and dep.get('id') == source['id']
+                           and dep.get('status') == 'included'
+                           for dep in records(self.root / 'dependencies.jsonl', self.limits))
+            if included:
+                knowledge_kind = source.get('knowledge_kind')
+                if knowledge_kind not in {'bundle', 'document'}:
+                    source_graph = self.read('publication/canvas.json')
+                    source_settings = self.read('publication/settings.json')
+                    knowledge_kind = next((
+                        'document' if node.get('type') == 'okf_document' else 'bundle'
+                        for node in source_graph.get('nodes', []) if node.get('type') in {'okf_bundle', 'okf_document'}
+                        for variant in node_variants(node, source_settings.get('design_spec'))
+                        if source['id'] in {((variant.get('data') or {}).get('config') or {}).get('bundle_id'),
+                                             ((variant.get('data') or {}).get('config') or {}).get('document_id')}
+                    ), None)
+                if knowledge_kind is None:
+                    raise PackageError('Knowledge registration type is unknown; source files remain inspectable')
+                namespace = 'documents' if knowledge_kind == 'document' else 'bundles'
+                self.knowledge_namespaces[source['id']] = namespace
                 self.map('knowledge', source['id'], directory=knowledge.relative_to(self.root).as_posix())
-                destination = managed_storage.roots()['bundles'] / str(self.job.owner_id) / 'imports' / str(local)
+                destination = managed_storage.roots()[namespace] / str(self.job.owner_id) / 'imports' / str(local)
                 destination.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
                 await self.io(copy_knowledge, knowledge, destination, self.stopping)
                 command = command_for_bundle(destination, managed=True)
-                name = server_name_for(self.job.owner_id, destination)
+                name = (okf_documents.server_name_for(self.job.owner_id, destination) if knowledge_kind == 'document'
+                        else server_name_for(self.job.owner_id, destination))
             self.names['mcp', source['id']] = name
             existing = await motoro.get(MCPServerConfig, local)
             if existing is not None:
@@ -293,7 +314,8 @@ class Reconstruction:
                 result['server_name'] = self.names.get(('mcp', source), f'unconfigured-import-{result[field]}')
             if category == 'knowledge':
                 key = 'document_path' if kind == 'okf_document' else 'bundle_path'
-                result[key] = str(managed_storage.roots()['bundles'] / str(self.job.owner_id)
+                namespace = self.knowledge_namespaces.get(source, 'documents' if kind == 'okf_document' else 'bundles')
+                result[key] = str(managed_storage.roots()[namespace] / str(self.job.owner_id)
                                   / 'imports' / str(identity(self.job, 'mcp', source)))
         return result
 

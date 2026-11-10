@@ -14,6 +14,7 @@ export function ExperimentPackageImport({ experimentId }: { experimentId?: strin
   const [offset, setOffset] = useState(0)
   const [acknowledged, setAcknowledged] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [uploading, setUploading] = useState(false)
   const [preview, setPreview] = useState<{ importId: string; path: string; text: string } | null>(null)
   const selectedRef = useRef(selected)
   selectedRef.current = selected
@@ -33,16 +34,20 @@ export function ExperimentPackageImport({ experimentId }: { experimentId?: strin
   })
   const upload = async (file: File) => {
     setError(null)
+    setUploading(true)
     try {
-      const created = await packageImportsApi.create(crypto.randomUUID())
+      const created = current && ['uploading', 'failed'].includes(current.status) && !current.preflight.manifest
+        ? current : await packageImportsApi.create(crypto.randomUUID())
       setSelected(created.id)
       setOffset(0)
       const controller = new AbortController()
       uploadController.current = controller
       await packageImportsApi.upload(created.id, file, controller.signal)
       void client.invalidateQueries({ queryKey: ['package-imports'] })
-    } catch (cause) { setError(String(cause)) }
-    finally { uploadController.current = null }
+    } catch (cause) {
+      if (!(cause instanceof DOMException && cause.name === 'AbortError')) setError(String(cause))
+    }
+    finally { uploadController.current = null; setUploading(false) }
   }
   const download = async (id: string, path?: string) => {
     try {
@@ -70,11 +75,12 @@ export function ExperimentPackageImport({ experimentId }: { experimentId?: strin
     <CardContent className="space-y-4">
       {!experimentId && <>
         <p className="text-sm text-muted-foreground">Upload a published experiment package. Review its contents before creating a new editable experiment. Import never runs packaged scripts or tools.</p>
-        <Input type="file" accept=".tar.gz,.tgz" aria-label="Experiment package" onChange={(event) => {
+        <Input type="file" accept=".tar.gz,.tgz" aria-label="Experiment package" disabled={uploading} onChange={(event) => {
           const file = event.target.files?.[0]
           if (file) void upload(file)
           event.target.value = ''
         }} />
+        {current?.status === 'uploading' && <p className="text-sm">To retry an interrupted upload, choose the package file again.</p>}
       </>}
       <div className="flex flex-wrap gap-2">{list.data?.map((item) => <Button key={item.id} variant={selected === item.id ? 'secondary' : 'outline'} onClick={() => select(item)}>
         <span className="font-mono">{item.id.slice(0, 8)}</span> · {item.status}

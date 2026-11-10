@@ -117,3 +117,44 @@ def test_no_scripts_executed_during_inspection(tmp_path):
         'code': f'open({str(sentinel)!r}, "w").write("bad")'}}}], 'edges': []}
     inspect(package(tmp_path, graph=graph), tmp_path / 'read', Limits(), threading.Event())
     assert not sentinel.exists()
+
+
+@pytest.mark.parametrize('headers', [{'GNU.sparse.map': '0,1000000000'}, {'comment': 'unsupported'},
+                                    {'path': 'unicode/é/' + 'x' * 110}])
+def test_pax_metadata_is_bounded_and_only_exporter_extensions_are_accepted(tmp_path, headers):
+    archive = tmp_path / 'metadata.tar.gz'
+    with tarfile.open(archive, 'w:gz', format=tarfile.PAX_FORMAT) as tar:
+        member = tarfile.TarInfo('payload')
+        member.pax_headers = headers
+        tar.addfile(member)
+    if 'path' in headers:
+        # The supported long Unicode path is parsed; this standalone fixture
+        # then fails because it is not a complete experiment package.
+        with pytest.raises(PackageError, match='Malformed'):
+            inspect(archive, tmp_path / 'read', Limits(), threading.Event())
+        assert (tmp_path / 'read' / headers['path']).is_file()
+    else:
+        with pytest.raises(PackageError, match='metadata field'):
+            inspect(archive, tmp_path / 'read', Limits(), threading.Event())
+
+
+def test_oversized_pax_is_rejected_before_buffering_its_declared_contents(tmp_path):
+    archive = tmp_path / 'metadata.tar.gz'
+    with tarfile.open(archive, 'w:gz') as tar:
+        header = tarfile.TarInfo('metadata')
+        header.type, header.size = tarfile.XHDTYPE, 1024 * 1024
+        tar.addfile(header, io.BytesIO(b'\0' * header.size))
+    with pytest.raises(PackageError, match='Oversized'):
+        inspect(archive, tmp_path / 'read', Limits(), threading.Event())
+
+
+@pytest.mark.parametrize('suffix', ['json', 'jsonl'])
+def test_opaque_resource_extensions_do_not_imply_a_schema_or_rewrite_bytes(tmp_path, suffix):
+    raw = b'\xff\x00not-a-JSON-document\r\n'
+    name = f'resources/knowledge/source/opaque.{suffix}'
+    def modify(writer):
+        file = tmp_path / 'opaque'
+        file.write_bytes(raw)
+        writer.add(file, name, identity='source', provenance='captured_at_download')
+    inspect(package(tmp_path, modify=modify), tmp_path / 'read', Limits(), threading.Event())
+    assert (tmp_path / 'read' / name).read_bytes() == raw

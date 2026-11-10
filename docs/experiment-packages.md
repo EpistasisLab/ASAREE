@@ -26,7 +26,7 @@ archives as completed downloads.
 
 New exports use schema **2**. Imports accept schemas **1 and 2**; other versions
 are rejected before confirmation. Version 2 adds structured Skill metadata,
-Skill file encodings/order, dataset registration metadata, publication notes and
+Skill file encodings/order, dataset registration metadata, knowledge registration kinds/empty-tree counts, publication notes and
 stable row-slot evidence. These additions close reconstruction gaps found by
 auditing the actual version 1 exporter. Version 1 files remain readable and
 re-exportable; the importer parses recorded Skill frontmatter, but never claims
@@ -243,6 +243,11 @@ Archives exceeding any limit fail inspection with a diagnostic; increase limits
 deliberately for larger recorded evidence. Traversal, links, special/sparse files,
 duplicate/conflicting members, invalid JSON, unsupported schemas, unlisted files,
 incorrect hashes/sizes and inconsistent typed references are rejected. Archive
+metadata is bounded before parsing: only the exporter's ordinary files and local
+PAX path/size extensions are accepted; global/GNU sparse/nested extensions are
+rejected. Resource filename extensions do not turn opaque contents into schema
+documents; binary Skill, knowledge and artifact bytes remain opaque.
+Archive
 ownership fields never confer authorization. No packaged script/tool or server
 connection is invoked by inspection or reconstruction.
 

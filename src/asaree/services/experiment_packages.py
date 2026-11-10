@@ -492,12 +492,13 @@ def _tree_files(root: Path) -> Iterator[tuple[str, Path, os.stat_result]]:
     yield from visit(root)
 
 
-def capture_tree(writer: PackageWriter, root: Path, directory: str, identity: str) -> None:
+def capture_tree(writer: PackageWriter, root: Path, directory: str, identity: str) -> int:
     """Verify copied content plus a second tree identity inventory, using disk."""
     if root.is_symlink() or not root.is_dir():
         raise ValueError("Knowledge directory unavailable")
     root = root.resolve()
     inventory = writer.staging / "tree.jsonl"
+    count = 0
     with inventory.open("wb") as output:
         for relative, path, info in _tree_files(root):
             if credential_file(relative):
@@ -507,6 +508,7 @@ def capture_tree(writer: PackageWriter, root: Path, directory: str, identity: st
             if not stat.S_ISREG(info.st_mode) or not path.resolve().is_relative_to(root):
                 raise ValueError("Unsafe knowledge resource")
             record = writer.file(path, f"{directory}/{relative}", identity=identity, provenance="captured_at_download")
+            count += 1
             output.write(encoded({"path": relative, "inode": info.st_ino, "size": info.st_size,
                                   "mtime": info.st_mtime_ns, "ctime": info.st_ctime_ns, "sha256": record["sha256"]}))
     # Directory entry order is stable within this capture; changes fail closed.
@@ -524,6 +526,7 @@ def capture_tree(writer: PackageWriter, root: Path, directory: str, identity: st
                 raise ValueError("Knowledge changed during capture")
         if source.read(1):
             raise ValueError("Knowledge files removed during capture")
+    return count
 
 
 async def _server(db: AsyncSession, writer: PackageWriter, config: dict[str, Any], owner: uuid.UUID,
@@ -554,6 +557,8 @@ async def _server(db: AsyncSession, writer: PackageWriter, config: dict[str, Any
             "id": server_id, "name": server.name, "transport": server.transport.value,
             "tool_names": [t.get("name") for t in (server.capabilities or {}).get("tools", []) if isinstance(t, dict)],
             "configuration_required": True, "connection_material": "excluded",
+            "knowledge_kind": ("document" if okf_documents.is_document_server(server) else
+                               "bundle" if server.name.startswith(okf_bundles.BUNDLE_SERVER_NAME_PREFIX) else None),
         }, provenance="captured_at_download", identity=server_id)
         writer.dependency(server_id, "mcp", "captured_at_download", name=server.name, external_requirement=True,
                           note="Connection configuration and credentials must be supplied separately.")
@@ -580,8 +585,9 @@ async def _server(db: AsyncSession, writer: PackageWriter, config: dict[str, Any
             ) if root.resolve().is_relative_to(candidate.resolve())), None)
             validate_knowledge_root(root, owner_storage or allowed, external=owner_storage is None)
             await authorize_knowledge_export(db, root, owner, external=owner_storage is None)
-            await archive_io(writer, capture_tree, writer, root, directory, server_id)
+            file_count = await archive_io(writer, capture_tree, writer, root, directory, server_id)
             writer.dependency(server_id, "knowledge", "captured_at_download", directory=directory,
+                              file_count=file_count,
                               note="Mutable content captured now; no historical snapshot or cross-file transaction.")
         except (OSError, ValueError, SQLAlchemyError):
             writer.dependency(server_id, "knowledge", "captured_at_download", status="unresolved",

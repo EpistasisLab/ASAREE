@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import base64
+import copy
 import hashlib
 import os
 import threading
@@ -22,6 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from test_result_reads import results_db as _results_db
 
 from asaree.api import package_imports as api
+from asaree.api.protocols import publish_protocol_endpoint
 from asaree.config import AsareeSettings
 from asaree.models.dataset import RegisteredDataset
 from asaree.models.experiment import ResearchExperiment
@@ -41,7 +43,6 @@ from asaree.services.datasets import create_dataset, quick_split_dataset
 from asaree.services.design_generation import generate_design_cells
 from asaree.services.package_reconstruction import Reconstruction, require_configured
 from asaree.services.package_validation import Limits, inspect
-from asaree.services.protocol_revisions import publish_protocol
 
 results_db = _results_db
 
@@ -104,12 +105,16 @@ async def test_export_import_independent_owner_and_reexport(
         {'id': 'skill', 'type': 'skill', 'data': {'config': {'skill_id': str(skill.id)}}},
         {'id': 'alternate', 'type': 'skill', 'data': {'config': {'skill_id': str(alternate.id)}}},
         {'id': 'script', 'type': 'script', 'data': {'config': {'code': 'raise RuntimeError("NEVER EXECUTE")'}}},
+        {'id': 'model', 'type': 'model_openai', 'data': {'config': {
+            'provider': 'openai', 'model': 'gpt-test', 'temperature': 0.1,
+            'api_key': 'NEVER_IMPORT_CONNECTION_SECRET', 'api_base': 'https://source.invalid'}}},
     ], 'edges': [{'id': 'input', 'source': 'dataset', 'target': 'agent', 'targetHandle': 'dataset',
                   'data': {'dataset_input': {'mode': mode, **({'columns': ['x']} if mode == 'per_row' else {})}}},
                  {'source': 'skill', 'target': 'agent', 'targetHandle': 'skill'},
                  {'source': 'alternate', 'target': 'agent', 'targetHandle': 'skill'}],
         'sampling_snapshot': {'source-key': {'explicit_input': {'model': 'source-model'},
                                             'input': {'api_key': 'NEVER_IMPORT_CONNECTION_SECRET'}}}}
+    graph['edges'].append({'source': 'model', 'target': 'agent', 'targetHandle': 'model'})
     factors = [{'name': 'Skills', 'level_type': 'skill_selection',
                 'levels': [[str(skill.id)], [str(alternate.id)]], 'level_labels': ['Binary', 'Plain']}]
     secondary = None
@@ -138,6 +143,9 @@ async def test_export_import_independent_owner_and_reexport(
     graph['edges'].append({'source': 'knowledge', 'target': 'agent', 'targetHandle': 'knowledge'})
     source_experiment = await db.get(ResearchExperiment, scope.experiment_id)
     source_experiment.design_spec = {'factors': factors, 'replicates': 2}
+    source_protocol = await db.get(Protocol, scope.protocol_id)
+    source_protocol.graph = graph
+    await db.flush()
     await generate_design_cells(db, experiment_id=scope.experiment_id, factors=factors, replicates=2,
                                 design_spec=source_experiment.design_spec)
     from asaree.services.design_revisions import get_current_revision
@@ -169,9 +177,11 @@ async def test_export_import_independent_owner_and_reexport(
     writer.json('experiment-metadata.json', {'name': 'Source', 'description': 'Captured metadata'})
     await packages._datasets(db, writer, publication, owner.id)
     await packages._design(db, writer, publication)
-    await packages._skill(resource_db, writer, str(skill.id), owner.id)
-    await packages._skill(resource_db, writer, str(alternate.id), owner.id)
-    await packages._server(resource_db, writer, {'bundle_id': str(server.id)}, owner.id, knowledge=True)
+    @asynccontextmanager
+    async def source_resources(**kwargs):
+        yield resource_db
+    monkeypatch.setattr(packages, 'system_session', source_resources)
+    await packages._resources(writer, portable_graph, portable_settings, owner.id)
     if include_results:
         parent = await db.scalar(select(FactorialReplicateResult).join(FactorialCell).where(
             FactorialCell.design_revision_id == design.id).limit(1))
@@ -191,6 +201,11 @@ async def test_export_import_independent_owner_and_reexport(
                 {'metric_id': 'missing', 'status': 'unavailable'},
                 {'metric_id': 'legacy', 'provenance': 'legacy.unknown', 'value': str(dataset.id)}]}})
         db.add(run)
+        db.add(ProtocolRun(protocol_id=scope.protocol_id, owner_id=owner.id,
+            protocol_revision_id=publication.id, design_revision_id=scope.design_revision_id,
+            replicate_result_id=parent.id, row_result_id=slot.id if slot else None, status='failed',
+            attempt_result={'legacy': {'provenance': 'legacy.unknown', 'value': str(dataset.id)}},
+            created_at=datetime.now(UTC) - timedelta(hours=1)))
         await db.flush()
         outputs = Path(settings.dataset_workspace_dir) / str(scope.experiment_id) / str(run.id) / 'agent=agent'
         outputs.mkdir(parents=True)
@@ -236,7 +251,7 @@ async def test_export_import_independent_owner_and_reexport(
     assert await db.scalar(select(func.count()).select_from(ProtocolRun).where(
         ProtocolRun.owner_id == destination_owner.id)) == 0
     identities = (await db.scalars(select(ImportedIdentity).where(ImportedIdentity.import_id == job.id))).all()
-    assert len([row for row in identities if row.kind == 'historical_attempt']) == int(include_results)
+    assert len([row for row in identities if row.kind == 'historical_attempt']) == 2 * int(include_results)
     # Exact source re-export is a first-class owned API operation, including
     # evidence absent from current execution projections.
     response = await api.source(job.id, db, destination_owner)
@@ -244,18 +259,49 @@ async def test_export_import_independent_owner_and_reexport(
     with pytest.raises(Exception) as forbidden:
         await api.source(job.id, db, owner)
     assert forbidden.value.status_code == 404
-    # Native local publication still passes normal input resolution, after an
-    # explicit local-configuration acknowledgement. No model calls are made.
-    job.configured_at = datetime.now(UTC)
+    # Configure a local test connection. Only the external provider boundary is
+    # stubbed; ownership, graph validation, inputs/design and publication use the
+    # normal API and both PostgreSQL databases. No provider is contacted.
+    from motoro.schemas.agent import ModelConfig
+
+    from asaree.services import package_reconstruction, sampling_snapshots
+    draft = copy.deepcopy(protocol.graph)
+    model = next(node for node in draft['nodes'] if node['type'] == 'model_openai')
+    assert 'api_key' not in model['data']['config'] and 'api_base' not in model['data']['config']
+    model['data']['config'].update(api_key='destination-test-key', api_base='http://127.0.0.1:9')
+    protocol.graph = draft
+    async def local_model_config(config, *, owner_id):
+        assert owner_id == destination_owner.id
+        assert config['api_key'] == 'destination-test-key'
+        assert config['api_base'] == 'http://127.0.0.1:9'
+        return ModelConfig(**config)
+    monkeypatch.setattr(sampling_snapshots, 'build_model_config', local_model_config)
+    monkeypatch.setattr(sampling_snapshots, 'resolve_discovery_context', AsyncMock(return_value={
+        'provider': 'openai', 'credential_revision': 'local-fixture', 'discovered_at': None}))
+    monkeypatch.setattr(package_reconstruction, 'system_session', resource_session)
     await db.flush()
-    local_publication = await publish_protocol(db, protocol, owner_id=destination_owner.id)
+    await api.configuration(job.id, api.Configuration(connections_configured=True, dependencies_resolved=True),
+                            db, destination_owner)
+    await publish_protocol_endpoint(protocol.id, destination_owner, db)
+    local_publication = await db.get(ProtocolRevision, protocol.published_revision_id)
+    assert local_publication.graph['sampling_snapshot'] != graph['sampling_snapshot']
     local_stage = root / 'second-writer'
     local_stage.mkdir()
     second = packages.PackageWriter(root / 'second.tar.gz', local_stage)
+    local_graph, local_settings = packages.portable_definition(local_publication.graph,
+                                                               local_publication.experiment_snapshot)
+    second.json('publication/canvas.json', local_graph)
+    second.json('publication/settings.json', local_settings)
+    second.json('experiment-metadata.json', {'name': 'Destination', 'id': str(experiment_id)})
     await packages._datasets(db, second, local_publication, destination_owner.id)
-    await packages._skill(resource_db, second, str(local_skill.id), destination_owner.id)
+    await packages._design(db, second, local_publication)
+    await packages._resources(second, local_graph, local_settings, destination_owner.id)
     await packages._import_sources(db, second, experiment_id, include_results=include_results)
-    second.finish({})
+    second.finish({'format': 'asaree.experiment-package', 'schema_version': 2,
+        'experiment_id': str(experiment_id), 'protocol_id': str(protocol.id),
+        'publication': {'id': str(local_publication.id), 'version': local_publication.revision},
+        'design_revision_id': str(local_publication.design_revision_id), 'results_included': include_results})
+    inspect(root / 'second.tar.gz', root / 'second-payload', Limits(), threading.Event())
     import tarfile
     with tarfile.open(root / 'second.tar.gz') as reexport:
         pin = local_publication.dataset_inputs['inputs'][0]
@@ -265,3 +311,31 @@ async def test_export_import_independent_owner_and_reexport(
             nested = reexport.extractfile(f'sources/{job.id}/source.tar.gz').read()
             assert hashlib.sha256(nested).hexdigest() == job.sha256
     assert manifest['schema_version'] == 2
+
+
+async def test_v1_skill_binary_content_is_restored_with_explicit_unknown_source_metadata(
+    results_db, resource_db, tmp_path, monkeypatch,
+):
+    from test_package_import_lifecycle import write_archive
+
+    db, scope, cell, owner = results_db
+    settings = AsareeSettings(_env_file=None, data_root=str(tmp_path / 'storage'))
+    monkeypatch.setattr('asaree.config.get_settings', lambda: settings)
+    job = PackageImport(id=uuid.uuid4(), owner_id=owner.id, request_key='v1', status='queued',
+                        preflight={}, progress={}, expires_at=datetime.now(UTC) + timedelta(days=1))
+    db.add(job)
+    await db.flush()
+    root = imports.directory(job.id)
+    write_archive(job, root, version=1)
+    summary = inspect(root / 'archive.tar.gz', root / 'payload', Limits(), threading.Event())
+    assert any('v1 omits' in warning for warning in summary['warnings'])
+    importer = Reconstruction(db, job, root / 'payload', Limits())
+    experiment = await importer.activate(resource_db)
+    source = await db.scalar(select(ImportedIdentity).where(ImportedIdentity.import_id == job.id,
+                                                           ImportedIdentity.kind == 'skill_file'))
+    file = await resource_db.get(SkillFile, source.local_id)
+    assert file.encoding == 'base64' and base64.b64decode(file.content) == b'\x00\xffnot JSON\r\n'
+    assert source.provenance['dependency']['source_encoding'] == 'legacy.unknown'
+    assert source.provenance['dependency']['source_position'] == 'legacy.unknown'
+    protocol = await db.scalar(select(Protocol).where(Protocol.experiment_id == experiment))
+    assert protocol.published_revision_id is None

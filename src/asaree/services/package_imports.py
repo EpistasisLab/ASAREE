@@ -74,9 +74,10 @@ async def compensate(job: PackageImport) -> None:
                 local = identity(job, 'mcp', dep['id'])
                 await db.execute(delete(MCPServerConfig).where(MCPServerConfig.id == local,
                     MCPServerConfig.owner_id == job.owner_id, MCPServerConfig.is_system.is_(False)))
-                destination = managed_storage.roots()['bundles'] / str(job.owner_id) / 'imports' / str(local)
-                await asyncio.to_thread(shutil.rmtree, destination, ignore_errors=True)
-                await asyncio.to_thread(shutil.rmtree, destination.with_suffix('.preparing'), ignore_errors=True)
+                for namespace in ('bundles', 'documents'):
+                    destination = managed_storage.roots()[namespace] / str(job.owner_id) / 'imports' / str(local)
+                    await asyncio.to_thread(shutil.rmtree, destination, ignore_errors=True)
+                    await asyncio.to_thread(shutil.rmtree, destination.with_suffix('.preparing'), ignore_errors=True)
 
 
 async def checkpoint(identifier: uuid.UUID, phase: str, **progress: Any) -> None:

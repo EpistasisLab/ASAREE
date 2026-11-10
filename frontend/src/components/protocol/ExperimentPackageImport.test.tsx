@@ -62,3 +62,17 @@ it('keeps source history and local-configuration acknowledgement distinct', asyn
   fireEvent.click(acknowledge)
   await waitFor(() => expect(configure).toHaveBeenCalledWith('request'))
 })
+
+it('inspects immutable observation evidence without coercing null or unavailable values', async () => {
+  show([ready])
+  const path = 'results/attempts/source-attempt/attempt_result.json'
+  vi.mocked(packageImportsApi.files).mockResolvedValue({ items: [{ path, sha256: 'exact-hash', bytes: 200,
+    source_id: 'source-attempt', provenance: 'recorded_attempt' }], next_offset: null })
+  const source = '{"observations":[{"status":"measured","value":null},{"status":"unavailable"}]}'
+  vi.spyOn(packageImportsApi, 'source').mockResolvedValue(new Blob([source]))
+  fireEvent.click(await screen.findByRole('button', { name: /request.*awaiting_confirmation/ }))
+  fireEvent.click(await screen.findByText('Inspect source files and historical evidence'))
+  fireEvent.click(await screen.findByRole('button', { name: 'Inspect JSON' }))
+  expect(await screen.findByText(source)).toBeInTheDocument()
+  expect(packageImportsApi.source).toHaveBeenCalledWith('request', path)
+})

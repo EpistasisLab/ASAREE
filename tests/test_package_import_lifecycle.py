@@ -36,7 +36,9 @@ async def import_databases():
     try:
         for number, url in enumerate(urls):
             schema = 'package_lifecycle_' + uuid.uuid4().hex
-            engine = create_async_engine(url, connect_args={'server_settings': {'search_path': schema}})
+            engine = create_async_engine(url, connect_args={'server_settings': {
+                'search_path': schema, 'lock_timeout': '5s', 'statement_timeout': '30s',
+            }})
             engines.append(engine)
             schemas.append(schema)
             async with engine.begin() as conn:
@@ -60,7 +62,7 @@ async def import_databases():
             await engine.dispose()
 
 
-def write_archive(job, root):
+def write_archive(job, root, *, version=2):
     root.mkdir(parents=True)
     stage = root / 'writer'
     stage.mkdir()
@@ -70,14 +72,22 @@ def write_archive(job, root):
         {'id': 'skill', 'type': 'skill', 'data': {'config': {'skill_id': skill_id}}}], 'edges': []})
     writer.json('publication/settings.json', {'design_spec': {'factors': []}})
     writer.json('experiment-metadata.json', {'name': 'Interrupted import'})
-    writer.json(f'resources/skill-metadata/{skill_id}.json', {
-        'id': skill_id, 'name': 'retained-skill', 'description': 'Source discovery', 'body': 'Never execute',
-        'frontmatter': {}, 'source_filename': None})
+    if version >= 2:
+        writer.json(f'resources/skill-metadata/{skill_id}.json', {
+            'id': skill_id, 'name': 'retained-skill', 'description': 'Source discovery', 'body': 'Never execute',
+            'frontmatter': {}, 'source_filename': None})
     raw = stage / 'skill.md'
     raw.write_text('---\nname: retained-skill\ndescription: Source discovery\n---\nNever execute')
     writer.add(raw, f'resources/skills/{skill_id}/SKILL.md', identity=skill_id, provenance='captured_at_download')
+    resource_id = str(uuid.uuid4())
+    raw.write_bytes(b'\x00\xffnot JSON\r\n')
+    resource_path = f'resources/skills/{skill_id}/assets/binary.json'
+    writer.add(raw, resource_path, identity=resource_id, provenance='captured_at_download')
+    if version >= 2:
+        writer.dependency(resource_id, 'skill_file', 'captured_at_download', skill_id=skill_id,
+                          file=resource_path, relative_path='assets/binary.json', encoding='base64', position=9)
     writer.dependency(skill_id, 'skill', 'captured_at_download', directory=f'resources/skills/{skill_id}')
-    writer.finish({'format': 'asaree.experiment-package', 'schema_version': 2,
+    writer.finish({'format': 'asaree.experiment-package', 'schema_version': version,
                    'experiment_id': str(uuid.uuid4()), 'protocol_id': str(uuid.uuid4()),
                    'publication': {'id': str(uuid.uuid4()), 'version': 9}, 'results_included': False})
 

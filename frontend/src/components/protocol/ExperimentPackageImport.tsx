@@ -7,15 +7,6 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import type { PackageImport } from '@/types/packageImports'
 
-function save(blob: Blob, name: string) {
-  const url = URL.createObjectURL(blob)
-  const anchor = document.createElement('a')
-  anchor.href = url
-  anchor.download = name
-  anchor.click()
-  setTimeout(() => URL.revokeObjectURL(url), 1000)
-}
-
 /** Persistent imports can be resumed after navigation or a browser restart. */
 export function ExperimentPackageImport({ experimentId }: { experimentId?: string }) {
   const client = useQueryClient()
@@ -51,7 +42,13 @@ export function ExperimentPackageImport({ experimentId }: { experimentId?: strin
     finally { uploadController.current = null }
   }
   const download = async (id: string, path?: string) => {
-    try { save(await packageImportsApi.source(id, path), path?.split('/').at(-1) ?? `source-${id}.tar.gz`) }
+    try {
+      const fresh = await packageImportsApi.get(id)
+      if (!fresh.source_url) throw new Error('Source download unavailable during activation or after expiry.')
+      const anchor = document.createElement('a')
+      anchor.href = fresh.source_url + (path ? `&path=${encodeURIComponent(path)}` : '')
+      anchor.click()
+    }
     catch (cause) { setError(String(cause)) }
   }
   const select = (item: PackageImport) => { setSelected(item.id); setOffset(0); setAcknowledged(false); setError(null) }
@@ -80,6 +77,7 @@ export function ExperimentPackageImport({ experimentId }: { experimentId?: strin
           <p className="text-sm">{Object.entries(current.preflight.categories ?? {}).map(([name, count]) => `${name}: ${count}`).join(' · ')}</p>
           <p>{current.preflight.unresolved_count} unresolved dependencies · {current.preflight.external_requirements} external requirements</p>
           {current.preflight.warnings?.map((warning) => <p key={warning} className="text-sm text-amber-400">{warning}</p>)}
+          {current.preflight.compatibility?.map((issue) => <p key={issue} className="text-sm text-amber-400">{issue}</p>)}
           {current.preflight.diagnostics?.map((item, index) => <p key={index} className="text-sm">{item.kind} <span className="font-mono">{item.id}</span>: {item.reason ?? item.status}</p>)}
           <Button variant="outline" onClick={() => void download(current.id)}>Download original source package</Button>
           <details><summary className="cursor-pointer">Inspect source files and historical evidence</summary>

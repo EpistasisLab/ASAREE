@@ -2,6 +2,7 @@ export interface PackageImport {
   id: string
   status: string
   sha256: string | null
+  source_url?: string
   experiment_id: string | null
   configured_at: string | null
   created_at: string
@@ -19,6 +20,7 @@ export interface PackageImport {
     unresolved_count?: number
     external_requirements?: number
     warnings?: string[]
+    compatibility?: string[]
     diagnostics?: { kind: string; id: string; status: string; reason?: string }[]
   }
 }

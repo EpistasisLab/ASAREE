@@ -8,12 +8,14 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+import jwt
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert
 
+from asaree.config import get_settings
 from asaree.deps import CurrentUser, DbSession
 from asaree.models.package_import import ImportedIdentity, PackageImport
 from asaree.services import package_imports as imports
@@ -28,9 +30,15 @@ class Create(BaseModel):
 
 
 def payload(job: PackageImport) -> dict[str, Any]:
-    return {key: getattr(job, key) for key in (
+    result = {key: getattr(job, key) for key in (
         'id', 'status', 'sha256', 'preflight', 'progress', 'error', 'experiment_id',
         'expires_at', 'configured_at', 'created_at')}
+    if job.preflight and job.status in {'awaiting_confirmation', 'completed'}:
+        token = jwt.encode({'type': 'package_import_source', 'job': str(job.id), 'sub': str(job.owner_id),
+                            'exp': datetime.now(UTC) + timedelta(minutes=5)},
+                           get_settings().auth_secret_key, algorithm='HS256')
+        result['source_url'] = f'/api/experiment-package-imports/{job.id}/download?token={token}'
+    return result
 
 
 async def owned(db: DbSession, identifier: uuid.UUID, owner: uuid.UUID, *, lock: bool = False) -> PackageImport:
@@ -52,6 +60,7 @@ async def create(command: Create, db: DbSession, user: CurrentUser) -> dict[str,
             constraint='uq_package_import_request'))
     job = await db.scalar(select(PackageImport).where(PackageImport.owner_id == user.id,
                                                      PackageImport.request_key == command.request_key))
+    assert job is not None
     await db.commit()
     return payload(job)
 
@@ -165,9 +174,13 @@ async def identities(identifier: uuid.UUID, db: DbSession, user: CurrentUser,
 @router.get('/{identifier}/source', response_class=FileResponse)
 async def source(identifier: uuid.UUID, db: DbSession, user: CurrentUser, path: str | None = None) -> FileResponse:
     job = await owned(db, identifier, user.id)
+    return source_response(job, path)
+
+
+def source_response(job: PackageImport, path: str | None) -> FileResponse:
     if not job.preflight or job.status in {'expired', 'cancelled'}:
         raise HTTPException(409, 'Source evidence unavailable')
-    root = imports.directory(identifier)
+    root = imports.directory(job.id)
     try:
         target = root / 'payload' / member_path(path) if path else root / 'archive.tar.gz'
     except ValueError as exc:
@@ -176,6 +189,18 @@ async def source(identifier: uuid.UUID, db: DbSession, user: CurrentUser, path: 
         raise HTTPException(404, 'Source file unavailable')
     return FileResponse(target, media_type='application/octet-stream', filename=target.name,
                         headers={'Cache-Control': 'private, no-store', 'X-Content-Type-Options': 'nosniff'})
+
+
+@router.get('/{identifier}/download', response_class=FileResponse)
+async def download(identifier: uuid.UUID, token: str, db: DbSession, path: str | None = None) -> FileResponse:
+    try:
+        claims = jwt.decode(token, get_settings().auth_secret_key, algorithms=['HS256'])
+        if claims.get('type') != 'package_import_source' or claims.get('job') != str(identifier):
+            raise ValueError('Invalid source token scope')
+        owner_id = uuid.UUID(claims['sub'])
+    except (jwt.InvalidTokenError, ValueError, KeyError) as exc:
+        raise HTTPException(403, 'Source download link expired or invalid') from exc
+    return source_response(await owned(db, identifier, owner_id), path)
 
 
 class Configuration(BaseModel):

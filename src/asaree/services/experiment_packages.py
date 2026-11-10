@@ -376,7 +376,7 @@ async def _datasets(db: AsyncSession, writer: PackageWriter, publication: Protoc
                 "dictionary_json": registration.dictionary_json, "target_column": registration._target_column,
                 "raw_sha256": registration.raw_sha256, "raw_artifact_id": registration.raw_artifact_id,
                 "created_at": registration.created_at,
-            }, identity=identity)
+            }, provenance="captured_at_download", identity=identity)
         if pin.get("split_id") and not writer.seen("split", pin["split_id"]):
             split = await db.scalar(select(DatasetSplit).where(
                 DatasetSplit.id == uuid.UUID(pin["split_id"]), DatasetSplit.dataset_id == registration.id,
@@ -719,7 +719,10 @@ async def _results(
     after = None
     while True:
         query = select(ProtocolRun.id, ProtocolRun.status, ProtocolRun.created_at, ProtocolRun.started_at,
-                       ProtocolRun.completed_at, ProtocolRun.replicate_result_id, ProtocolRun.row_result_id).where(
+                       ProtocolRun.completed_at, ProtocolRun.replicate_result_id, ProtocolRun.row_result_id,
+                       ProtocolRun.replicate_label, ProtocolRun.protocol_id, ProtocolRun.protocol_revision_id,
+                       ProtocolRun.design_revision_id, ProtocolRun.updated_at, ProtocolRun.last_heartbeat_at,
+                       ProtocolRun.cancel_requested_at).where(
                            *conditions,
                        ).order_by(ProtocolRun.id).limit(1)
         if after is not None:
@@ -896,6 +899,7 @@ async def execute_package(db: AsyncSession, job: ResultJob, temporary: Path, des
             manifest = await archive_io(writer, writer.finish, {
                 "format": "asaree.experiment-package", "schema_version": 2,
                 "experiment_id": str(job.experiment_id), "protocol_id": str(job.protocol_id),
+                "source_owner_id": str(job.owner_id),
                 "publication": {"id": str(publication.id), "version": publication.revision,
                                 "published_at": publication.published_at, "name": publication.name,
                                 "note": publication.note,

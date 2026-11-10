@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import shutil
 import threading
 import uuid
@@ -24,6 +25,8 @@ from asaree.models.protocol import Protocol
 from asaree.services import managed_storage
 from asaree.services.package_reconstruction import Reconstruction, identity
 from asaree.services.package_validation import Limits, PackageError, digest, inspect, records
+
+logger = logging.getLogger(__name__)
 
 
 def limits() -> Limits:
@@ -151,6 +154,7 @@ async def execute_package_import(_ctx: dict[str, Any], job_id: str) -> None:
                 await activate_resources(job)
                 current = await db.scalar(select(PackageImport).where(PackageImport.id == identifier)
                     .with_for_update().execution_options(populate_existing=True))
+                assert current is not None
                 if current.status == 'cancelled':
                     raise PackageError('Import cancelled')
                 current.status, current.error = 'completed', None
@@ -189,6 +193,7 @@ async def execute_package_import(_ctx: dict[str, Any], job_id: str) -> None:
             current.status = 'completed'
             current.progress = {'phase': 'completed'}
     except (Exception, asyncio.CancelledError) as exc:
+        logger.exception('package_import_failed', extra={'import_id': job_id})
         async with get_session() as db:
             job = await db.get(PackageImport, identifier)
             if job is not None and job.status != 'completed':

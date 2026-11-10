@@ -86,8 +86,13 @@ async def test_durable_crash_retry_cancel_cleanup_and_ownership(import_databases
 
     @asynccontextmanager
     async def product_session():
-        async with product.begin() as db:
-            yield db
+        async with product() as db:
+            try:
+                yield db
+                await db.commit()
+            except BaseException:
+                await db.rollback()
+                raise
 
     class WorkerKilled(BaseException):
         pass
@@ -134,7 +139,7 @@ async def test_durable_crash_retry_cancel_cleanup_and_ownership(import_databases
     await imports.execute_package_import({}, str(job.id))
     async with product.begin() as db:
         done = await db.get(PackageImport, job.id)
-        assert done.status == 'completed'
+        assert done.status == 'completed', done.error
         assert await db.scalar(select(func.count()).select_from(ResearchExperiment)) == 1
         assert await db.scalar(select(func.count()).select_from(ImportedIdentity).where(
             ImportedIdentity.kind == 'skill')) == 1

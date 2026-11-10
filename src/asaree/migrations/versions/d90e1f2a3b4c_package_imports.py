@@ -29,18 +29,18 @@ def upgrade():
         sa.Column("configured_at", sa.DateTime(timezone=True)),
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
         sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
-        sa.UniqueConstraint("owner_id", "request_key", name="uq_package_import_request"))
-    op.create_index("ix_package_imports_owner_id", "package_imports", ["owner_id"])
-    op.create_index("ix_package_imports_status", "package_imports", ["status"])
+        sa.UniqueConstraint("owner_id", "request_key", name="uq_package_import_request"), if_not_exists=True)
+    op.create_index("ix_package_imports_owner_id", "package_imports", ["owner_id"], if_not_exists=True)
+    op.create_index("ix_package_imports_status", "package_imports", ["status"], if_not_exists=True)
     op.create_table("imported_identities",
         sa.Column("import_id", pg.UUID(), sa.ForeignKey("package_imports.id", ondelete="CASCADE"), primary_key=True),
         sa.Column("kind", sa.String(40), primary_key=True),
         sa.Column("source_id", sa.Text(), primary_key=True),
         sa.Column("local_id", pg.UUID(), nullable=False),
-        sa.Column("provenance", pg.JSONB(), nullable=False))
-    op.create_index("ix_imported_identities_local_id", "imported_identities", ["local_id"])
+        sa.Column("provenance", pg.JSONB(), nullable=False), if_not_exists=True)
+    op.create_index("ix_imported_identities_local_id", "imported_identities", ["local_id"], if_not_exists=True)
 
 
 def downgrade():
-    op.drop_table("imported_identities")
-    op.drop_table("package_imports")
+    op.drop_table("imported_identities", if_exists=True)
+    op.drop_table("package_imports", if_exists=True)

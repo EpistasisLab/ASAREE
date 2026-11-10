@@ -47,7 +47,8 @@ class Reconstruction:
         if key not in self.maps:
             self.db.add(ImportedIdentity(import_id=self.job.id, kind=kind, source_id=str(source_id),
                                          local_id=local, provenance=provenance))
-            if kind not in {'cell', 'replicate', 'historical_attempt', 'historical_row', 'historical_artifact'}:
+            if kind not in {'cell', 'replicate', 'historical_attempt', 'historical_row', 'historical_artifact',
+                            'skill_file', 'payload_member'}:
                 self.maps[key] = str(local)
         return local
 
@@ -75,8 +76,10 @@ class Reconstruction:
             metadata = self.read(metadata_path) if (self.root / metadata_path).exists() else pin
             dataset = RegisteredDataset(id=local, owner_id=self.job.owner_id,
                 name=self.name('dataset', source, metadata.get('name') or pin['dataset_name']),
-                description=metadata.get('description'), dictionary_json=metadata.get('dictionary_json'),
-                target_column=metadata.get('target_column'), raw_sha256=pin.get('raw_sha256'))
+                description=pin.get('description', metadata.get('description')),
+                dictionary_json=pin.get('dictionary_json', metadata.get('dictionary_json')),
+                target_column=pin.get('target_column', metadata.get('target_column')),
+                raw_sha256=pin.get('raw_sha256'))
             self.db.add(dataset)
             dataset_ids.append(local)
         await self.db.flush()
@@ -98,8 +101,10 @@ class Reconstruction:
                 byte_size=file.stat().st_size,
                 format=file.suffix.lstrip('.'), status='ready'))
             if dep['role'] == 'raw_artifact':
-                dataset = await self.db.get(RegisteredDataset, uuid.UUID(dataset_id))
-                dataset.raw_artifact_id = artifact_id
+                loaded = await self.db.get(RegisteredDataset, uuid.UUID(dataset_id))
+                if loaded is None:
+                    raise PackageError('Dataset registration disappeared')
+                loaded.raw_artifact_id = artifact_id
         await self.db.flush()
         for file in (self.root / 'inputs/splits').glob('*.json'):
             source = document(file, self.limits)
@@ -119,10 +124,12 @@ class Reconstruction:
         # Only pinned whole-dataset selections become local defaults. Original
         # selections remain unsplit even if another source default now exists.
         for pin in bindings.get('inputs', []):
-            dataset = await self.db.get(RegisteredDataset, uuid.UUID(self.maps['dataset', pin['dataset_id']]))
+            loaded = await self.db.get(RegisteredDataset, uuid.UUID(self.maps['dataset', pin['dataset_id']]))
+            if loaded is None:
+                raise PackageError('Dataset registration disappeared')
             split = self.maps.get(('split', pin.get('split_id')))
             if split:
-                dataset.current_split_id = uuid.UUID(split)
+                loaded.current_split_id = uuid.UUID(split)
         await self.db.flush()
         return dataset_ids
 
@@ -161,28 +168,28 @@ class Reconstruction:
             parts = record['path'].split('/')
             source_skill = parts[2]
             relative = '/'.join(parts[3:])
-            dep = next((dep for dep in records(self.root / 'dependencies.jsonl', self.limits)
-                        if dep.get('kind') == 'skill_file'
-                        and dep.get('file') == record['path'] and dep.get('status') == 'included'), None)
-            if dep is None:
+            file_dep: dict[str, Any] | None = next((entry for entry in records(
+                self.root / 'dependencies.jsonl', self.limits) if entry.get('kind') == 'skill_file'
+                and entry.get('file') == record['path'] and entry.get('status') == 'included'), None)
+            if file_dep is None:
                 if self.read('manifest.json')['schema_version'] >= 2:
                     raise PackageError('Missing structured Skill file metadata')
-                dep = {'id': record['source_id'], 'skill_id': source_skill, 'file': record['path'],
+                file_dep = {'id': record['source_id'], 'skill_id': source_skill, 'file': record['path'],
                        'relative_path': relative, 'encoding': 'base64', 'position': 0,
                        'source_encoding': 'legacy.unknown', 'source_position': 'legacy.unknown'}
-            skill_id = self.maps.get(('skill', dep['skill_id']))
+            skill_id = self.maps.get(('skill', file_dep['skill_id']))
             if not skill_id:
                 raise PackageError('Skill file has no structured Skill record')
-            local = self.map('skill_file', dep['id'], dependency=dep)
+            local = self.map('skill_file', file_dep['id'], dependency=file_dep)
             if await motoro.get(SkillFile, local) is not None:
                 continue
-            path = self.root / member_path(dep['file'])
+            path = self.root / member_path(file_dep['file'])
             if path.stat().st_size > self.limits.document:
                 raise PackageError('Skill resource exceeds per-resource limit')
             raw = path.read_bytes()
-            content = base64.b64encode(raw).decode() if dep['encoding'] == 'base64' else raw.decode('utf-8')
-            motoro.add(SkillFile(id=local, skill_id=uuid.UUID(skill_id), path=member_path(dep['relative_path']),
-                                 encoding=dep['encoding'], position=dep['position'], content=content))
+            content = base64.b64encode(raw).decode() if file_dep['encoding'] == 'base64' else raw.decode('utf-8')
+            motoro.add(SkillFile(id=local, skill_id=uuid.UUID(skill_id), path=member_path(file_dep['relative_path']),
+                                 encoding=file_dep['encoding'], position=file_dep['position'], content=content))
             await motoro.flush()
 
     async def servers(self, motoro: AsyncSession) -> None:
@@ -254,6 +261,10 @@ class Reconstruction:
     def definition(self) -> tuple[dict[str, Any], dict[str, Any]]:
         graph, settings = portable_definition(
             self.read('publication/canvas.json'), self.read('publication/settings.json'))
+        if 'design_spec' not in settings and (self.root / 'design/revision.json').exists():
+            # Explicit source design facts can seed a draft even when legacy
+            # publication settings were not recorded. Source settings stay unknown.
+            settings['design_spec'] = self.read('design/revision.json').get('design_spec')
         # Sanitized source resolver snapshots are evidence, never runnable state.
         graph.pop('sampling_snapshot', None)
         graph.pop('sampling_snapshot_version', None)
@@ -275,7 +286,7 @@ class Reconstruction:
             factor = factors.get(name)
             if factor is None:
                 continue
-            levels = []
+            levels: list[Any] = []
             for level in factor.get('levels', []):
                 if path == 'config' and isinstance(level, dict):
                     levels.append(self.config(kind, level))
@@ -358,6 +369,9 @@ class Reconstruction:
         for record in records(self.root / 'files.jsonl', self.limits):
             if record['path'].startswith('results/artifacts/'):
                 self.map('historical_artifact', record['path'], source=record)
+                await self.db.flush()
+            else:
+                self.map('payload_member', record['path'], source=record)
                 await self.db.flush()
         await self.db.flush()
         return experiment_id

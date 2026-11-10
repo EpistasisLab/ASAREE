@@ -3,13 +3,15 @@ from __future__ import annotations
 
 import gzip
 import hashlib
+import importlib.metadata
 import json
 import tarfile
 import threading
 import uuid
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, BinaryIO
+from typing import Any, Protocol, cast
 
 from asaree.services.experiment_packages import BLOCK, relative_path
 
@@ -56,7 +58,7 @@ def document(path: Path, limits: Limits) -> Any:
         raise PackageError(f'Invalid JSON: {path.name}: {exc}') from exc
 
 
-def records(path: Path, limits: Limits):
+def records(path: Path, limits: Limits) -> Iterator[dict[str, Any]]:
     with path.open('rb') as stream:
         while line := stream.readline(limits.document + 1):
             if len(line) > limits.document:
@@ -83,8 +85,12 @@ def verify(root: Path, record: dict[str, Any]) -> None:
         raise PackageError(f'Missing member or size/hash mismatch: {record["path"]}')
 
 
+class Readable(Protocol):
+    def read(self, size: int = -1, /) -> bytes: ...
+
+
 class ExpandedReader:
-    def __init__(self, stream: BinaryIO, limit: int, stopping: threading.Event):
+    def __init__(self, stream: Readable, limit: int, stopping: threading.Event):
         self.stream, self.limit, self.stopping, self.count = stream, limit, stopping, 0
 
     def read(self, size: int = -1) -> bytes:
@@ -106,7 +112,8 @@ def inspect(archive: Path, root: Path, limits: Limits, stopping: threading.Event
     try:
         with gzip.open(archive, 'rb') as compressed:
             expanded = ExpandedReader(compressed, limits.expanded, stopping)
-            with tarfile.open(fileobj=expanded, mode='r|') as tar:
+            # Tar stream mode uses only read(), not the broader seekable IO API.
+            with tarfile.open(fileobj=cast(Any, expanded), mode='r|') as tar:
                 for member in tar:
                     count += 1
                     if count > limits.members:
@@ -132,7 +139,7 @@ def inspect(archive: Path, root: Path, limits: Limits, stopping: threading.Event
                                 raise PackageError(f'Truncated member: {name}')
                             output.write(block)
                             remaining -= len(block)
-                    tar.members.clear()
+                    tar.members.clear()  # type: ignore[attr-defined]  # Runtime cache, absent from typeshed.
             while block := expanded.read(BLOCK):
                 if block.strip(b'\0'):
                     raise PackageError('Unexpected data after tar end')
@@ -188,7 +195,8 @@ def validate(root: Path, limits: Limits, count: int) -> dict[str, Any]:
     for edge in graph.get('edges', []):
         if edge['source'] not in node_ids or edge['target'] not in node_ids:
             raise PackageError('Canvas edge references missing node')
-    unresolved, external, diagnostics = 0, 0, []
+    unresolved, external = 0, 0
+    diagnostics: list[dict[str, Any]] = []
     for record in records(root / 'dependencies.jsonl', limits):
         if record.get('status') in {'missing', 'unresolved', 'changed', 'forbidden'}:
             unresolved += 1
@@ -202,11 +210,20 @@ def validate(root: Path, limits: Limits, count: int) -> dict[str, Any]:
                 raise PackageError('Included dependency references missing directory')
     validate_references(root, limits, manifest, markers)
     warnings = ['Connections and credentials require local configuration and normal publication before execution.']
+    compatibility = []
+    for package, required in (manifest.get('requirements', {}).get('software') or {}).items():
+        try:
+            installed = importlib.metadata.version(package)
+        except importlib.metadata.PackageNotFoundError:
+            installed = 'not installed'
+        if required != installed:
+            compatibility.append(f'{package}: source {required}; local {installed}. Revalidate before publication.')
     if manifest['schema_version'] == 1:
         warnings.append('v1 omits structured Skill metadata/file order, complete dataset registration metadata, '
                         'and row-slot identities. Original files remain inspectable; omitted facts are unknown.')
     return {'manifest': manifest, 'categories': categories, 'unresolved_count': unresolved,
             'external_requirements': external, 'diagnostics': diagnostics, 'warnings': warnings,
+            'compatibility': compatibility,
             'file_count': files, 'bytes': sum(p.stat().st_size for p in root.rglob('*') if p.is_file())}
 
 
@@ -226,7 +243,10 @@ def validate_references(root: Path, limits: Limits, manifest: dict[str, Any], ma
         path = marker(kind, source)
         if not path.is_file():
             raise PackageError(f'Unknown {kind} reference: {source}')
-        return document(path, limits)
+        result = document(path, limits)
+        if not isinstance(result, dict):
+            raise PackageError(f'Invalid {kind} reference metadata')
+        return result
 
     for key in ('experiment_id', 'protocol_id'):
         uuid.UUID(manifest[key])
@@ -250,10 +270,10 @@ def validate_references(root: Path, limits: Limits, manifest: dict[str, Any], ma
                 if not ref and field != 'raw_artifact':
                     continue
                 expected = ref['sha256'] if ref else pin['raw_sha256']
-                key = pin['dataset_id'], field
-                if key in seen and seen[key] != source:
+                artifact_key = pin['dataset_id'], field
+                if artifact_key in seen and seen[artifact_key] != source:
                     raise PackageError('Conflicting dataset artifact identities')
-                seen[key] = source
+                seen[artifact_key] = source
                 dep_path = marker('dataset_file', source)
                 if dep_path.exists():
                     dep = document(dep_path, limits)

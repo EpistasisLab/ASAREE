@@ -76,6 +76,8 @@ and scratch. UUID-isolated retained outputs include Agent slots and Script
 working directories. Shared legacy workspaces and experiment-level artifacts
 without publication attribution are not assigned to historical versions; the
 dependency inventory records unavailable or unscoped evidence.
+AgentRun IDs in node evidence are source provenance; native Motoro step history
+and resume/control snapshots are not bundled.
 
 Archive generation streams file bytes and SQL evidence slices, spools inventories
 to plain files, and discards tar member metadata after writing. Memory does not

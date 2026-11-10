@@ -747,7 +747,7 @@ async def _results(
         writer.dependency(str(job.experiment_id), "unscoped_experiment_artifacts", "legacy.unknown", status="excluded",
                           count=count, reason="No publication attribution recorded; not assigned to selected version.")
     writer.dependency("native_agent_runtime_state", "runtime_state", "recorded_attempt", status="excluded",
-                      reason="Native AgentRun IDs retained as provenance; credentials/resume snapshots are excluded.")
+                      reason="AgentRun IDs are source provenance; native steps and resume state are not bundled.")
 
 
 async def _attempt_files(

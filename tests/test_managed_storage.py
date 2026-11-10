@@ -25,6 +25,11 @@ from asaree.storage_migration import copy_files, make_plan, verify_files
 def clean_storage(monkeypatch, tmp_path):
     from asaree_workspace_core.storage import NAMESPACES
 
+    from asaree import config
+
+    # Settings are process-cached; other suites may have resolved a different
+    # storage deployment before this fixture scopes the environment.
+    monkeypatch.setattr(config, "_instance", None)
     monkeypatch.setattr(os, "environ", os.environ.copy())
     for field in ["data_root", *(field for field, _ in NAMESPACES.values())]:
         monkeypatch.delenv(f"ASAREE_{field.upper()}", raising=False)

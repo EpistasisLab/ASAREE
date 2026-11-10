@@ -32,9 +32,11 @@ from motoro.models.mcp_server import MCPServerConfig
 from motoro.models.skill import Skill, SkillFile
 from motoro.services.skill_service import render_skill_md
 from sqlalchemy import Text, cast, func, select, update
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import noload
 
+from asaree.config import get_settings
 from asaree.models.database import get_session
 from asaree.models.dataset import RegisteredDataset
 from asaree.models.dataset_split import DatasetArtifact, DatasetSplit
@@ -562,8 +564,8 @@ async def _server(db: AsyncSession, writer: PackageWriter, config: dict[str, Any
             if raw is None:
                 raise ValueError("Missing knowledge directory")
             root = Path(raw)
-            # Registration ownership grants access, never infer ownership from
-            # filesystem containment. External bundles also stay inside root.
+            # An owned registration identifies the requested bundle, but does
+            # not authorize arbitrary trees in the shared external browse jail.
             if server.name.startswith(okf_bundles.BUNDLE_SERVER_NAME_PREFIX):
                 managed = bool(server.command and "managed://bundles/" in server.command)
                 allowed = okf_bundles.owner_upload_root(owner) if managed else okf_bundles.bundle_root()
@@ -577,19 +579,20 @@ async def _server(db: AsyncSession, writer: PackageWriter, config: dict[str, Any
                 okf_bundles.owner_upload_root(owner), okf_documents.owner_root(owner),
             ) if root.resolve().is_relative_to(candidate.resolve())), None)
             validate_knowledge_root(root, owner_storage or allowed, external=owner_storage is None)
+            await authorize_knowledge_export(db, root, owner, external=owner_storage is None)
             await archive_io(writer, capture_tree, writer, root, directory, server_id)
             writer.dependency(server_id, "knowledge", "captured_at_download", directory=directory,
                               note="Mutable content captured now; no historical snapshot or cross-file transaction.")
-        except (OSError, ValueError):
+        except (OSError, ValueError, SQLAlchemyError):
             writer.dependency(server_id, "knowledge", "captured_at_download", status="unresolved",
                               reason="Unavailable, unauthorized, unsafe or concurrently changed knowledge content.")
 
 
 def validate_knowledge_root(root: Path, allowed: Path, *, external: bool) -> None:
-    """Owned registration is necessary, but cannot grant a platform-root dump.
+    """Reject unsafe storage geometry; this does not establish authority.
 
-    Legacy external bundles outside today's browse root remain exportable when
-    isolated from platform storage. Never infer external ownership from location.
+    External authorization also requires an exact operator grant and unambiguous
+    registration boundaries, checked before capture by the caller.
     """
     resolved = root.resolve()
     roots = managed_storage.roots()
@@ -597,14 +600,71 @@ def validate_knowledge_root(root: Path, allowed: Path, *, external: bool) -> Non
         raise ValueError("Knowledge root is a symlink")
     if not external and not resolved.is_relative_to(allowed.resolve()):
         raise ValueError("Knowledge directory outside owner storage")
+    if external and (resolved == allowed.resolve() or resolved in allowed.resolve().parents):
+        raise ValueError("Knowledge directory covers the shared browse root")
     for namespace, platform_root in roots.items():
         platform_root = platform_root.resolve()
-        if namespace in {"bundles", "documents"} and not external:
+        if (namespace in {"bundles", "documents"} and not external
+            and allowed.parent.resolve() == platform_root and resolved.is_relative_to(allowed.resolve())):
             continue
         if resolved == platform_root or resolved in platform_root.parents or platform_root in resolved.parents:
             raise ValueError("Knowledge registration overlaps platform storage")
     if resolved == Path(resolved.anchor):
         raise ValueError("Knowledge registration points to filesystem root")
+
+
+def paths_overlap(first: Path, second: Path) -> bool:
+    return first == second or first in second.parents or second in first.parents
+
+
+async def authorize_knowledge_export(db: AsyncSession, root: Path, owner: uuid.UUID, *, external: bool) -> None:
+    """Prove a boundary before any bytes enter the archive.
+
+    Managed ownership comes from the application's UUID-partitioned upload
+    roots. External ownership requires an operator grant: an owned MCP row and
+    absence of competing registrations alone do not prove filesystem authority.
+    All checks use the resource-capture transaction; foreign details stay local.
+    """
+    resolved = root.resolve()
+    grants = get_settings().knowledge_export_grants
+    if not isinstance(grants, dict):
+        raise ValueError("Export grant evidence unavailable")
+    approved = False
+    for identity, boundaries in grants.items():
+        grant_owner = uuid.UUID(str(identity))
+        if not isinstance(boundaries, list):
+            raise ValueError("Malformed export grant evidence")
+        for boundary in boundaries:
+            if not isinstance(boundary, (str, Path)):
+                raise ValueError("Malformed export grant boundary")
+            path = Path(boundary)
+            if not path.is_absolute():
+                raise ValueError("Export grants require absolute boundaries")
+            path = path.resolve()
+            if grant_owner == owner and path == resolved:
+                approved = True
+            elif grant_owner != owner and paths_overlap(path, resolved):
+                raise ValueError("Ambiguous knowledge export boundary")
+    if external and not approved:
+        raise ValueError("External knowledge export requires an exact operator grant")
+    # Owner-scoped list_bundles cannot reveal a competing registration. Select
+    # only locators/ownership, never foreign credentials or file contents.
+    rows = await db.stream(select(
+        MCPServerConfig.owner_id, MCPServerConfig.command,
+    ).where(
+        (MCPServerConfig.owner_id != owner) | MCPServerConfig.owner_id.is_(None),
+        MCPServerConfig.name.startswith(okf_bundles.BUNDLE_SERVER_NAME_PREFIX)
+        | MCPServerConfig.name.startswith(okf_documents.DOCUMENT_SERVER_NAME_PREFIX),
+    ).execution_options(yield_per=50))
+    try:
+        async for registration in rows:
+            raw = okf_bundles.bundle_path_from_command(registration.command)
+            if raw is None or not Path(raw).is_absolute():
+                raise ValueError("Foreign knowledge boundary evidence unavailable")
+            if paths_overlap(resolved, Path(raw).resolve()):
+                raise ValueError("Ambiguous knowledge export boundary")
+    finally:
+        await rows.close()
 
 
 async def _resources(writer: PackageWriter, graph: dict[str, Any], settings: dict[str, Any], owner: uuid.UUID) -> None:
@@ -786,6 +846,8 @@ async def _attempt_files(
 
     root = managed_storage.roots()["workspaces"]
     candidates = (root / str(job.experiment_id) / str(run_id), root / row_attempt_workspace_id(run_id))
+    standalone_agents = {re.sub(r"[^A-Za-z0-9_.-]", "_", str(node["id"]))
+                         for node in (graph or {}).get("nodes") or [] if node.get("type") in {"agent", "sub_agent"}}
     found = False
     for directory in candidates:
         if not directory.is_dir():
@@ -800,22 +862,31 @@ async def _attempt_files(
         # Exclude only known platform control/input/scratch identities.
         for relative, path, _ in _tree_files(directory):
             parts = PurePosixPath(relative).parts
+            platform_scratch = parts[0] == ".scratch" or (
+                len(parts) > 1 and parts[0].startswith(("dataset=", "agent=")) and parts[1] == ".scratch"
+            )
             if credential_file(relative) or any(
-                part in {"scratch", "working", "cache", "__pycache__"}
-                or part.startswith(".asaree-script-context-") or part.endswith(".preparing") for part in parts
-            ):
+                part.startswith(".asaree-script-context-")
+                or re.fullmatch(r"\..+\.[A-Za-z0-9_-]{8,}\.preparing", part) for part in parts
+            ) or platform_scratch:
                 continue
             control_parent = len(parts) == 1 or (
                 len(parts) == 2 and parts[0].startswith(("dataset=", "agent="))
             ) or (len(parts) >= 3 and parts[-2].startswith(".") and "-unsplit-" in parts[-2])
             if path.name == "state.json" and control_parent:
                 continue
+            row_input = (directory == candidates[1] and len(parts) == 3 and parts[0] == "agents"
+                         and re.fullmatch(r"[0-9a-f]{64}", parts[1]))
             if (path.name == "dataset_inputs.json" and len(parts) == 1
-                or path.name == "row-view.json" and len(parts) == 3 and parts[0] == "agents"):
+                or path.name == "row-view.json" and row_input):
                 continue
-            if "scripts" in parts and (path.name in sources or re.fullmatch(r"inline-[0-9a-f]{12}\.py", path.name)):
+            materialized_source = (len(parts) == 2 and parts[0] == "scripts") or (
+                directory == candidates[1] and len(parts) == 3
+                and parts[0] in standalone_agents and parts[1] == "scripts"
+            )
+            if materialized_source and (path.name in sources or re.fullmatch(r"inline-[0-9a-f]{12}\.py", path.name)):
                 continue
-            if (len(parts) >= 3 and parts[0] == "agents" and re.fullmatch(r"[0-9a-f]{64}\.csv", path.name)):
+            if row_input and re.fullmatch(r"[0-9a-f]{64}\.csv", path.name):
                 continue
             try:
                 await archive_io(writer, writer.file, path, f"results/artifacts/{run_id}/{relative}",

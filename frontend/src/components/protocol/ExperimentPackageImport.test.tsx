@@ -1,12 +1,28 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
-import { afterEach, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeAll, expect, it, vi } from 'vitest'
 import { packageImportsApi } from '@/api/client'
 import type { PackageImport } from '@/types/packageImports'
 import { ExperimentPackageImport } from './ExperimentPackageImport'
 
 afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals() })
+
+// CodeMirror measures text ranges; jsdom provides no layout implementation.
+const rangeRect = Object.getOwnPropertyDescriptor(Range.prototype, 'getBoundingClientRect')
+const rangeRects = Object.getOwnPropertyDescriptor(Range.prototype, 'getClientRects')
+beforeAll(() => {
+  Object.defineProperties(Range.prototype, {
+    getBoundingClientRect: { configurable: true, value: () => new DOMRect() },
+    getClientRects: { configurable: true, value: () => [] },
+  })
+})
+afterAll(() => {
+  for (const [name, descriptor] of [['getBoundingClientRect', rangeRect], ['getClientRects', rangeRects]] as const) {
+    if (descriptor) Object.defineProperty(Range.prototype, name, descriptor)
+    else Reflect.deleteProperty(Range.prototype, name)
+  }
+})
 
 const ready: PackageImport = { id: 'request', status: 'awaiting_confirmation', sha256: 'source-hash',
   experiment_id: null, configured_at: null, created_at: '', expires_at: '', error: null,
@@ -107,6 +123,75 @@ it('inspects immutable observation evidence without coercing null or unavailable
   fireEvent.click(await screen.findByRole('button', { name: /request.*Ready to review/ }))
   fireEvent.click(await screen.findByText('Inspect source files and historical evidence'))
   fireEvent.click(await screen.findByRole('button', { name: 'Inspect JSON' }))
-  expect(await screen.findByText(source)).toBeInTheDocument()
+  const viewer = await screen.findByRole('textbox', { name: 'JSON source' })
+  expect(viewer).toHaveAttribute('aria-readonly', 'true')
+  expect(viewer).toHaveTextContent('"status": "measured"')
+  expect(viewer).toHaveTextContent('"value": null')
+  expect(viewer).toHaveTextContent('"status": "unavailable"')
+  fireEvent.click(screen.getByRole('button', { name: 'Original' }))
+  await waitFor(() => expect(viewer.textContent).toBe(source))
   expect(packageImportsApi.source).toHaveBeenCalledWith('request', path)
+})
+
+it('opens JSON inspection immediately while the file request is pending', async () => {
+  show([ready])
+  const path = 'publication/settings.json'
+  vi.mocked(packageImportsApi.files).mockResolvedValue({ items: [{ path, sha256: 'hash', bytes: 100,
+    source_id: 'publication', provenance: 'publication_pinned' }], next_offset: null })
+  let finish!: (value: Response) => void
+  const fetchFile = vi.spyOn(globalThis, 'fetch').mockImplementation(() => new Promise(resolve => { finish = resolve }))
+  fireEvent.click(await screen.findByRole('button', { name: /request.*Ready to review/ }))
+  fireEvent.click(await screen.findByText('Inspect source files and historical evidence'))
+  fireEvent.click(await screen.findByRole('button', { name: 'Inspect JSON' }))
+  const dialog = await screen.findByRole('dialog', { name: 'Inspect JSON' })
+  expect(within(dialog).getByRole('status')).toHaveTextContent('Loading JSON')
+  expect(within(dialog).getByText(path)).toBeInTheDocument()
+  await waitFor(() => expect(fetchFile).toHaveBeenCalledWith(
+    '/api/experiment-package-imports/request/source?path=publication%2Fsettings.json', expect.anything()))
+  const source = '{"exact_integer":9007199254740993,"value":null}'
+  await act(async () => { finish(new Response(source, { headers: { 'Content-Type': 'application/octet-stream' } })) })
+  expect(await within(dialog).findByRole('textbox', { name: 'JSON source' })).toHaveTextContent('9007199254740993')
+})
+
+it('shows source-loading errors in the inspector and allows retry', async () => {
+  show([ready])
+  const path = 'publication/settings.json'
+  vi.mocked(packageImportsApi.files).mockResolvedValue({ items: [{ path, sha256: 'hash', bytes: 100,
+    source_id: 'publication', provenance: 'publication_pinned' }], next_offset: null })
+  const source = vi.spyOn(packageImportsApi, 'source').mockRejectedValueOnce(new Error('Source file unavailable'))
+    .mockResolvedValue(new Blob(['{"restored":true}']))
+  fireEvent.click(await screen.findByRole('button', { name: /request.*Ready to review/ }))
+  fireEvent.click(await screen.findByText('Inspect source files and historical evidence'))
+  fireEvent.click(await screen.findByRole('button', { name: 'Inspect JSON' }))
+  const dialog = await screen.findByRole('dialog', { name: 'Inspect JSON' })
+  expect(await within(dialog).findByRole('alert')).toHaveTextContent('Source file unavailable')
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Retry loading file' }))
+  expect(await within(dialog).findByRole('textbox', { name: 'JSON source' })).toHaveTextContent('"restored": true')
+  expect(source).toHaveBeenCalledTimes(2)
+  expect(within(dialog).queryByRole('alert')).not.toBeInTheDocument()
+})
+
+it('keeps a late response from reopening a closed inspector or replacing a newer file', async () => {
+  show([ready])
+  vi.mocked(packageImportsApi.files).mockResolvedValue({ items: ['first.json', 'second.json'].map(path => ({
+    path, sha256: 'hash', bytes: 100, source_id: path, provenance: 'publication_pinned',
+  })), next_offset: null })
+  let finishFirst!: (value: Blob) => void
+  vi.spyOn(packageImportsApi, 'source').mockImplementationOnce(() => new Promise(resolve => { finishFirst = resolve }))
+    .mockResolvedValue(new Blob(['{"file":"second"}']))
+  fireEvent.click(await screen.findByRole('button', { name: /request.*Ready to review/ }))
+  fireEvent.click(await screen.findByText('Inspect source files and historical evidence'))
+  fireEvent.click((await screen.findAllByRole('button', { name: 'Inspect JSON' }))[0])
+  const first = await screen.findByRole('dialog', { name: 'Inspect JSON' })
+  fireEvent.click(within(first).getByRole('button', { name: 'Close source inspection' }))
+  await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+  fireEvent.click(screen.getAllByRole('button', { name: 'Inspect JSON' })[1])
+  const second = await screen.findByRole('dialog', { name: 'Inspect JSON' })
+  const viewer = await within(second).findByRole('textbox', { name: 'JSON source' })
+  expect(viewer).toHaveTextContent('"file": "second"')
+  await act(async () => { finishFirst(new Blob(['{"file":"first"}'])) })
+  expect(within(second).getByText('second.json')).toBeInTheDocument()
+  expect(viewer).toHaveTextContent('"file": "second"')
+  fireEvent.click(within(second).getByRole('button', { name: 'Close source inspection' }))
+  await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
 })

@@ -1,12 +1,30 @@
 import { useId, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
+import { ChevronDown, Download, File, FileJson, Search } from 'lucide-react'
 import { packageImportsApi } from '@/api/client'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { Badge } from '@/components/ui/badge'
 import type { PackageImport } from '@/types/packageImports'
 import { newRequestKey } from '@/lib/requestKey'
 import { FileDropInput } from './FileDropInput'
+import { JsonSourceViewer } from './JsonSourceViewer'
+
+const provenanceLabels: Record<string, string> = {
+  publication_pinned: 'Published snapshot',
+  captured_at_download: 'Captured at export',
+  recorded_attempt: 'Recorded attempt',
+  retained_attempt_artifact: 'Retained artifact',
+  'legacy.unknown': 'Unknown historical source',
+}
+
+function fileSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes.toLocaleString()} B`
+  const unit = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), 3)
+  return `${(bytes / 1024 ** unit).toLocaleString(undefined, { maximumFractionDigits: 1 })} ${['B', 'KiB', 'MiB', 'GiB'][unit]}`
+}
 
 const categoryLabels: Record<string, string> = {
   inputs: 'Dataset files and metadata',
@@ -84,7 +102,8 @@ export function ExperimentPackageImport({ experimentId }: { experimentId?: strin
   const [acknowledged, setAcknowledged] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [uploading, setUploading] = useState(false)
-  const [preview, setPreview] = useState<{ importId: string; path: string; text: string } | null>(null)
+  const [preview, setPreview] = useState<{ importId: string; path: string; text?: string; error?: string; loading: boolean } | null>(null)
+  const previewRequest = useRef(0)
   const selectedRef = useRef(selected)
   selectedRef.current = selected
   const uploadController = useRef<AbortController | null>(null)
@@ -123,25 +142,35 @@ export function ExperimentPackageImport({ experimentId }: { experimentId?: strin
     }
     finally { uploadController.current = null; setUploading(false) }
   }
-  const download = async (id: string, path?: string) => {
+  const download = async (id: string, path: string) => {
     try {
       const fresh = await packageImportsApi.get(id)
       if (!fresh.source_url) throw new Error('Source download unavailable during activation or after expiry.')
       const anchor = document.createElement('a')
-      anchor.href = fresh.source_url + (path ? `&path=${encodeURIComponent(path)}` : '')
+      anchor.href = `${fresh.source_url}&path=${encodeURIComponent(path)}`
       anchor.click()
     }
     catch (cause) { setError(String(cause)) }
   }
   const inspectFile = async (id: string, path: string) => {
+    const request = ++previewRequest.current
+    setPreview({ importId: id, path, loading: true })
     try {
       const blob = await packageImportsApi.source(id, path)
       const text = await blob.text()
-      if (selectedRef.current === id) setPreview({ importId: id, path, text })
-    } catch (cause) { if (selectedRef.current === id) setError(String(cause)) }
+      if (selectedRef.current === id && previewRequest.current === request) setPreview({ importId: id, path, text, loading: false })
+    } catch (cause) {
+      if (selectedRef.current === id && previewRequest.current === request) {
+        setPreview({ importId: id, path, error: `Could not load this source file. ${String(cause)}`, loading: false })
+      }
+    }
+  }
+  const closePreview = () => {
+    previewRequest.current += 1
+    setPreview(null)
   }
   const select = (item: PackageImport) => {
-    setSelected(item.id); setOffset(0); setAcknowledged(false); setError(null); setPreview(null)
+    setSelected(item.id); setOffset(0); setAcknowledged(false); setError(null); closePreview()
   }
 
   return <Card>
@@ -168,21 +197,54 @@ export function ExperimentPackageImport({ experimentId }: { experimentId?: strin
           {current.preflight.warnings?.map((warning) => <p key={warning} className="text-sm text-amber-400">{warning}</p>)}
           {current.preflight.compatibility?.map((issue) => <p key={issue} className="text-sm text-amber-400">{issue}</p>)}
           {current.preflight.diagnostics?.map((item, index) => <p key={index} className="text-sm">{item.kind} <span className="font-mono">{item.id}</span>: {item.reason ?? item.status}</p>)}
-          <Button variant="outline" onClick={() => void download(current.id)}>Download original source package</Button>
-          <details><summary className="cursor-pointer">Inspect source files and historical evidence</summary>
-            <div className="overflow-x-auto"><table className="w-full text-left text-xs"><thead><tr><th>File</th><th>Bytes</th><th>Provenance</th><th /></tr></thead>
-              <tbody>{files.data?.items.map((file) => <tr key={file.path}><td className="break-all font-mono" title={file.sha256}>{file.path}</td><td>{file.bytes}</td><td>{file.provenance}</td><td>
-                {file.path.endsWith('.json') && file.bytes <= 16 * 1024 * 1024 && <Button variant="ghost" onClick={() => void inspectFile(current.id, file.path)}>Inspect JSON</Button>}
-                <Button variant="ghost" onClick={() => void download(current.id, file.path)}>Download</Button>
-              </td></tr>)}</tbody></table></div>
-            <Button variant="ghost" disabled={offset === 0} onClick={() => setOffset(Math.max(0, offset - 50))}>Previous</Button>
-            <Button variant="ghost" disabled={files.data?.next_offset == null} onClick={() => setOffset(files.data!.next_offset!)}>Next</Button>
+          <details className="group/source-files overflow-hidden rounded-lg border">
+            <summary className="flex cursor-pointer list-none items-center justify-between gap-3 bg-muted/30 px-4 py-3 text-sm font-medium [&::-webkit-details-marker]:hidden">
+              Inspect source files and historical evidence
+              <ChevronDown aria-hidden="true" className="size-4 shrink-0 text-muted-foreground transition-transform group-open/source-files:rotate-180" />
+            </summary>
+            <p className="border-t px-4 py-3 text-xs text-muted-foreground">Browse original package files. Inspect JSON in a read-only viewer or download any file. Hover over a filename to see its SHA-256.</p>
+            <div className="max-h-96 overflow-auto border-y">
+              <table className="w-full min-w-[36rem] text-left text-xs">
+                <caption className="sr-only">Source files and historical evidence</caption>
+                <thead className="sticky top-0 z-10 bg-muted text-muted-foreground"><tr>
+                  <th scope="col" className="px-4 py-2.5 font-medium">File</th>
+                  <th scope="col" className="px-3 py-2.5 text-right font-medium">Size</th>
+                  <th scope="col" className="px-3 py-2.5 font-medium">Source</th>
+                  <th scope="col" className="px-4 py-2.5 text-right font-medium">Actions</th>
+                </tr></thead>
+                <tbody className="divide-y">
+                  {files.isPending && <tr><td colSpan={4} className="px-4 py-6 text-center text-muted-foreground">Loading source files…</td></tr>}
+                  {files.isError && <tr><td colSpan={4} className="px-4 py-4"><p role="alert" className="text-destructive">Could not load source files. {String(files.error)}</p><Button size="xs" variant="outline" className="mt-2" onClick={() => void files.refetch()}>Retry file list</Button></td></tr>}
+                  {files.data?.items.length === 0 && <tr><td colSpan={4} className="px-4 py-6 text-center text-muted-foreground">No source files listed.</td></tr>}
+                  {files.data?.items.map((file) => {
+                    const isJson = file.path.endsWith('.json')
+                    const FileIcon = isJson ? FileJson : File
+                    const separator = file.path.lastIndexOf('/')
+                    return <tr key={file.path} className="transition-colors hover:bg-muted/30">
+                      <th scope="row" className="px-4 py-3 font-normal"><div className="flex items-start gap-2.5">
+                        <FileIcon aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
+                        <div className="min-w-0" title={`SHA-256: ${file.sha256}`}>
+                          <p className="break-all font-mono text-foreground">{file.path.slice(separator + 1)}</p>
+                          {separator >= 0 && <p className="mt-1 break-all font-mono text-[11px] text-muted-foreground">{file.path.slice(0, separator + 1)}</p>}
+                        </div>
+                      </div></th>
+                      <td className="whitespace-nowrap px-3 py-3 text-right font-mono tabular-nums text-muted-foreground" title={`${file.bytes.toLocaleString()} bytes`}>{fileSize(file.bytes)}</td>
+                      <td className="px-3 py-3"><Badge variant="outline" className="h-auto whitespace-normal text-[11px]">{provenanceLabels[file.provenance] ?? file.provenance.replaceAll('_', ' ')}</Badge></td>
+                      <td className="px-4 py-3"><div className="flex justify-end gap-1.5">
+                        {isJson && file.bytes <= 16 * 1024 * 1024 && <Button size="xs" variant="outline" onClick={() => void inspectFile(current.id, file.path)}><Search aria-hidden="true" className="size-3" />Inspect JSON</Button>}
+                        <Button size="xs" variant="ghost" onClick={() => void download(current.id, file.path)}><Download aria-hidden="true" className="size-3" />Download</Button>
+                      </div></td>
+                    </tr>
+                  })}
+                </tbody>
+              </table>
+            </div>
+            <div className="flex flex-wrap items-center justify-between gap-2 bg-muted/20 px-4 py-2">
+              <p className="text-xs text-muted-foreground">{files.data?.items.length ? `Showing files ${(offset + 1).toLocaleString()}–${(offset + files.data.items.length).toLocaleString()}` : 'Source file inventory'}</p>
+              <div className="flex gap-1"><Button size="xs" variant="ghost" disabled={offset === 0 || files.isFetching} onClick={() => setOffset(Math.max(0, offset - 50))}>Previous</Button>
+                <Button size="xs" variant="ghost" disabled={files.data?.next_offset == null || files.isFetching} onClick={() => setOffset(files.data!.next_offset!)}>Next</Button></div>
+            </div>
           </details>
-          {preview?.importId === current.id && <div className="space-y-2">
-            <p className="break-all font-mono text-xs">Immutable source evidence: {preview.path}</p>
-            <pre className="max-h-80 overflow-auto rounded border p-3 text-xs">{preview.text}</pre>
-            <Button variant="ghost" onClick={() => setPreview(null)}>Close source inspection</Button>
-          </div>}
         </>}
         <div className="flex flex-wrap gap-2">
           {current.status === 'awaiting_confirmation' && <Button disabled={action.isPending} onClick={() => action.mutate({ id: current.id, command: 'confirm' })}>Confirm import into a new experiment</Button>}
@@ -194,11 +256,28 @@ export function ExperimentPackageImport({ experimentId }: { experimentId?: strin
           {current.experiment_id && <Button render={<Link to={`/experiments/${current.experiment_id}/protocol`} />}>Open editable draft</Button>}
         </div>
         {current.status === 'completed' && !current.configured_at && <div className="space-y-2">
-          <p className="text-sm">Configure connections and resolve missing dependencies in the draft. Historical source facts stay unchanged. Then acknowledge configuration and use normal publication before production execution.</p>
+          <p className="text-sm">Open the editable draft to configure model connections and resolve missing datasets, skills, or tools. Return here to confirm local setup before publishing the experiment.</p>
+          <p className="text-xs text-muted-foreground">This checks local dependency records and unlocks publication. It does not test credentials or connect to external services.</p>
           <label className="flex gap-2 text-sm"><input type="checkbox" checked={acknowledged} onChange={(event) => setAcknowledged(event.target.checked)} />I configured local connections and resolved required dependencies.</label>
           <Button disabled={!acknowledged} onClick={() => void packageImportsApi.configure(current.id).then(() => job.refetch()).catch((cause: unknown) => setError(String(cause)))}>Acknowledge local configuration</Button>
         </div>}
       </div>}
     </CardContent>
+    <Dialog open={preview !== null && preview.importId === selected} onOpenChange={open => { if (!open) closePreview() }}>
+      <DialogContent className="flex max-h-[85svh] flex-col sm:max-w-3xl">
+        <DialogHeader>
+          <DialogTitle>Inspect JSON</DialogTitle>
+          <DialogDescription className="break-all font-mono text-xs">{preview?.path}</DialogDescription>
+        </DialogHeader>
+        <p className="text-xs text-muted-foreground">Read-only source file from the uploaded package.</p>
+        {preview?.loading && <p role="status" className="text-sm">Loading JSON…</p>}
+        {preview?.error && <div className="space-y-2">
+          <p role="alert" className="text-sm text-destructive">{preview.error}</p>
+          <Button variant="outline" onClick={() => void inspectFile(preview.importId, preview.path)}>Retry loading file</Button>
+        </div>}
+        {preview?.text !== undefined && <JsonSourceViewer key={`${preview.importId}:${preview.path}`} source={preview.text} />}
+        <Button className="self-end" variant="outline" onClick={closePreview}>Close source inspection</Button>
+      </DialogContent>
+    </Dialog>
   </Card>
 }

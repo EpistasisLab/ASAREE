@@ -41,9 +41,14 @@ JsonDict = dict[str, Any]
 
 def inventory_files(directories: list[Path]) -> list[JsonDict]:
     files = []
+    seen_directories: set[Path] = set()
     for directory in directories:
         if not directory.is_dir() or directory.is_symlink():
             raise ValueError(f"Legacy index directory is unavailable or a symlink: {directory}")
+        directory = directory.resolve()
+        if directory in seen_directories:
+            continue
+        seen_directories.add(directory)
         for path in sorted(directory.iterdir()):
             entry: JsonDict = {"path": str(path.resolve()), "status": "retained_unknown"}
             if path.is_symlink():
@@ -216,12 +221,16 @@ def retire_verified(report: JsonDict) -> None:
     if any(entry["status"] in ("inconsistent", "unassociated") for entry in report["files"]):
         raise ValueError("Retirement blocked by inconsistent or unassociated legacy indexes")
     prepared = []
+    seen_paths: set[Path] = set()
     for entry in report["files"]:
         if entry["status"] != "indexed":
             continue
         if not any(source["sha256"] == entry["source_sha256"] for source in report["sources"]):
             raise ValueError("Retirement requires a verified registered source")
         path = Path(entry["path"])
+        if path.resolve() in seen_paths:
+            raise ValueError("Duplicate legacy index path in retirement report")
+        seen_paths.add(path.resolve())
         if path.is_symlink() or sha256(path) != entry["file_sha256"]:
             raise ValueError("Legacy index changed after verification")
         destination = path.with_suffix(".sqlite.retired")
@@ -240,7 +249,7 @@ def main() -> None:
     parser.add_argument("--report", type=Path, required=True)
     args = parser.parse_args()
     # Plans include source headers and job metadata; never print them to logs.
-    report = asyncio.run(run_migration(args.action, [path.resolve() for path in args.legacy_dir]))
+    report = asyncio.run(run_migration(args.action, args.legacy_dir))
     args.report.parent.mkdir(parents=True, exist_ok=True)
     atomic_write(args.report, json.dumps(report, ensure_ascii=True, indent=2).encode())
     os.chmod(args.report, 0o600)

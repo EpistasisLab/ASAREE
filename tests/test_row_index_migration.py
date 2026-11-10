@@ -69,6 +69,19 @@ def test_retirement_preflights_all_conflicts_and_renames_only_verified_indexes(t
     assert first.exists() and second.exists()
 
 
+def test_duplicate_legacy_directories_are_deduplicated_before_retirement(tmp_path):
+    path = legacy_index(tmp_path)
+    files = migration.inventory_files([tmp_path, tmp_path, tmp_path / '.'])
+    assert len(files) == 1
+    report = dict(files=files * 2, problems=[], sources=[dict(status='verified', sha256=path.stem)])
+    with pytest.raises(ValueError, match='Duplicate'):
+        migration.retire_verified(report)
+    assert path.exists() and not path.with_suffix('.sqlite.retired').exists()
+    report['files'] = files
+    migration.retire_verified(report)
+    assert not path.exists() and path.with_suffix('.sqlite.retired').exists()
+
+
 async def test_rebuild_compares_all_rows_and_migrates_active_job_progress(results_db, tmp_path, monkeypatch):
     db, scope, _, user = results_db
     originals = tmp_path / 'originals'

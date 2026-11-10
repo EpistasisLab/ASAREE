@@ -204,8 +204,17 @@ async def test_legacy_publication_never_infers_current_split(catalog):
     catalog.split(dataset, "today")
     graph = graph_for(dataset)
     assert resolve_attempt_inputs(None, graph) is None
+    future = await freeze_dataset_inputs(catalog.db, graph, owner_id=catalog.owner)
+    future["schema_version"] = 2
+    with pytest.raises(DatasetInputError, match="unsupported_provenance"):
+        resolve_attempt_inputs(future, graph)
     with pytest.raises(DatasetInputError, match="legacy_unknown"):
         await prepare_attempt_graph(catalog.db, run_for(catalog, None), graph)
+    recorded = await freeze_dataset_inputs(catalog.db, graph, owner_id=catalog.owner)
+    missing_publication = run_for(catalog, resolve_attempt_inputs(recorded, graph))
+    missing_publication.protocol_revision_id = None
+    with pytest.raises(DatasetInputError, match="scope_unavailable"):
+        await prepare_attempt_graph(catalog.db, missing_publication, graph)
     graph["edges"][0]["data"] = {"dataset_input": {"mode": "per_row", "columns": ["x"]}}
     snapshot = {"dataset_id": str(dataset.id), "raw_sha256": dataset.raw_sha256,
                 "row_index": 0, "columns": ["x"], "values": {"x": "001"}}
@@ -303,7 +312,7 @@ def test_migration_keeps_historical_provenance_null():
     config.output_buffer = output
     command.upgrade(config, "a67b8c9d0e1f:b78c9d0e1f2a", sql=True)
     sql = output.getvalue()
-    assert "ADD COLUMN dataset_inputs JSONB" in sql
+    assert "ADD COLUMN IF NOT EXISTS dataset_inputs JSONB" in sql
     assert "UPDATE protocol_revisions" not in sql
     assert "UPDATE protocol_runs" not in sql
     assert "REFERENCES dataset_artifacts" in sql

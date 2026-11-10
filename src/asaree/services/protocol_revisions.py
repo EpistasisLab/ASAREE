@@ -146,7 +146,8 @@ async def publish_protocol(
     )
     published = await get_published_revision(db, protocol)
     unchanged = (
-        is_draft_published(protocol, published) and await publication_matches_experiment(db, protocol, published)
+        published is not None and is_draft_published(protocol, published)
+        and await publication_matches_experiment(db, protocol, published)
         and published.dataset_inputs == dataset_inputs
     )
     if published is not None and unchanged:

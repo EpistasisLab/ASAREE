@@ -18,7 +18,6 @@ from asaree.models.dataset import RegisteredDataset
 from asaree.models.dataset_input_reference import DatasetInputReference
 from asaree.models.dataset_split import DatasetArtifact, DatasetSplit
 from asaree.services.dataset_row_inputs import DatasetRowInputError
-from asaree.services.datasets import get_dataset_by_name
 
 
 class DatasetInputError(ValueError):
@@ -87,11 +86,13 @@ async def freeze_dataset_inputs(
                 try:
                     registration = await db.scalar(select(RegisteredDataset).where(
                         RegisteredDataset.id == uuid.UUID(identity), RegisteredDataset.owner_id == owner_id,
-                    ))
+                        ).execution_options(populate_existing=True))
                 except (ValueError, TypeError, AttributeError):
                     registration = None
             else:
-                registration = await get_dataset_by_name(db, name, owner_id=owner_id) if name else None
+                registration = await db.scalar(select(RegisteredDataset).where(
+                    RegisteredDataset.name == name, RegisteredDataset.owner_id == owner_id,
+                ).execution_options(populate_existing=True)) if name else None
             if registration is None:
                 raise DatasetRowInputError("source_unavailable", "registered dataset source is unavailable")
             if name and name != registration.name:
@@ -101,8 +102,9 @@ async def freeze_dataset_inputs(
             if key in seen:
                 continue
             seen.add(key)
-            _verify_file(registration.raw_path, registration.raw_sha256)
             raw = _artifact_pin(registration.raw_artifact)
+            if raw is None:
+                _verify_file(registration.raw_path, registration.raw_sha256)
             if raw and (raw["sha256"] != registration.raw_sha256 or registration.raw_artifact is None
                         or registration.raw_artifact.dataset_id != registration.id):
                 raise DatasetInputError("dataset_input.identity_mismatch: source artifact does not match registration")
@@ -135,6 +137,8 @@ def resolve_attempt_inputs(
     """Select from publication pins after applying this cell's factor values."""
     if manifest is None:
         return None
+    if manifest.get("schema_version") != 1 or manifest.get("provenance") != "pinned":
+        raise DatasetInputError("dataset_input.unsupported_provenance: input manifest requires its original resolver")
     inputs = []
     bindings = []
     seen = set()
@@ -197,7 +201,7 @@ def retain_inputs(db: AsyncSession, manifest: dict[str, Any] | None, *,
 async def resolve_pinned_registration(db: AsyncSession, pin: dict[str, Any], owner_id: uuid.UUID) -> dict[str, Any]:
     registration = await db.scalar(select(RegisteredDataset).where(
         RegisteredDataset.id == uuid.UUID(pin["dataset_id"]), RegisteredDataset.owner_id == owner_id,
-    ))
+    ).execution_options(populate_existing=True))
     if registration is None or registration.raw_sha256 != pin["raw_sha256"]:
         raise DatasetInputError("dataset_input.identity_mismatch: pinned source is missing or changed")
     result = {key: pin[key] for key in ("description", "dictionary_json", "target_column")}
@@ -260,6 +264,8 @@ async def prepare_attempt_graph(db: AsyncSession, run: Any, graph: dict[str, Any
 
     graph = apply_factor_bindings(graph, run.factor_values or {})
     manifest = run.dataset_inputs
+    if manifest is not None and run.protocol_revision_id is None:
+        raise DatasetInputError("dataset_input.scope_unavailable: pinned publication no longer exists")
     if manifest is None:
         for edge, node, agent in _dataset_edges(graph):
             config = (node.get("data") or {}).get("config") or {}
@@ -291,5 +297,7 @@ async def prepare_attempt_graph(db: AsyncSession, run: Any, graph: dict[str, Any
                                     "publication_id": str(run.protocol_revision_id),
                                     "design_revision_id": str(run.design_revision_id),
                                     "replicate_result_id": str(run.replicate_result_id),
-                                    "row_result_id": str(run.row_result_id)}
+                                    "row_result_id": str(run.row_result_id),
+                                    "factor_values": deepcopy(run.factor_values or {}),
+                                    "target_node_id": run.target_node_id}
     return graph

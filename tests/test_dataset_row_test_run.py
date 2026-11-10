@@ -292,9 +292,10 @@ async def test_whole_mode_test_run_remains_compatible(test_run_context, valid_te
 async def test_create_test_run_persists_snapshot_without_row_slot(test_run_context):
     ctx = test_run_context
     async with ctx["sessions"]() as db:
+        dataset = await db.get(RegisteredDataset, ctx["dataset_id"])
         snapshot = {
             "dataset_id": str(ctx["dataset_id"]),
-            "raw_sha256": "a" * 64,
+            "raw_sha256": dataset.raw_sha256,
             "row_index": 2,
             "columns": ["prompt"],
             "values": {"prompt": "third"},

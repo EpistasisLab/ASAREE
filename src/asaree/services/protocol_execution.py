@@ -5625,10 +5625,10 @@ async def run_protocol(protocol_run_id: uuid.UUID) -> None:
     row_context_mode = False
     dataset_row = None
     async with get_session() as db:
-        run = await db.execute(
+        run_result = await db.execute(
             select(ProtocolRun).where(ProtocolRun.id == protocol_run_id).with_for_update()
         )
-        run = run.scalar_one_or_none()
+        run = run_result.scalar_one_or_none()
         if run is None:
             return
         row_mode = run.row_result_id is not None and run.replicate_result_id is not None
@@ -5714,13 +5714,15 @@ async def run_protocol(protocol_run_id: uuid.UUID) -> None:
         )
         try:
             graph = await prepare_attempt_graph(db, run, graph)
-            if run.dataset_inputs is not None:
-                workspace = row_attempt_workspace_id(run.id) if row_context_mode else attempt_workspace_id(
-                    experiment_id, run.id
-                )
+            # Row snapshots have their own private layout and source/view
+            # manifests in dataset_row_workspaces; never open them as a
+            # whole-dataset Workspace.
+            if run.dataset_inputs is not None and not row_context_mode:
+                workspace = attempt_workspace_id(experiment_id, run.id)
                 validate_workspace_inputs(workspace, run.dataset_inputs, graph["_dataset_input_scope"])
         except (DatasetInputError, ValueError, OSError) as exc:
-            await set_status(db, protocol_run_id, status="failed", error=f"Dataset input validation failed: {exc}")
+            prefix = "Row source validation failed" if row_context_mode else "Dataset input validation failed"
+            await set_status(db, protocol_run_id, status="failed", error=f"{prefix}: {exc}")
             return
 
         row_source = None

@@ -216,3 +216,98 @@ async def test_wired_script_user_directories_survive_and_actual_workspace_scratc
     else:
         assert all(b"PLATFORM SCRATCH MUST NOT APPEAR" not in value for value in contents.values())
         assert all(b"PLATFORM PREPARATION MUST NOT APPEAR" not in value for value in contents.values())
+
+
+@pytest.mark.parametrize("placement", ["workspace", "standalone_agent"])
+async def test_nested_script_outputs_keep_source_like_names_but_materialized_sources_are_excluded(
+    tmp_path, monkeypatch, placement,
+):
+    from asaree.mcp_servers import script_server
+    from asaree.services import protocol_execution
+
+    run, experiment = uuid.uuid4(), uuid.uuid4()
+    root = tmp_path / "workspaces"
+    monkeypatch.setattr(protocol_execution, "_workspace_storage_root", lambda: root)
+    monkeypatch.setattr(packages.managed_storage, "roots", lambda: {"workspaces": root})
+    materialization = f"{experiment}/{run}" if placement == "workspace" else (
+        protocol_execution._script_workspace_id(None, run, "worker")
+    )
+    source = (
+        "from pathlib import Path\n"
+        "for directory in ('outputs', 'outputs/scripts'):\n"
+        "    Path(directory).mkdir(parents=True, exist_ok=True)\n"
+        "    for name in ('script.py', 'inline-0123456789ab.py'):\n"
+        "        (Path(directory) / name).write_text('durable Script output')\n"
+    )
+    script = Path(protocol_execution._materialize_script(materialization, "script", source))
+    inline = Path(protocol_execution._materialize_script(materialization, "inline-0123456789ab", "print('source')"))
+    ctx = SimpleNamespace(request_context=SimpleNamespace(meta=SimpleNamespace(model_extra={
+        "motoro.ambient.script_path": str(script),
+    })))
+    assert json.loads(script_server.run_wired_script(ctx=ctx))["exit_code"] == 0
+    assert script.is_file() and inline.is_file()
+    writer = writer_at(tmp_path)
+    await packages._attempt_files(writer, SimpleNamespace(experiment_id=experiment), run, {"nodes": [
+        {"id": "script", "type": "script"}, {"id": "worker", "type": "agent"},
+    ]})
+    writer.finish({})
+    contents = unpack(tmp_path)
+    attempt = root / str(experiment) / str(run) if placement == "workspace" else root / "_protocol_runs" / str(run)
+    prefix = f"results/artifacts/{run}/"
+    for file in (script, inline):
+        assert prefix + file.relative_to(attempt).as_posix() not in contents
+    for directory in ("outputs", "outputs/scripts"):
+        for name in ("script.py", "inline-0123456789ab.py"):
+            member = prefix + (script.parent / directory / name).relative_to(attempt).as_posix()
+            assert contents[member] == b"durable Script output"
+
+
+async def test_row_inputs_are_excluded_only_at_the_producers_exact_row_location(tmp_path, monkeypatch):
+    from asaree.mcp_servers import script_server
+    from asaree.services import dataset_row_workspaces, protocol_execution
+    from asaree.services.dataset_row_csv import RowSource
+
+    run, whole_run, experiment, dataset = uuid.uuid4(), uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
+    root = tmp_path / "workspaces"
+    monkeypatch.setattr(dataset_row_workspaces, "_workspace_root", lambda: root)
+    monkeypatch.setattr(protocol_execution, "_workspace_storage_root", lambda: root)
+    monkeypatch.setattr(packages.managed_storage, "roots", lambda: {"workspaces": root})
+    prepared = dataset_row_workspaces.prepare_agent_row_inputs(run_id=run, agent_node_id="worker",
+        source=RowSource(str(dataset), "0" * 64, ("x",), (("exact",),)),
+        bindings=[{"agent_node_id": "worker", "dataset_id": str(dataset), "dataset_name": "cohort",
+                   "row_index": 0, "columns": ["x"], "target_column": ""}])
+    snapshot = Path(prepared["row_inputs"][0]["path"])
+    row_attempt = root / "_protocol_runs" / str(run)
+    whole_attempt = root / str(experiment) / str(whole_run)
+    whole_agent = whole_attempt / "agents" / snapshot.parent.name
+    outputs = [snapshot.parent / "outputs" / snapshot.name, snapshot.parent / "outputs" / "row-view.json",
+               whole_agent / snapshot.name, whole_agent / "row-view.json",
+               row_attempt / "agents" / "user-output" / snapshot.name,
+               row_attempt / "agents" / "user-output" / "row-view.json"]
+    source = (
+        "from pathlib import Path\n"
+        f"for filename in {[str(path) for path in outputs]!r}:\n"
+        "    path = Path(filename)\n"
+        "    path.parent.mkdir(parents=True, exist_ok=True)\n"
+        "    path.write_text('durable row output')\n"
+    )
+    script = protocol_execution._materialize_script(prepared["workspace_id"], "script", source)
+    ctx = SimpleNamespace(request_context=SimpleNamespace(meta=SimpleNamespace(model_extra={
+        "motoro.ambient.script_path": script,
+    })))
+    assert json.loads(script_server.run_wired_script(ctx=ctx))["exit_code"] == 0
+    assert snapshot.is_file() and snapshot.with_name("row-view.json").is_file()
+    writer = writer_at(tmp_path)
+    for attempt_id in (run, whole_run):
+        await packages._attempt_files(writer, SimpleNamespace(experiment_id=experiment), attempt_id,
+                                      {"nodes": [{"id": "script", "type": "script"}]})
+    writer.finish({})
+    contents = unpack(tmp_path)
+    prefix = f"results/artifacts/{run}/"
+    assert prefix + snapshot.relative_to(row_attempt).as_posix() not in contents
+    assert prefix + snapshot.with_name("row-view.json").relative_to(row_attempt).as_posix() not in contents
+    for path in outputs:
+        attempt = whole_attempt if path.is_relative_to(whole_attempt) else row_attempt
+        attempt_id = whole_run if attempt == whole_attempt else run
+        member = f"results/artifacts/{attempt_id}/" + path.relative_to(attempt).as_posix()
+        assert contents[member] == b"durable row output"

@@ -119,6 +119,12 @@ root or its `dataset=`/`agent=` slots. User artifacts such as
 `outputs/.scratch/` remain durable content. Temporary preparation names use the
 reserved hidden producer naming pattern; an ordinary `results.preparing/`
 output directory is preserved.
+Materialized Script source exclusions apply only to the producer's immediate
+`scripts/` directory (including a recorded standalone Agent's directory).
+Row-input CSVs and `row-view.json` are excluded only at the exact
+`agents/<64-hex Agent key>/` location inside a row attempt. Nested output files
+and whole-workspace artifacts retain their bytes even when their names resemble
+these inputs.
 
 Archive generation streams file bytes and SQL evidence slices, spools inventories
 to plain files, and discards tar member metadata after writing. Memory does not

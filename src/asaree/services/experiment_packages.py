@@ -818,6 +818,8 @@ async def _attempt_files(
 
     root = managed_storage.roots()["workspaces"]
     candidates = (root / str(job.experiment_id) / str(run_id), root / row_attempt_workspace_id(run_id))
+    standalone_agents = {re.sub(r"[^A-Za-z0-9_.-]", "_", str(node["id"]))
+                         for node in (graph or {}).get("nodes") or [] if node.get("type") in {"agent", "sub_agent"}}
     found = False
     for directory in candidates:
         if not directory.is_dir():
@@ -845,12 +847,18 @@ async def _attempt_files(
             ) or (len(parts) >= 3 and parts[-2].startswith(".") and "-unsplit-" in parts[-2])
             if path.name == "state.json" and control_parent:
                 continue
+            row_input = (directory == candidates[1] and len(parts) == 3 and parts[0] == "agents"
+                         and re.fullmatch(r"[0-9a-f]{64}", parts[1]))
             if (path.name == "dataset_inputs.json" and len(parts) == 1
-                or path.name == "row-view.json" and len(parts) == 3 and parts[0] == "agents"):
+                or path.name == "row-view.json" and row_input):
                 continue
-            if "scripts" in parts and (path.name in sources or re.fullmatch(r"inline-[0-9a-f]{12}\.py", path.name)):
+            materialized_source = (len(parts) == 2 and parts[0] == "scripts") or (
+                directory == candidates[1] and len(parts) == 3
+                and parts[0] in standalone_agents and parts[1] == "scripts"
+            )
+            if materialized_source and (path.name in sources or re.fullmatch(r"inline-[0-9a-f]{12}\.py", path.name)):
                 continue
-            if (len(parts) >= 3 and parts[0] == "agents" and re.fullmatch(r"[0-9a-f]{64}\.csv", path.name)):
+            if row_input and re.fullmatch(r"[0-9a-f]{64}\.csv", path.name):
                 continue
             try:
                 await archive_io(writer, writer.file, path, f"results/artifacts/{run_id}/{relative}",

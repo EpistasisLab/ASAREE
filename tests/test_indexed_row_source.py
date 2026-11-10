@@ -308,6 +308,8 @@ async def test_concurrent_preparation_exposes_only_one_complete_committed_index(
             assert (await db.get(ResultJob, job.id)).status == 'cancelled'
         # The registration lock covers jobs created before source progress or
         # publication input-reference edges existed.
+        from datetime import UTC, datetime
+
         from test_result_reads import scope as result_scope
 
         from asaree.models.protocol_revision import ProtocolRevision
@@ -319,7 +321,8 @@ async def test_concurrent_preparation_exposes_only_one_complete_committed_index(
         ], 'edges': [{'source': 'source', 'target': 'agent', 'targetHandle': 'dataset',
                       'data': {'dataset_input': {'mode': 'per_row', 'columns': ['x']}}}]}
         async with sessions.begin() as db:
-            publication = ProtocolRevision(protocol_id=protocol.id, revision=1, graph=graph)
+            publication = ProtocolRevision(protocol_id=protocol.id, revision=1, graph=graph,
+                                           published_at=datetime.now(UTC))
             db.add(publication)
         selected = result_scope(experiment_id=experiment.id, protocol_id=protocol.id,
                                 protocol_revision_id=publication.id, design_revision_id=None,

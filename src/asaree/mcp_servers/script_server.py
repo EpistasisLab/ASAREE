@@ -118,7 +118,13 @@ def _ambient_value(ctx: Context[Any, Any, Any] | None, key: str) -> Any:
         extra = getattr(ctx.request_context.meta, "model_extra", None) or {}
     except Exception:  # noqa: BLE001 -- no request context outside a live call
         return None
-    return extra.get(key)
+    from asaree_workspace_core.storage import map_ambient_paths, resolve
+
+    if not key.startswith("motoro.ambient."):
+        return extra.get(key)
+    ambient = {name.removeprefix("motoro.ambient."): value for name, value in extra.items()
+               if name.startswith("motoro.ambient.")}
+    return map_ambient_paths(ambient, lambda value: str(resolve(value))).get(key.removeprefix("motoro.ambient."))
 
 
 def _ambient(ctx: Context[Any, Any, Any] | None, key: str) -> str:

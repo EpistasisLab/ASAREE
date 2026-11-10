@@ -10,6 +10,8 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
+from asaree_workspace_core.storage import atomic_write
+
 
 class DatasetRowCsvError(ValueError):
     """A source CSV or requested row snapshot is invalid."""
@@ -105,8 +107,8 @@ def project_row(source: RowSource, *, row_index: int, columns: Sequence[str]) ->
     }
 
 
-def materialize_row_csv(view: dict, *, destination: Path) -> Path:
-    """Write a one-row selected-column CSV snapshot to an explicit run path."""
+def row_csv_bytes(view: dict) -> bytes:
+    """Serialize a verified exact-string row view without publishing partial bytes."""
     columns = view.get("columns")
     values = view.get("values")
     if (
@@ -118,12 +120,17 @@ def materialize_row_csv(view: dict, *, destination: Path) -> Path:
         or any(column not in values or not isinstance(values[column], str) for column in columns)
     ):
         raise DatasetRowCsvError("invalid_columns", "row view must contain distinct columns and string values")
+    stream = io.StringIO(newline="")
+    writer = csv.writer(stream, delimiter=",", lineterminator="\n")
+    writer.writerow(columns)
+    writer.writerow([values[column] for column in columns])
+    return stream.getvalue().encode("utf-8")
+
+
+def materialize_row_csv(view: dict, *, destination: Path) -> Path:
+    """Publish a complete one-row selected-column CSV snapshot atomically."""
     try:
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        with destination.open("w", encoding="utf-8", newline="") as stream:
-            writer = csv.writer(stream, delimiter=",", lineterminator="\n")
-            writer.writerow(columns)
-            writer.writerow([values[column] for column in columns])
+        atomic_write(destination, row_csv_bytes(view), overwrite=False)
     except OSError as exc:
         raise DatasetRowCsvError("source_unavailable", "row snapshot destination cannot be written") from exc
     return destination

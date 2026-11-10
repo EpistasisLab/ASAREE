@@ -137,6 +137,12 @@ def _ambient(ctx: Context | None, key: str) -> str:
     except Exception:  # noqa: BLE001 -- no request context outside a live call
         return ""
     value = extra.get(key)
+    if key in {_META_KEY_SCRIPT_PATH, _META_KEY_DATA_PATH} and isinstance(value, str) and value.startswith("managed://"):
+        # Optional host integration: ordinary standalone paths need no ASAREE
+        # dependency. ASAREE installs its shared resolver alongside this server.
+        from asaree_workspace_core.storage import resolve
+
+        return str(resolve(value))
     return value if isinstance(value, str) else ""
 
 

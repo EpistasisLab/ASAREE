@@ -284,17 +284,14 @@ class Workspace:
         return {"format_version": 1, "slots": {LEGACY_SLOT: raw}}
 
     def _map_paths(self, value: Any, *, encode: bool) -> Any:
-        if isinstance(value, dict):
-            return {
-                key: (managed_reference(Path(item), self.storage_roots) if encode
-                      else str(resolve(item, self.storage_roots)))
-                if key in {"train", "test", "manifest_path"} and isinstance(item, str) and item
-                else self._map_paths(item, encode=encode)
-                for key, item in value.items()
-            }
-        if isinstance(value, list):
-            return [self._map_paths(item, encode=encode) for item in value]
-        return value
+        from .storage import map_workspace_paths
+
+        def transform(item):
+            if encode:
+                return item if item.startswith("managed://") else managed_reference(Path(item), self.storage_roots)
+            return str(resolve(item, self.storage_roots))
+
+        return map_workspace_paths(value, transform)
 
     def _save_document(self, doc: dict[str, Any]) -> None:
         slots = doc.get("slots") or {}

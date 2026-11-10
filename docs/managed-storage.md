@@ -134,12 +134,15 @@ and intended destination configuration, with both database URLs configured.
    ownership from directory names. Review the plan's database inventory for
    all external commands and legacy paths; include their owned locations in
    the coordinated backup with the appropriate permission.
-3. Review `files`, `updates`, `databases` and `problems`. Inventory hashes files
+3. Review `files`, `updates`, `databases`, `diagnostics` and `problems`. Inventory hashes files
    without mutating storage or either database. It includes source/split
    records, publication/attempt input manifests and reference edges, run
    statuses, result workspace IDs/events, export jobs and Motoro knowledge
-   registrations. Symlinks, missing/mismatched artifacts and malformed workspace
-   JSON block apply; resolve each explicitly and regenerate the plan. Preserve
+   registrations and AgentRun ambient metadata/native snapshots. Historical
+   artifacts already marked missing or unavailable remain unchanged and appear
+   in diagnostics; their pinned inputs remain unavailable. Ready artifacts with
+   missing files or mismatched bytes, pin identity conflicts, symlinks and
+   malformed workspace state JSON block apply; resolve each explicitly and regenerate the plan. Preserve
    unknown files. Plans contain operational/user metadata: restrict access.
 4. With writers still stopped, run:
 
@@ -149,8 +152,12 @@ and intended destination configuration, with both database URLs configured.
    ```
 
    Apply checks source hashes, copies with verified atomic publication,
-   rewrites workspace JSON references, then compares and updates affected
+   rewrites only version-record locators in recognized workspace state and
+   documented ambient locator fields in Motoro run metadata/native snapshots,
+   then compares and updates affected
    database fields. It changes neither input identities nor historical pins.
+   Row-view values, input names, learned payloads, provenance and arbitrary JSON
+   files retain their exact values; opaque JSON files are copied byte for byte.
    Existing destination bytes must match. Source files remain untouched.
    The databases have separate transactions: if interrupted between them,
    keep services stopped and rerun the same plan (idempotent) or roll it back.

@@ -127,3 +127,40 @@ def test_source_identity_and_corrupted_existing_snapshot_fail_closed(row_setup) 
         workspaces.prepare_agent_row_inputs(
             run_id=uuid.uuid4(), agent_node_id="agent", source=source, bindings=[wrong]
         )
+
+
+def test_interrupted_row_publication_can_retry(row_setup, monkeypatch) -> None:
+    _, _, source = row_setup
+    arguments = dict(run_id=uuid.uuid4(), agent_node_id="agent", source=source,
+                     bindings=[_binding(source.dataset_id, "agent", 0, ["question"])])
+    writer = workspaces.materialize_row_csv
+    monkeypatch.setattr(workspaces, "materialize_row_csv",
+                        lambda *args, **kwargs: (_ for _ in ()).throw(OSError("interrupted")))
+    with pytest.raises(OSError, match="interrupted"):
+        workspaces.prepare_agent_row_inputs(**arguments)
+    root, _, _ = row_setup
+    directory = workspaces._node_directory(root, workspaces.row_attempt_workspace_id(arguments["run_id"]), "agent")
+    (directory / ".row-view.json.crash.preparing").write_bytes(b"partial")
+    monkeypatch.setattr(workspaces, "materialize_row_csv", writer)
+    result = workspaces.prepare_agent_row_inputs(**arguments)
+    path = Path(result["row_inputs"][0]["path"])
+    assert path.read_bytes() == b"question\nfirst\n"
+    # A complete CSV left by an older CSV-first writer may be recovered only
+    # after comparing its bytes against this attempt's pinned projection.
+    (path.parent / "row-view.json").unlink()
+    assert workspaces.prepare_agent_row_inputs(**arguments) == result
+    (path.parent / "row-view.json").unlink()
+    path.write_bytes(b"question\n")
+    with pytest.raises(DatasetRowCsvError, match="workspace_conflict"):
+        workspaces.prepare_agent_row_inputs(**arguments)
+
+
+def test_row_csv_interrupted_atomic_publish_has_no_partial_destination(tmp_path, monkeypatch):
+    from asaree.services.dataset_row_csv import materialize_row_csv
+
+    destination = tmp_path / "row.csv"
+    monkeypatch.setattr("asaree_workspace_core.storage.os.link",
+                        lambda *args: (_ for _ in ()).throw(OSError("interrupted publication")))
+    with pytest.raises(DatasetRowCsvError, match="cannot be written"):
+        materialize_row_csv({"columns": ["x"], "values": {"x": "exact"}}, destination=destination)
+    assert not destination.exists()

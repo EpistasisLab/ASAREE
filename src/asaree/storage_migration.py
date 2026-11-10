@@ -14,7 +14,14 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-from asaree_workspace_core.storage import atomic_write, managed_reference, resolve, sha256
+from asaree_workspace_core.storage import (
+    atomic_write,
+    managed_reference,
+    map_ambient_paths,
+    map_workspace_paths,
+    resolve,
+    sha256,
+)
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
 
@@ -39,6 +46,7 @@ QUERIES = {
     },
     "motoro": {
         "mcp_server_configs": "SELECT id, name, owner_id, command FROM mcp_server_configs",
+        "agent_runs": "SELECT id, status, run_metadata, state_snapshot FROM agent_runs",
     },
 }
 
@@ -62,10 +70,7 @@ async def database_inventory() -> dict[str, Any]:
 
 
 def rewrite_paths(value: Any, old: dict[str, Path]) -> Any:
-    if isinstance(value, dict):
-        return {key: rewrite_paths(item, old) for key, item in value.items()}
-    if isinstance(value, list):
-        return [rewrite_paths(item, old) for item in value]
+    # Call only for fields identified as locators by their owning schema.
     if isinstance(value, str) and Path(value).is_absolute():
         return managed_reference(Path(value), old)
     return value
@@ -76,16 +81,24 @@ def make_plan(old: dict[str, Path], new: dict[str, Path], databases: dict[str, A
     plan: dict[str, Any] = {
         "version": 1, "old_roots": {key: str(value) for key, value in old.items()},
         "new_roots": {key: str(value) for key, value in new.items()},
-        "databases": databases, "files": [], "updates": [], "problems": [],
+        "databases": databases, "files": [], "updates": [], "problems": [], "diagnostics": [],
         "retention": "All inventoried files retained; unregistered does not mean orphaned.",
     }
     locations = [(key, root, "") for key, root in old.items()]
     if legacy_attempt_root:
         locations.append(("workspaces", legacy_attempt_root.resolve(), "_protocol_runs/"))
+
+    def locator(value: str) -> str:
+        if legacy_attempt_root and Path(value).is_absolute():
+            path = Path(value).resolve()
+            legacy = legacy_attempt_root.resolve()
+            if path != legacy and path.is_relative_to(legacy):
+                return f"managed://workspaces/_protocol_runs/{path.relative_to(legacy).as_posix()}"
+        return rewrite_paths(value, old)
     destinations: set[str] = set()
     for destination in new.values():
         if any(destination == source or destination.is_relative_to(source)
-               or source.is_relative_to(destination) for source in old.values()):
+               or source.is_relative_to(destination) for _, source, _ in locations):
             plan["problems"].append(f"Source and destination roots overlap: {destination}")
     for namespace, root, prefix in locations:
         if not root.exists():
@@ -107,21 +120,24 @@ def make_plan(old: dict[str, Path], new: dict[str, Path], databases: dict[str, A
             destinations.add(str(destination))
             entry = {"source": str(source), "destination": str(destination),
                      "sha256": sha256(source), "byte_size": source.stat().st_size}
-            # Workspace state/manifests and row locators only. Opaque knowledge,
-            # scripts, durable results, and pin identities are not interpreted.
-            if namespace == "workspaces" and source.suffix == ".json":
+            # Workspace state lives at <workspace-id>/<cell-id>/state.json.
+            # Nested outputs named state.json and all payload manifests stay opaque.
+            if namespace == "workspaces" and source.name == "state.json" and len(Path(key).parts) == 3:
                 try:
                     before = json.loads(source.read_text())
-                    after = rewrite_paths(before, old)
+                    after = map_workspace_paths(before, locator)
                     if before != after:
                         entry["json"] = after
                 except (ValueError, UnicodeError):
                     plan["problems"].append(f"Unreadable workspace JSON: {source}")
             plan["files"].append(entry)
     for artifact in databases.get("asaree", {}).get("dataset_artifacts", []):
+        if artifact["status"] != "ready":
+            plan["diagnostics"].append(f"Historical artifact {artifact['id']} remains {artifact['status']}")
+            continue
         try:
             path = resolve(f"managed://{artifact['namespace']}/{artifact['storage_key']}", old)
-            if artifact["status"] != "ready" or not artifact["sha256"] or sha256(path) != artifact["sha256"]:
+            if not artifact["sha256"] or sha256(path) != artifact["sha256"]:
                 plan["problems"].append(f"Artifact not verified ready: {artifact['id']}")
             elif path.stat().st_size != artifact["byte_size"]:
                 plan["problems"].append(f"Artifact size mismatch: {artifact['id']}")
@@ -168,6 +184,15 @@ def make_plan(old: dict[str, Path], new: dict[str, Path], databases: dict[str, A
         after = f"{command_for('asaree.mcp_servers.okf_bundle')} --bundle {shlex.quote(value)}"
         plan["updates"].append(dict(database="motoro", table="mcp_server_configs", column="command",
                                     id=row["id"], before=command, after=after))
+    for row in databases.get("motoro", {}).get("agent_runs", []):
+        for column in ("run_metadata", "state_snapshot"):
+            before = row.get(column)
+            if not isinstance(before, dict) or not isinstance(before.get("ambient_meta"), dict):
+                continue
+            after = dict(before, ambient_meta=map_ambient_paths(before["ambient_meta"], locator))
+            if before != after:
+                plan["updates"].append(dict(database="motoro", table="agent_runs", column=column,
+                                            id=row["id"], before=before, after=after))
     known_servers = {row["id"] for row in databases.get("motoro", {}).get("mcp_server_configs", [])}
     for identity in managed_knowledge - known_servers:
         plan["problems"].append(f"Managed knowledge registration not found: {identity}")
@@ -239,6 +264,8 @@ async def update_databases(plan: dict[str, Any], *, rollback: bool = False, veri
                     if (database, entry["table"], entry["column"]) not in {
                         ("asaree", "registered_datasets", "raw_path"),
                         ("motoro", "mcp_server_configs", "command"),
+                        ("motoro", "agent_runs", "run_metadata"),
+                        ("motoro", "agent_runs", "state_snapshot"),
                     }:
                         raise ValueError("Unsupported database reference")
                     before, after = (entry["after"], entry["before"]) if rollback else (entry["before"], entry["after"])
@@ -251,8 +278,10 @@ async def update_databases(plan: dict[str, Any], *, rollback: bool = False, veri
                         raise ValueError(f"Database reference was not migrated: {database}/{table}/{entry['id']}")
                     if current != before:
                         raise ValueError(f"Database reference changed: {database}/{table}/{entry['id']}")
-                    await connection.execute(text(f"UPDATE {table} SET {column}=:value WHERE id=:id"),
-                                             {"id": entry["id"], "value": after})
+                    expression = "CAST(:value AS json)" if table == "agent_runs" else ":value"
+                    await connection.execute(text(f"UPDATE {table} SET {column}={expression} WHERE id=:id"),
+                                             {"id": entry["id"], "value": json.dumps(after)
+                                              if table == "agent_runs" else after})
         finally:
             await engine.dispose()
 
@@ -275,7 +304,8 @@ def main() -> None:
                          args.legacy_attempt_root)
         atomic_write(args.plan, json.dumps(plan, indent=2).encode(), overwrite=False)
         print(f"Inventoried {len(plan['files'])} files, {len(plan['updates'])} reference updates; "
-              f"{len(plan['problems'])} problems. No storage/database changes made.")
+              f"{len(plan['problems'])} problems, {len(plan['diagnostics'])} diagnostics. "
+              "No storage/database changes made.")
         return
     plan = json.loads(args.plan.read_text())
     if plan.get("version") != 1:

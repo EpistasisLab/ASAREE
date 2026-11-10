@@ -219,6 +219,120 @@ def test_migration_refuses_overlapping_roots_and_preserves_unknown_files(clean_s
     assert Path(plan["files"][0]["source"]).read_bytes() == b"durable until reviewed"
 
 
+def test_migration_typed_locators_preserve_exact_payloads_and_missing_history(clean_storage):
+    old = storage_roots()
+    new = {key: clean_storage / "new" / key for key in old}
+    exact = str(old["datasets"] / "an-exact-cell-value")
+    opaque = {"train": exact, "test": exact, "manifest_path": exact, "nested": [exact]}
+    workspace = old["workspaces"] / "exp/cell"
+    state = {"head": "v0_raw", "versions": [{"train": exact, "learned": opaque}], "rationale": opaque}
+    atomic_write(workspace / "state.json", json.dumps(state).encode())
+    for name in ("row-view.json", "dataset_inputs.json", "output.json", "manifest.json"):
+        atomic_write(workspace / name, json.dumps(opaque).encode())
+    atomic_write(workspace / "outputs/state.json", json.dumps(state).encode())
+    missing = {"id": "missing", "dataset_id": "dataset", "namespace": "datasets", "storage_key": "lost.csv",
+               "status": "missing", "sha256": None, "byte_size": None}
+    pin = {"dataset_id": "dataset", "raw_artifact": {"id": "missing", "sha256": None}}
+    databases = {"asaree": {"dataset_artifacts": [missing], "protocol_revisions": [
+        {"id": "publication", "dataset_inputs": {"inputs": [pin]}}]}}
+    plan = make_plan(old, new, databases, set())
+    assert not plan["problems"]
+    assert plan["diagnostics"]
+    assert plan["databases"] == databases
+    copy_files(plan)
+    migrated = json.loads((new["workspaces"] / "exp/cell/state.json").read_text())
+    assert migrated["versions"][0]["train"] == "managed://datasets/an-exact-cell-value"
+    assert migrated["versions"][0]["learned"] == opaque
+    assert migrated["rationale"] == opaque
+    for name in ("row-view.json", "dataset_inputs.json", "output.json", "manifest.json"):
+        assert (new["workspaces"] / "exp/cell" / name).read_bytes() == (workspace / name).read_bytes()
+    nested_state = new["workspaces"] / "exp/cell/outputs/state.json"
+    assert nested_state.read_bytes() == (workspace / "outputs/state.json").read_bytes()
+    # The workspace serializer must obey the same typed boundary on save/load.
+    ws = Workspace("exp/cell", root=str(old["workspaces"]))
+    encoded = ws._map_paths(state, encode=True)
+    assert encoded["versions"][0]["train"].startswith("managed://")
+    assert encoded["versions"][0]["learned"] == opaque
+    assert ws._map_paths(encoded, encode=False) == state
+
+
+def test_motoro_queued_and_native_snapshot_locators_relocate_without_payload_changes(clean_storage, monkeypatch):
+    from motoro.engine.context import RunContext
+    from motoro.schemas.agent import ModelConfig
+    from scikit_learn_mcp import server as sklearn_server
+
+    from asaree.mcp_servers import script_server
+
+    old = storage_roots()
+    new = {key: clean_storage / "new" / key for key in old}
+    legacy = clean_storage / "legacy-attempts"
+    script = legacy / "attempt/scripts/script.py"
+    atomic_write(script, b"print('exact')")
+    row = old["workspaces"] / "attempt/row.csv"
+    atomic_write(row, b"x\nexact\n")
+    opaque = {"path": str(script), "train": str(row)}
+    ambient = {"script_path": str(script), "script_paths": [{"id": "script", "path": str(script)}],
+               "data_path": str(row), "dataset_mode": "per_row",
+               "row_inputs": [{"path": str(row), "mode": "per_row", "values": opaque}],
+               "data_slots": {"slot": {"data_path": str(row), "name": str(row)}}, "opaque": opaque}
+    metadata = {"ambient_meta": ambient, "opaque": opaque}
+    snapshot = RunContext(agent_goal="goal", system_prompt="prompt", model_config=ModelConfig(), user_input="input",
+                          ambient_meta=ambient, metadata=metadata, conversation_history=[opaque]).to_snapshot()
+    databases = {"motoro": {"agent_runs": [{"id": "run", "run_metadata": metadata, "state_snapshot": snapshot}]}}
+    plan = make_plan(old, new, databases, set(), legacy)
+    assert not plan["problems"]
+    assert {update["column"] for update in plan["updates"]} == {"run_metadata", "state_snapshot"}
+    copy_files(plan)
+    shutil.rmtree(clean_storage / "data")
+    shutil.rmtree(legacy)
+    monkeypatch.setenv("ASAREE_DATA_ROOT", str(clean_storage / "new"))
+    # New namespace directories deliberately match storage_roots' defaults.
+    for namespace, path in new.items():
+        from asaree_workspace_core.storage import NAMESPACES
+
+        monkeypatch.setenv(f"ASAREE_{NAMESPACES[namespace][0].upper()}", str(path))
+    for update in plan["updates"]:
+        migrated = update["after"]
+        assert migrated["ambient_meta"]["opaque"] == opaque
+        assert migrated["ambient_meta"]["row_inputs"][0]["values"] == opaque
+        assert migrated["ambient_meta"]["data_slots"]["slot"]["name"] == str(row)
+        if update["column"] == "state_snapshot":
+            assert migrated["metadata"] == metadata
+            assert migrated["conversation_history"] == [opaque]
+            assert RunContext.from_snapshot(migrated).ambient_meta == migrated["ambient_meta"]
+        ctx = SimpleNamespace(request_context=SimpleNamespace(meta=SimpleNamespace(
+            model_extra={f"motoro.ambient.{key}": value for key, value in migrated["ambient_meta"].items()})))
+        resolved_script = script_server._wired_scripts(ctx)[0]["path"]
+        assert Path(resolved_script).read_bytes() == b"print('exact')"
+        resolved_row = script_server._runtime_manifest(ctx, "")["training_inputs"][0]["path"]
+        assert Path(resolved_row).read_bytes() == b"x\nexact\n"
+        assert sklearn_server._ambient_script_path(ctx) == resolved_script
+        assert sklearn_server._resolve_dataset("", "", ctx, target_required=False)[0] == resolved_row
+
+
+def test_new_dispatch_ambient_references_are_durable_and_payloads_opaque(clean_storage):
+    from asaree.services.protocol_execution import _durable_ambient
+
+    path = str(storage_roots()["workspaces"] / "attempt/script.py")
+    values = {"path": path, "train": path}
+    ambient = {"script_path": path, "row_inputs": [{"path": path, "values": values}], "dataset_row": values}
+    durable = _durable_ambient(ambient)
+    assert durable["script_path"] == "managed://workspaces/attempt/script.py"
+    assert durable["row_inputs"][0]["values"] == values
+    assert durable["dataset_row"] == values
+
+
+def test_script_cleanup_without_scripts_needs_no_product_storage_settings(monkeypatch):
+    from asaree.services import protocol_execution
+
+    def unexpected_storage_read():
+        raise AssertionError("No scripts require no workspace storage lookup")
+
+    monkeypatch.setattr(protocol_execution, "_workspace_storage_root", unexpected_storage_read)
+    protocol_execution._cleanup_adhoc_scripts(None)
+    protocol_execution._cleanup_adhoc_scripts({"dataset_mode": "per_row", "script_paths": []})
+
+
 @pytest.mark.skipif(not os.environ.get("ASAREE_MIGRATIONS_TEST_DATABASE_URL"),
                     reason="Disposable migration PostgreSQL not configured")
 async def test_two_database_inventory_apply_verify_and_rollback(tmp_path, monkeypatch, clean_storage):
@@ -243,8 +357,11 @@ async def test_two_database_inventory_apply_verify_and_rollback(tmp_path, monkey
     source = old["datasets"] / "source.csv"
     atomic_write(source, b"x\n1\n")
     atomic_write(old["bundles"] / "owner/upload/index.md", b"managed knowledge")
-    owner, dataset, server = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
+    owner, dataset, server, run = uuid.uuid4(), uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
     command = f"python -m asaree.mcp_servers.okf_bundle --bundle {old['bundles']}/owner/upload"
+    ambient = {"data_path": str(source), "opaque": {"path": str(source)}}
+    metadata = {"ambient_meta": ambient, "opaque": str(source)}
+    snapshot = {"ambient_meta": ambient, "metadata": metadata, "conversation_history": [str(source)]}
     try:
         async with admin.connect() as connection:
             for name in names.values():
@@ -261,23 +378,37 @@ async def test_two_database_inventory_apply_verify_and_rollback(tmp_path, monkey
             # tables are introduced into that database.
             await connection.execute(text("CREATE TABLE mcp_server_configs "
                                           "(id uuid PRIMARY KEY, name text, owner_id uuid, command text)"))
+            await connection.execute(text("CREATE TABLE agent_runs "
+                                          "(id uuid PRIMARY KEY, status text, run_metadata json, state_snapshot json)"))
             await connection.execute(text("INSERT INTO mcp_server_configs VALUES (:id,'uploaded',:owner,:command)"),
                                      {"id": server, "owner": owner, "command": command})
+            await connection.execute(text("INSERT INTO agent_runs VALUES "
+                                          "(:id,'pending',CAST(:metadata AS json),CAST(:snapshot AS json))"),
+                                     {"id": run, "metadata": json.dumps(metadata), "snapshot": json.dumps(snapshot)})
         inventory = await database_inventory()
         plan = make_plan(old, managed_storage.roots(), inventory, {str(server)})
         assert not plan["problems"]
-        assert len(plan["updates"]) == 2
+        assert len(plan["updates"]) == 4
         copy_files(plan)
         await update_databases(plan)
         await update_databases(plan)  # recovery after separate database transactions
         await update_databases(plan, verify_only=True)
         assert source.read_bytes() == b"x\n1\n"
+        async with engines["motoro"].connect() as connection:
+            migrated = (await connection.execute(text("SELECT run_metadata,state_snapshot FROM agent_runs"))).one()
+            for value in migrated:
+                assert value["ambient_meta"]["data_path"] == "managed://datasets/source.csv"
+                assert value["ambient_meta"]["opaque"] == ambient["opaque"]
+            assert migrated.state_snapshot["metadata"] == metadata
         await update_databases(plan, rollback=True)
         await update_databases(plan, rollback=True)
         async with engines["asaree"].connect() as connection:
             assert await connection.scalar(text("SELECT raw_path FROM registered_datasets")) == str(source)
         async with engines["motoro"].connect() as connection:
             assert await connection.scalar(text("SELECT command FROM mcp_server_configs")) == command
+            restored = (await connection.execute(text("SELECT run_metadata,state_snapshot FROM agent_runs"))).one()
+            assert restored.run_metadata == metadata
+            assert restored.state_snapshot == snapshot
     finally:
         for engine in engines.values():
             await engine.dispose()

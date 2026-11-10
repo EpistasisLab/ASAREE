@@ -105,3 +105,42 @@ def atomic_write(path: Path, data: bytes, *, overwrite: bool = True) -> None:
             os.close(directory)
     finally:
         temporary.unlink(missing_ok=True)
+
+
+def map_workspace_paths(document, transform):
+    """Map only version-record locators; payloads and provenance stay opaque."""
+    if not isinstance(document, dict):
+        return document
+    result = dict(document)
+    if isinstance(document.get("slots"), dict):
+        result["slots"] = {key: map_workspace_paths(slot, transform)
+                           for key, slot in document["slots"].items()}
+    elif isinstance(document.get("versions"), list):
+        result["versions"] = [
+            {key: transform(value) if key in {"train", "test", "manifest_path"}
+             and isinstance(value, str) and value else value for key, value in version.items()}
+            if isinstance(version, dict) else version for version in document["versions"]
+        ]
+    return result
+
+
+def map_ambient_paths(ambient, transform):
+    """Map ASAREE's documented ambient locators, preserving opaque metadata."""
+    if not isinstance(ambient, dict):
+        return ambient
+    result = dict(ambient)
+    for key in ("script_path", "data_path"):
+        if isinstance(result.get(key), str) and result[key]:
+            result[key] = transform(result[key])
+    for key in ("script_paths", "row_inputs"):
+        if isinstance(ambient.get(key), list):
+            result[key] = [dict(item, path=transform(item["path"]))
+                           if isinstance(item, dict) and isinstance(item.get("path"), str) and item["path"]
+                           else item for item in ambient[key]]
+    if isinstance(ambient.get("data_slots"), dict):
+        result["data_slots"] = {
+            key: dict(item, data_path=transform(item["data_path"]))
+            if isinstance(item, dict) and isinstance(item.get("data_path"), str) and item["data_path"]
+            else item for key, item in ambient["data_slots"].items()
+        }
+    return result

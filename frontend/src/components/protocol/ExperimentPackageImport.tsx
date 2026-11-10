@@ -8,6 +8,72 @@ import type { PackageImport } from '@/types/packageImports'
 import { newRequestKey } from '@/lib/requestKey'
 import { FileDropInput } from './FileDropInput'
 
+const categoryLabels: Record<string, string> = {
+  inputs: 'Dataset files and metadata',
+  resources: 'Scripts, skills, and knowledge',
+  publication: 'Published configuration',
+  requirements: 'Local requirements',
+  results: 'Historical results',
+  design: 'Experimental design',
+  sources: 'Imported source evidence',
+  'dependencies.jsonl': 'Dependency inventory',
+  'experiment-metadata.json': 'Experiment details',
+}
+
+const statusLabels: Record<string, string> = {
+  uploading: 'Uploading package',
+  validating: 'Checking package',
+  awaiting_confirmation: 'Ready to review',
+  queued: 'Import queued',
+  activating: 'Creating experiment',
+  completed: 'Imported',
+  failed: 'Import failed',
+  cancelled: 'Cancelled',
+  expired: 'Expired',
+}
+
+function PackageSummary({ current }: { current: PackageImport }) {
+  const { manifest, categories, unresolved_count: unresolved, external_requirements: external } = current.preflight
+  if (!manifest) return null
+  const contents = Object.entries(categories ?? {})
+  return <section aria-label="Package summary" className="space-y-4 rounded-lg border bg-muted/20 p-4">
+    <div>
+      <h3 className="text-sm font-medium">Package summary</h3>
+      <p className="text-xs text-muted-foreground">{current.status === 'awaiting_confirmation'
+        ? 'Review the contents, then confirm to create a new editable experiment.'
+        : 'Contents of the uploaded source package.'}</p>
+    </div>
+    <dl className="grid grid-cols-2 gap-3 text-sm">
+      <div><dt className="text-xs text-muted-foreground">Published version</dt><dd className="font-mono">Source version {manifest.publication.version}</dd>
+        {manifest.publication.name && <dd className="break-words text-xs text-muted-foreground">{manifest.publication.name}</dd>}</div>
+      <div><dt className="text-xs text-muted-foreground">Historical results</dt><dd>{manifest.results_included ? 'Included' : 'Not included'}</dd></div>
+    </dl>
+    {contents.length > 0 && <div className="overflow-x-auto rounded-md border">
+      <table className="w-full text-left text-sm">
+        <caption className="sr-only">Included package files by category</caption>
+        <thead className="bg-muted/40 text-xs text-muted-foreground"><tr><th scope="col" className="px-3 py-2 font-medium">Contents</th><th scope="col" className="px-3 py-2 text-right font-medium">Files</th></tr></thead>
+        <tbody className="divide-y">{contents.map(([name, count]) => <tr key={name}>
+          <th scope="row" className="px-3 py-2 font-normal">{categoryLabels[name] ?? name}</th>
+          <td className="px-3 py-2 text-right font-mono tabular-nums">{count.toLocaleString()}</td>
+        </tr>)}</tbody>
+        <tfoot className="border-t bg-muted/30"><tr><th scope="row" className="px-3 py-2 font-medium">Total files</th><td className="px-3 py-2 text-right font-mono tabular-nums">{contents.reduce((total, [, count]) => total + count, 0).toLocaleString()}</td></tr></tfoot>
+      </table>
+    </div>}
+    <div className="space-y-1 rounded-md border p-3 text-sm">
+      {unresolved !== undefined && <p className={unresolved > 0 ? 'text-amber-400' : 'text-muted-foreground'}>{unresolved > 0
+        ? `${unresolved.toLocaleString()} unresolved ${unresolved === 1 ? 'dependency needs' : 'dependencies need'} attention`
+        : 'No unresolved dependencies reported'}</p>}
+      {external !== undefined && <p>{external.toLocaleString()} external {external === 1 ? 'requirement' : 'requirements'}</p>}
+      <p className="text-xs text-muted-foreground">After import, configure local connections and resolve missing dependencies in the draft before publishing. Import does not run scripts or tools.</p>
+    </div>
+    <details className="text-xs text-muted-foreground"><summary className="cursor-pointer">Package identifiers and format</summary>
+      <dl className="mt-2 space-y-2"><div><dt>Package schema</dt><dd className="font-mono">{manifest.schema_version}</dd></div>
+        <div><dt>Source publication</dt><dd className="break-all font-mono">{manifest.publication.id}</dd></div>
+        <div><dt>Archive SHA-256</dt><dd className="break-all font-mono">{current.sha256 ?? 'Unavailable'}</dd></div></dl>
+    </details>
+  </section>
+}
+
 /** Persistent imports can be resumed after navigation or a browser restart. */
 export function ExperimentPackageImport({ experimentId }: { experimentId?: string }) {
   const client = useQueryClient()
@@ -91,17 +157,14 @@ export function ExperimentPackageImport({ experimentId }: { experimentId?: strin
         {current?.status === 'uploading' && <p className="text-sm">To retry an interrupted upload, choose the package file again.</p>}
       </>}
       <div className="flex flex-wrap gap-2">{list.data?.map((item) => <Button key={item.id} variant={selected === item.id ? 'secondary' : 'outline'} onClick={() => select(item)}>
-        <span className="font-mono">{item.id.slice(0, 8)}</span> · {item.status}
+        <span className="font-mono">{item.id.slice(0, 8)}</span> · {statusLabels[item.status] ?? item.status}
       </Button>)}</div>
       {(error || job.error || list.error) && <p role="alert" className="text-destructive">{error ?? String(job.error ?? list.error)}</p>}
       {current && <div className="space-y-3">
-        <p role="status">{current.status} · {current.progress.phase}{current.progress.scanned !== undefined ? ` · ${current.progress.scanned} processed` : ''}</p>
+        <p role="status" className="text-sm font-medium">{statusLabels[current.status] ?? current.status}{current.progress.scanned !== undefined ? ` · ${current.progress.scanned.toLocaleString()} processed` : ''}</p>
         {current.error && <p role="alert" className="text-destructive">{current.error}</p>}
         {current.preflight.manifest && <>
-          <p>Source version {current.preflight.manifest.publication.version} · schema {current.preflight.manifest.schema_version} · {current.preflight.manifest.results_included ? 'Historical results included' : 'No historical results'}</p>
-          <p className="break-all font-mono text-xs">Source publication: {current.preflight.manifest.publication.id}<br />Archive SHA-256: {current.sha256}</p>
-          <p className="text-sm">{Object.entries(current.preflight.categories ?? {}).map(([name, count]) => `${name}: ${count}`).join(' · ')}</p>
-          <p>{current.preflight.unresolved_count} unresolved dependencies · {current.preflight.external_requirements} external requirements</p>
+          <PackageSummary current={current} />
           {current.preflight.warnings?.map((warning) => <p key={warning} className="text-sm text-amber-400">{warning}</p>)}
           {current.preflight.compatibility?.map((issue) => <p key={issue} className="text-sm text-amber-400">{issue}</p>)}
           {current.preflight.diagnostics?.map((item, index) => <p key={index} className="text-sm">{item.kind} <span className="font-mono">{item.id}</span>: {item.reason ?? item.status}</p>)}

@@ -47,7 +47,7 @@ it('uploads for inspection and requires an explicit confirmation after showing r
 it('resumes persisted requests and allows cancellation before activation', async () => {
   const command = vi.spyOn(packageImportsApi, 'command').mockResolvedValue({ ...ready, status: 'cancelled' })
   show([ready])
-  fireEvent.click(await screen.findByRole('button', { name: /request.*awaiting_confirmation/ }))
+  fireEvent.click(await screen.findByRole('button', { name: /request.*Ready to review/ }))
   fireEvent.click(await screen.findByRole('button', { name: 'Cancel import' }))
   await waitFor(() => expect(command).toHaveBeenCalledWith('request', 'cancel'))
 })
@@ -88,7 +88,7 @@ it('keeps source history and local-configuration acknowledgement distinct', asyn
   const configure = vi.spyOn(packageImportsApi, 'configure').mockResolvedValue(complete)
   show([complete])
   vi.mocked(packageImportsApi.get).mockResolvedValue(complete)
-  fireEvent.click(await screen.findByRole('button', { name: /request.*completed/ }))
+  fireEvent.click(await screen.findByRole('button', { name: /request.*Imported/ }))
   const acknowledge = await screen.findByRole('button', { name: 'Acknowledge local configuration' })
   expect(acknowledge).toBeDisabled()
   expect(screen.getByRole('link', { name: 'Open editable draft' })).toHaveAttribute('href', '/experiments/local-experiment/protocol')
@@ -104,7 +104,7 @@ it('inspects immutable observation evidence without coercing null or unavailable
     source_id: 'source-attempt', provenance: 'recorded_attempt' }], next_offset: null })
   const source = '{"observations":[{"status":"measured","value":null},{"status":"unavailable"}]}'
   vi.spyOn(packageImportsApi, 'source').mockResolvedValue(new Blob([source]))
-  fireEvent.click(await screen.findByRole('button', { name: /request.*awaiting_confirmation/ }))
+  fireEvent.click(await screen.findByRole('button', { name: /request.*Ready to review/ }))
   fireEvent.click(await screen.findByText('Inspect source files and historical evidence'))
   fireEvent.click(await screen.findByRole('button', { name: 'Inspect JSON' }))
   expect(await screen.findByText(source)).toBeInTheDocument()

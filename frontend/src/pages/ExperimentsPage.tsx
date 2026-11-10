@@ -14,6 +14,7 @@ import {
 } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import { AppHeader } from '@/components/AppHeader'
+import { ExperimentPackageImport } from '@/components/protocol/ExperimentPackageImport'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -140,6 +141,7 @@ export function ExperimentsPage() {
           </div>
         </div>
 
+        <ExperimentPackageImport />
         <div className="flex flex-wrap items-center gap-3">
           <div className="relative w-full sm:max-w-md">
             <Search aria-hidden="true" className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />

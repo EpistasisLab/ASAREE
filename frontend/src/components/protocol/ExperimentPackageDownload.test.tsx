@@ -1,7 +1,7 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, expect, it, vi } from 'vitest'
-import { experimentsApi, protocolsApi } from '@/api/client'
+import { experimentsApi, protocolsApi, packageImportsApi } from '@/api/client'
 import type { Protocol, ProtocolRevision } from '@/types/protocols'
 import { ExperimentPackageDownload } from './ExperimentPackageDownload'
 
@@ -16,6 +16,7 @@ const versions: ProtocolRevision[] = [
 ]
 
 function show(selectedVersionId?: string) {
+  vi.spyOn(packageImportsApi, 'list').mockResolvedValue([])
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   render(<QueryClientProvider client={client}><ExperimentPackageDownload experimentId="e" protocol={protocol}
     selectedVersionId={selectedVersionId} /></QueryClientProvider>)

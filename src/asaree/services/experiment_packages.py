@@ -45,6 +45,7 @@ from asaree.models.experiment_artifact import ExperimentArtifact
 from asaree.models.experiment_design_revision import ExperimentDesignRevision
 from asaree.models.factorial_cell import FactorialCell
 from asaree.models.factorial_replicate_result import FactorialReplicateResult
+from asaree.models.factorial_row_result import FactorialRowResult
 from asaree.models.protocol import Protocol
 from asaree.models.protocol_revision import ProtocolRevision
 from asaree.models.protocol_run import ProtocolRun
@@ -371,6 +372,13 @@ async def _datasets(db: AsyncSession, writer: PackageWriter, publication: Protoc
             writer.dependency(identity, "dataset", "publication_pinned", status="missing",
                               reason="Pinned owned source unavailable or identity differs.")
             continue
+        if not writer.seen("dataset_registration", identity):
+            await archive_io(writer, writer.json, f"inputs/datasets/{identity}.json", {
+                "id": identity, "name": registration.name, "description": registration.description,
+                "dictionary_json": registration.dictionary_json, "target_column": registration._target_column,
+                "raw_sha256": registration.raw_sha256, "raw_artifact_id": registration.raw_artifact_id,
+                "created_at": registration.created_at,
+            }, provenance="captured_at_download", identity=identity)
         if pin.get("split_id") and not writer.seen("split", pin["split_id"]):
             split = await db.scalar(select(DatasetSplit).where(
                 DatasetSplit.id == uuid.UUID(pin["split_id"]), DatasetSplit.dataset_id == registration.id,
@@ -431,16 +439,21 @@ async def _skill(db: AsyncSession, writer: PackageWriter, identity: str, owner: 
         writer.dependency(identity, "skill", "captured_at_download", status="missing")
         return
     directory = f"resources/skills/{skill.id}"
+    await archive_io(writer, writer.json, f"resources/skill-metadata/{skill.id}.json", {
+        key: getattr(skill, key) for key in (
+            "id", "name", "description", "body", "frontmatter", "source_filename", "created_at", "updated_at",
+        )
+    }, provenance="captured_at_download", identity=identity)
     document = writer.staging / "skill.md"
     document.write_text(render_skill_md(skill), encoding="utf-8")
     await archive_io(writer, writer.add, document, f"{directory}/SKILL.md",
                      provenance="captured_at_download", identity=identity)
     # Query files explicitly instead of materializing the default selectin relationship.
-    query = select(SkillFile.path, SkillFile.content, SkillFile.encoding, SkillFile.id).where(
+    query = select(SkillFile.path, SkillFile.content, SkillFile.encoding, SkillFile.id, SkillFile.position).where(
         SkillFile.skill_id == skill.id,
     ).order_by(SkillFile.position, SkillFile.id)
     rows = await db.stream(query.execution_options(yield_per=1))
-    async for path, content, encoding, file_id in rows:
+    async for path, content, encoding, file_id, position in rows:
         try:
             relative_path(path)
             if encoding not in {"utf-8", "base64"}:
@@ -452,6 +465,8 @@ async def _skill(db: AsyncSession, writer: PackageWriter, identity: str, owner: 
             document.write_bytes(base64.b64decode(content, validate=True) if encoding == "base64" else content.encode())
             await archive_io(writer, writer.add, document, f"{directory}/{path}",
                              provenance="captured_at_download", identity=str(file_id))
+            writer.dependency(str(file_id), "skill_file", "captured_at_download", skill_id=identity,
+                              file=f"{directory}/{path}", relative_path=path, encoding=encoding, position=position)
         except (ValueError, OSError):
             writer.dependency(str(file_id), "skill_file", "captured_at_download", status="unresolved",
                               reason="Invalid resource path or encoding.")
@@ -477,12 +492,13 @@ def _tree_files(root: Path) -> Iterator[tuple[str, Path, os.stat_result]]:
     yield from visit(root)
 
 
-def capture_tree(writer: PackageWriter, root: Path, directory: str, identity: str) -> None:
+def capture_tree(writer: PackageWriter, root: Path, directory: str, identity: str) -> int:
     """Verify copied content plus a second tree identity inventory, using disk."""
     if root.is_symlink() or not root.is_dir():
         raise ValueError("Knowledge directory unavailable")
     root = root.resolve()
     inventory = writer.staging / "tree.jsonl"
+    count = 0
     with inventory.open("wb") as output:
         for relative, path, info in _tree_files(root):
             if credential_file(relative):
@@ -492,6 +508,7 @@ def capture_tree(writer: PackageWriter, root: Path, directory: str, identity: st
             if not stat.S_ISREG(info.st_mode) or not path.resolve().is_relative_to(root):
                 raise ValueError("Unsafe knowledge resource")
             record = writer.file(path, f"{directory}/{relative}", identity=identity, provenance="captured_at_download")
+            count += 1
             output.write(encoded({"path": relative, "inode": info.st_ino, "size": info.st_size,
                                   "mtime": info.st_mtime_ns, "ctime": info.st_ctime_ns, "sha256": record["sha256"]}))
     # Directory entry order is stable within this capture; changes fail closed.
@@ -509,6 +526,7 @@ def capture_tree(writer: PackageWriter, root: Path, directory: str, identity: st
                 raise ValueError("Knowledge changed during capture")
         if source.read(1):
             raise ValueError("Knowledge files removed during capture")
+    return count
 
 
 async def _server(db: AsyncSession, writer: PackageWriter, config: dict[str, Any], owner: uuid.UUID,
@@ -539,6 +557,8 @@ async def _server(db: AsyncSession, writer: PackageWriter, config: dict[str, Any
             "id": server_id, "name": server.name, "transport": server.transport.value,
             "tool_names": [t.get("name") for t in (server.capabilities or {}).get("tools", []) if isinstance(t, dict)],
             "configuration_required": True, "connection_material": "excluded",
+            "knowledge_kind": ("document" if okf_documents.is_document_server(server) else
+                               "bundle" if server.name.startswith(okf_bundles.BUNDLE_SERVER_NAME_PREFIX) else None),
         }, provenance="captured_at_download", identity=server_id)
         writer.dependency(server_id, "mcp", "captured_at_download", name=server.name, external_requirement=True,
                           note="Connection configuration and credentials must be supplied separately.")
@@ -565,8 +585,9 @@ async def _server(db: AsyncSession, writer: PackageWriter, config: dict[str, Any
             ) if root.resolve().is_relative_to(candidate.resolve())), None)
             validate_knowledge_root(root, owner_storage or allowed, external=owner_storage is None)
             await authorize_knowledge_export(db, root, owner, external=owner_storage is None)
-            await archive_io(writer, capture_tree, writer, root, directory, server_id)
+            file_count = await archive_io(writer, capture_tree, writer, root, directory, server_id)
             writer.dependency(server_id, "knowledge", "captured_at_download", directory=directory,
+                              file_count=file_count,
                               note="Mutable content captured now; no historical snapshot or cross-file transaction.")
         except (OSError, ValueError, SQLAlchemyError):
             writer.dependency(server_id, "knowledge", "captured_at_download", status="unresolved",
@@ -764,7 +785,10 @@ async def _results(
     after = None
     while True:
         query = select(ProtocolRun.id, ProtocolRun.status, ProtocolRun.created_at, ProtocolRun.started_at,
-                       ProtocolRun.completed_at, ProtocolRun.replicate_result_id, ProtocolRun.row_result_id).where(
+                       ProtocolRun.completed_at, ProtocolRun.replicate_result_id, ProtocolRun.row_result_id,
+                       ProtocolRun.replicate_label, ProtocolRun.protocol_id, ProtocolRun.protocol_revision_id,
+                       ProtocolRun.design_revision_id, ProtocolRun.updated_at, ProtocolRun.last_heartbeat_at,
+                       ProtocolRun.cancel_requested_at).where(
                            *conditions,
                        ).order_by(ProtocolRun.id).limit(1)
         if after is not None:
@@ -776,6 +800,16 @@ async def _results(
         directory = f"results/attempts/{after}"
         await archive_io(writer, writer.json, f"{directory}/attempt.json", dict(row),
                          provenance="recorded_attempt", identity=str(after))
+        if row["row_result_id"] and not writer.seen("row_slot", str(row["row_result_id"])):
+            slot = await db.get(FactorialRowResult, row["row_result_id"])
+            if slot is not None:
+                await archive_io(writer, writer.json, f"results/rows/{slot.id}.json", {
+                    key: getattr(slot, key) for key in (
+                        "id", "replicate_result_id", "protocol_revision_id", "dataset_id", "raw_sha256", "row_index",
+                    )
+                }, provenance="recorded_attempt", identity=str(slot.id))
+            else:
+                writer.dependency(str(row["row_result_id"]), "row_slot", "recorded_attempt", status="missing")
         for document in ("factor_values", "dataset_inputs", "dataset_row", "attempt_result", "node_runs",
                          "conversation",
                          "usage_summary", "error"):
@@ -929,6 +963,8 @@ async def execute_package(db: AsyncSession, job: ResultJob, temporary: Path, des
             await checkpoint()
             if job.params["selection"].get("include_results", False):
                 await _results(db, writer, job, checkpoint, graph)
+            await _import_sources(db, writer, job.experiment_id,
+                                  include_results=job.params['selection'].get('include_results', False))
             software = {}
             for package in ("asaree", "motoro", "asaree-workspace-core", "asaree-sklearn-core", "scikit-learn-mcp",
                             "asaree-sklearn-dc", "asaree-sklearn-eda", "asaree-sklearn-fs", "asaree-sklearn-fte",
@@ -938,10 +974,12 @@ async def execute_package(db: AsyncSession, job: ResultJob, temporary: Path, des
                 except importlib.metadata.PackageNotFoundError:
                     software[package] = "unknown"
             manifest = await archive_io(writer, writer.finish, {
-                "format": "asaree.experiment-package", "schema_version": 1,
+                "format": "asaree.experiment-package", "schema_version": 2,
                 "experiment_id": str(job.experiment_id), "protocol_id": str(job.protocol_id),
+                "source_owner_id": str(job.owner_id),
                 "publication": {"id": str(publication.id), "version": publication.revision,
                                 "published_at": publication.published_at, "name": publication.name,
+                                "note": publication.note,
                                 "annotations_provenance": "captured_at_download"},
                 "design_revision_id": str(publication.design_revision_id) if publication.design_revision_id else None,
                 "results_included": job.params["selection"].get("include_results", False),
@@ -952,7 +990,7 @@ async def execute_package(db: AsyncSession, job: ResultJob, temporary: Path, des
                 "excluded": ["credentials and connection material", "credential files", "derived row indexes",
                              "caches", "scratch", "runtime queues", "workspace resume state",
                              "unscoped experiment artifacts", "test runs and node previews"],
-                "portability": "Logical export; external models/tools may yield different outputs. No import support.",
+                "portability": "Logical export; configure local connections and publish before execution.",
                 "configuration_rewrites": ["credential/connection fields omitted",
                                            "knowledge display paths refer to archive directories",
                                            "sampling keys hash credential-free explicit input, not runtime requests"],
@@ -970,3 +1008,41 @@ async def execute_package(db: AsyncSession, job: ResultJob, temporary: Path, des
         await status_db.execute(update(ResultJob).where(ResultJob.id == job.id, ResultJob.status != "cancelled").values(
             status="completed", progress={"bytes": destination.stat().st_size, "sha256": digest}, error=None,
         ))
+
+
+async def _import_sources(db: AsyncSession, writer: PackageWriter, experiment_id: uuid.UUID,
+                          *, include_results: bool) -> None:
+    """Local exports keep imported provenance separate from local attempt history."""
+    from asaree.models.package_import import ImportedIdentity, PackageImport
+    from asaree.services.package_imports import directory
+
+    imports = await db.stream_scalars(select(PackageImport).where(
+        PackageImport.experiment_id == experiment_id, PackageImport.status == 'completed',
+    ).execution_options(yield_per=1))
+    async for imported in imports:
+        prefix = f'sources/{imported.id}'
+        root = directory(imported.id)
+        # Source manifest and publication always remain immutable attribution.
+        for name in ('manifest.json', 'publication/canvas.json', 'publication/settings.json',
+                     'experiment-metadata.json'):
+            source = root / 'payload' / name
+            await archive_io(writer, writer.file, source, f'{prefix}/{name}',
+                             identity=str(imported.id), provenance='imported_source')
+        path = writer.staging / 'source-identities.jsonl'
+        rows = await db.stream_scalars(select(ImportedIdentity).where(
+            ImportedIdentity.import_id == imported.id,
+        ).order_by(ImportedIdentity.kind, ImportedIdentity.source_id).execution_options(yield_per=1))
+        with path.open('wb') as output:
+            async for row in rows:
+                if not include_results and row.kind.startswith('historical_'):
+                    continue
+                output.write(encoded({'kind': row.kind, 'source_id': row.source_id,
+                                      'local_id': row.local_id, 'provenance': row.provenance}))
+        await archive_io(writer, writer.add, path, f'{prefix}/identities.jsonl',
+                         identity=str(imported.id), provenance='imported_source')
+        if include_results:
+            await archive_io(writer, writer.file, root / 'archive.tar.gz', f'{prefix}/source.tar.gz',
+                             identity=str(imported.id), provenance='imported_source', expected=imported.sha256)
+        writer.dependency(str(imported.id), 'imported_source', 'imported_source', directory=prefix,
+                          archive_included=include_results,
+                          note='Source evidence is separate from local execution; nested archives are never executed.')

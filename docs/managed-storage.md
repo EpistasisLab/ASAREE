@@ -102,6 +102,16 @@ Retention policy:
   results worker deletes files only for expired terminal export jobs, using
   their exact job IDs. It does not apply export expiry to durable workspace
   outputs or database experiment artifacts.
+- Package imports use `datasets/package-imports/<request-uuid>/` for private
+  uploads, verified payloads and durable source evidence. Dataset artifact keys
+  refer to these exact bytes. Imported mutable knowledge copies live under the
+  importing owner's bundle directory. `package_imports` and `imported_identities`
+  in ASAREE PostgreSQL coordinate staging, provenance and cleanup; Motoro retains
+  owned Skill and disconnected server records. Incomplete requests expire after
+  24 hours; cancellation cleans up after the request worker stops. Completed
+  source evidence is durable and must be included in coordinated backups, even
+  after later local publication or experiment archival. See
+  [package import recovery](experiment-packages.md#lifecycle-limits-and-recovery).
 - Pre-migration automatic dumps retain the configured `--keep` per database;
   manual dumps remain untouched. Preserve an independent coordinated backup.
 - Scratch/abandoned generations are cleanup candidates only after the owning

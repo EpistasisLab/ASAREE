@@ -33,6 +33,90 @@ GitHub Actions checks on an up-to-date branch:
 - `Lint & Test (backend)`
 - `Type Check & Lint (frontend)`
 
+## Local CI verification
+
+Run focused checks while implementing, then run the affected CI suites locally
+before pushing code. Fix failures locally and rerun the failed checks before
+starting another GitHub Actions run. GitHub CI remains the required independent
+verification of a locally passing change. If a local prerequisite is missing,
+identify it and establish a permitted local test setup; obtain approval before
+using GitHub CI as the fallback. Documentation-only changes need the existing
+link/scope and whitespace checks rather than application suites.
+
+[The CI workflow](.github/workflows/ci.yml) is authoritative for dependencies,
+commands and service versions; the change-selection rules below identify the
+affected suites. Preserve the repository's approval requirements for checks
+taking minutes, expensive statistical validation, and starting infrastructure.
+Previously authorized checks/setup do not need repeated approval.
+
+For backend verification, use **disposable local PostgreSQL databases**, one for
+ASAREE and one for Motoro, with the CI PostgreSQL major version and `pgvector`
+available for Motoro. An existing permitted native PostgreSQL installation can
+serve these databases; containers are optional and must be allowed by the local
+environment. Check available native binaries/services before concluding that
+PostgreSQL cannot run locally. Do not use production/application databases,
+substitute SQLite, or read application credential files to configure tests.
+
+Some execution sandboxes discard background processes when a command ends. In
+that case, supervise the disposable PostgreSQL process, migrations and test
+runner within one command, stopping PostgreSQL in `finally`. If Unix-domain
+sockets are unavailable, PostgreSQL can use localhost TCP with
+`unix_socket_directories=''`. Confirm connectivity from the test process;
+`pg_ctl` reporting a successful start alone is insufficient in such a sandbox.
+
+Set these variables explicitly in the test process:
+
+| Variable | Disposable database |
+| --- | --- |
+| `DATABASE_URL`, `ASAREE_DATABASE_URL` | Motoro URL |
+| `ASAREE_PRODUCT_DATABASE_URL`, `ASAREE_RESULTS_TEST_DATABASE_URL` | ASAREE URL |
+| `ASAREE_MIGRATIONS_TEST_DATABASE_URL` | Motoro URL; its role must be able to create scratch databases |
+| `ASAREE_DATA_ROOT` | A separate temporary directory for local test artifacts |
+| `PYTHON_DOTENV_DISABLED` | `1`, to prevent dependency libraries from discovering unrelated credential files |
+
+Use SQLAlchemy async URLs (`postgresql+asyncpg://...`) for application/test
+settings. Put PostgreSQL's `bin` directory on `PATH` so migration backup tests
+can find `pg_dump`. Use an isolated worktree/environment when another session
+is active. Install the locked development dependencies there with
+`uv sync --frozen --group dev`; reuse verified installed dependencies when the
+lockfile has not changed. Match the workflow's Python and Node versions when
+available, and report any version difference.
+
+From the repository root, with those variables pointing to the disposable setup:
+
+```sh
+uv lock --check
+uv run ruff check src/asaree tests .github/ci
+uv run mypy src/asaree
+uv run python -m motoro.migrations deploy --url "$DATABASE_URL"
+uv run python -m asaree.migrations upgrade --url "$ASAREE_PRODUCT_DATABASE_URL"
+uv run python scripts/seed_row_test_users.py
+uv run pytest tests/ -m 'not stats_validation' -q --tb=short --durations=15
+```
+
+The mypy backlog is warn-only in CI; distinguish pre-existing warnings from new
+errors. Run `stats_validation` locally when the workflow's scope selects it and
+the expensive-check approval applies. A skipped database suite is **unverified**,
+not a passing local backend check. Retain test logs until failures are resolved.
+
+For frontend changes, use the locked frontend dependencies (`npm ci` when setup
+or dependency changes require it), then run from `frontend/`:
+
+```sh
+npx tsc -b
+npx vitest run
+npx oxlint src
+```
+
+If a full-suite failure is intermittent, reproduce the affected test locally and
+fix its cause or report the remaining uncertainty; repeatedly pushing unchanged
+code to obtain a passing CI run is not the verification workflow. After local
+checks pass, push the reviewed change and confirm the required GitHub checks on
+that exact head. Report the local checks, environment differences and final CI
+results in the PR.
+
+## Branch protection
+
 Reviewer approvals are set to zero for solo maintenance. Force pushes and branch
 deletion are blocked, and there are no bypass actors. GitHub currently permits
 both squash and merge commits into `develop`, but this workflow uses merge

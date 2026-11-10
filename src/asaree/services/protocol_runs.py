@@ -110,6 +110,12 @@ async def create_protocol_run(
     ``target_node_id`` is set only for a single-node "Play" run (see
     ``ProtocolRun`` model's own comment) -- mutually exclusive with
     replicate_label/factor_values in practice, though nothing enforces that here."""
+    # Imports never expose source snapshots as executable publications.
+    from asaree.services.package_reconstruction import require_configured
+
+    imported_protocol = await db.get(Protocol, protocol_id)
+    if imported_protocol is not None:
+        await require_configured(db, imported_protocol.experiment_id)
     if dataset_row is not None:
         _validate_dataset_row_snapshot(dataset_row)
     row_slot: FactorialRowResult | None = None

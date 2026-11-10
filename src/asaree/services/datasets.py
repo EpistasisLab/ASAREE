@@ -277,24 +277,33 @@ async def register_manual_split(
 
 
 async def get_dataset(db: AsyncSession, dataset_id: uuid.UUID) -> RegisteredDataset | None:
-    return (await db.execute(select(RegisteredDataset).where(RegisteredDataset.id == dataset_id))).scalar_one_or_none()
+    from asaree.services.import_visibility import active_identity
+
+    return (await db.execute(select(RegisteredDataset).where(RegisteredDataset.id == dataset_id,
+        active_identity(RegisteredDataset.id)))).scalar_one_or_none()
 
 
 async def get_dataset_by_name(
     db: AsyncSession, name: str, *, owner_id: uuid.UUID
 ) -> RegisteredDataset | None:
+    from asaree.services.import_visibility import active_identity
+
     return (
         await db.execute(
             select(RegisteredDataset).where(
                 RegisteredDataset.owner_id == owner_id,
                 RegisteredDataset.name == name,
+                active_identity(RegisteredDataset.id),
             )
         )
     ).scalar_one_or_none()
 
 
 async def list_datasets(db: AsyncSession, *, owner_id: uuid.UUID) -> Sequence[RegisteredDataset]:
-    return (await db.execute(select(RegisteredDataset).where(RegisteredDataset.owner_id == owner_id))).scalars().all()
+    from asaree.services.import_visibility import active_identity
+
+    return (await db.execute(select(RegisteredDataset).where(RegisteredDataset.owner_id == owner_id,
+        active_identity(RegisteredDataset.id)))).scalars().all()
 
 
 async def delete_dataset(db: AsyncSession, dataset_id: uuid.UUID) -> bool:

@@ -36,6 +36,11 @@ instructions with Codex and Claude Code; specialized rules live near their code.
 
 ## Verification
 
+- Before pushing code, run the affected CI suites locally using
+  [local CI verification](CONTRIBUTING.md#local-ci-verification) and fix failures
+  locally first. Use GitHub CI to verify a locally passing change. If local
+  verification is blocked, explain the missing prerequisite and get approval
+  before substituting a GitHub CI run. Existing authorization still applies.
 - Frontend: commands and working directory are in [frontend instructions](frontend/AGENTS.md).
 - Backend and backend tests: read [backend verification](src/asaree/AGENTS.md#verification),
   including service prerequisites and expensive-test markers.

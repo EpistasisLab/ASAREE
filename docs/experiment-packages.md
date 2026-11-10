@@ -22,7 +22,29 @@ for five minutes; requesting job status renews the link. Prepared files expire
 24 hours after job creation. Cancellation and failure never publish partial
 archives as completed downloads.
 
-## Schema version 1
+## Schema versions and compatibility
+
+New exports use schema **2**. Imports accept schemas **1 and 2**; other versions
+are rejected before confirmation. Version 2 adds structured Skill metadata,
+Skill file encodings/order, dataset registration metadata, knowledge registration kinds/empty-tree counts, publication notes and
+stable row-slot evidence. These additions close reconstruction gaps found by
+auditing the actual version 1 exporter. Version 1 files remain readable and
+re-exportable; the importer parses recorded Skill frontmatter, but never claims
+to recover omitted source filenames, original resource encodings/order or row
+slot facts. Such omissions are explicitly reported in preflight. A v1 binary
+Skill resource is represented locally as base64 without claiming that was its
+original storage encoding.
+
+Both versions require canonical UUIDs for typed archive identities. MCP
+requirement filenames, their IDs and included knowledge directory names must
+agree; inconsistent packages are rejected rather than assigning new meanings to
+their paths. Explicit missing/unresolved dependencies remain diagnostics, including
+legacy name-only lookups. Only a Skill's exact root `SKILL.md` is its entrypoint;
+nested files such as `references/SKILL.md` are ordinary bundled resources. Version
+2 retains their recorded encoding/order; version 1 retains their bytes with the
+same explicit unknown source metadata as other v1 resources.
+
+The common archive layout is:
 
 The `.tar.gz` archive contains:
 
@@ -38,6 +60,7 @@ The `.tar.gz` archive contains:
 | `resources/` | Scripts, rendered stored Skills with all bundled resources, and authorized knowledge content |
 | `requirements/` | Model configurations and MCP server/tool requirements without connection secrets |
 | `results/` | Optional version-scoped attempts, observations, recorded evidence and retained attributable files |
+| `sources/` | Imported source manifests/publications and typed identity mappings; with results selected, the exact original source archive |
 
 The manifest hashes both inventories. `files.jsonl` hashes dependency inventory
 bytes but does not hash itself or the manifest, avoiding circular references.
@@ -133,6 +156,135 @@ configuration and one bounded Skill/resource record are processed at a time.
 Copying/compression run off the event loop; cancellation stops and joins active
 writer work before cleanup. No new database or SQLite inventory is introduced.
 
-A package is a logical export, not a database backup. Importing packages,
-resuming workspaces, and reproducing external model/tool outputs are outside its
-scope. See [ADR 0003](adr/0003-immutable-dataset-inputs-and-managed-artifacts.md).
+A package is a logical export, not a database backup. Resuming workspaces and
+reproducing external model/tool outputs are outside its scope. See
+[ADR 0003](adr/0003-immutable-dataset-inputs-and-managed-artifacts.md).
+
+## Import workflow
+
+On **Experiments**, choose a `.tar.gz` package under **Import experiment
+package**. Upload starts inspection only. Review the source version, schema,
+file categories, missing dependencies, historical results and local configuration
+requirements, then explicitly confirm creating a new experiment. The persistent
+request list lets you return after navigation or a browser restart. Cancel before
+activation or retry a failed unexpired request. A distinct request creates a
+distinct owned experiment even for identical archive bytes.
+
+The new experiment contains an editable draft and planned cells/replicates.
+It has no selected local publication and no fabricated completed executions.
+Imported source publications, resolver/sampling snapshots, all retained attempts,
+observations and artifacts stay immutable in managed files. **Download experiment
+package → Imported source evidence** exposes those files separately from local
+Runs/Results projections. It also provides an exact source package re-export.
+New local exports retain source manifests/publications and typed mappings under
+`sources/`; including results additionally preserves the original source archive
+as an opaque nested evidence file. Nested archives are never executed or used
+as native runtime state.
+
+Configure the draft's model credentials, MCP connections and unresolved
+dependencies locally, acknowledge configuration, then use normal publication.
+Acknowledgement checks owned dataset/Skill/server dependencies without connecting
+to external services. Normal publication resolves new local sampling/input
+snapshots; it does not rewrite the preserved source evidence. Resource names
+receive an import-specific suffix to avoid collisions. Canvas node IDs remain
+protocol-scoped labels because prompts may address them; new protocol ownership
+creates a fresh identity namespace. Only typed resource references, selections
+and bound factor alternatives are remapped. Opaque strings, scripts, prompts,
+dataset values, observation values and provenance are not searched/replaced.
+
+### API
+
+All routes below require the importing user's authentication:
+
+1. `POST /api/experiment-package-imports` with `{"request_key":"client-unique-key"}`.
+   The same owner/key returns the same durable request.
+2. `PUT /api/experiment-package-imports/{id}/upload` with raw gzip archive bytes.
+   A disconnected upload can be repeated before inspection; no multipart buffering
+   is required.
+3. Poll `GET /api/experiment-package-imports/{id}` for status, progress, diagnostics,
+   preflight, source SHA-256 and destination experiment ID.
+4. `POST .../{id}/confirm` explicitly queues activation. Repeated confirmation is
+   idempotent. `POST .../{id}/cancel` cancels before completed activation;
+   `POST .../{id}/retry` re-inspects a failed request before another confirmation.
+5. `GET .../{id}/files?offset=0&limit=50` pages source inventory;
+   `GET .../{id}/source?path=publication/canvas.json` downloads one original file.
+   Omitting `path` re-exports the original source archive byte-for-byte.
+   `GET .../{id}/identities?offset=0&limit=50` pages durable typed provenance.
+6. After configuring the editable draft, `POST .../{id}/configuration` with
+   `{"connections_configured":true,"dependencies_resolved":true}` acknowledges
+   local configuration. It does not publish or start execution.
+
+`GET /api/experiment-package-imports?experiment_id={id}` finds an experiment's
+source history; omitting the filter returns the newest 50 owned requests.
+
+### Lifecycle, limits and recovery
+
+The existing results worker relays durable `validating`, `queued` and `activating`
+requests. PostgreSQL advisory locks serialize a request across workers. Archive
+extraction, inventories and evidence use filesystem staging, not SQLite. Hashes
+and references are verified before activation and the archive is re-inspected
+before reconstruction. IDs derive from the request and typed source identity;
+retry adopts only that request's owned staged resources. Motoro and ASAREE use
+separate transactions. Skills stay soft-deleted and MCP registrations stay
+disconnected/hidden during resource staging. Native experiment/protocol readers
+hide incomplete activation. The relay finishes an interrupted visibility flip;
+failures/cancellation compensate only records allocated by that request.
+
+Uncompleted requests expire after 24 hours; cancellation schedules cleanup on the
+next results-worker relay. Cleanup waits for the request's worker lock and removes
+only its staging paths and resources. Completed imports are durable evidence and
+do not inherit download-export expiry. Include their files and database records
+in coordinated backups. The API and results worker must share the same managed
+storage configuration.
+
+Never-validated uploads have no staged resources: cleanup discards their private
+files without parsing partially extracted inventories. Each expired request has
+its own cleanup transaction. A compensation failure retains that request with
+`compensation_required` progress for retry while other requests continue through
+cleanup and enqueueing. Staged resources still receive owned deterministic-ID
+compensation; their cleanup is not skipped when another upload is malformed.
+
+Configurable environment limits (positive integers):
+
+| Setting (`ASAREE_` prefix) | Default |
+| --- | --- |
+| `PACKAGE_IMPORT_MAX_COMPRESSED` | 1 GiB |
+| `PACKAGE_IMPORT_MAX_EXPANDED` | 8 GiB |
+| `PACKAGE_IMPORT_MAX_MEMBERS` | 100,000 files |
+| `PACKAGE_IMPORT_MAX_DOCUMENT` | 16 MiB per JSON document, JSONL record or Skill resource |
+
+Files stream in bounded blocks; attempt inventories are disk-backed. JSON canvas,
+settings and one evidence document must fit the configured document limit.
+Archives exceeding any limit fail inspection with a diagnostic; increase limits
+deliberately for larger recorded evidence. Traversal, links, special/sparse files,
+duplicate/conflicting members, invalid JSON, unsupported schemas, unlisted files,
+incorrect hashes/sizes and inconsistent typed references are rejected. Archive
+metadata is bounded before parsing: only the exporter's ordinary files and local
+PAX path/size extensions are accepted; global/GNU sparse/nested extensions are
+rejected. Resource filename extensions do not turn opaque contents into schema
+documents; binary Skill, knowledge and artifact bytes remain opaque.
+Archive
+ownership fields never confer authorization. No packaged script/tool or server
+connection is invoked by inspection or reconstruction.
+
+### Export-to-import coverage audit
+
+| Exported component | Local reconstruction / retained evidence |
+| --- | --- |
+| Manifest, inventories, source version and capture provenance | Immutable exact original files, source archive SHA-256, durable owned request |
+| Canvas, Agent configs, model requirements, settings, measurements | Editable sanitized draft; source snapshots retained separately; local publication required |
+| Design declarations, cells, planned replicates | New local IDs; typed references and resource-valued factor alternatives remapped |
+| Dataset bindings, projections and ordering | Exact source binding evidence; graph wiring/order retained; new owned registrations |
+| Original CSVs, pinned split files and split provenance | Exact filesystem bytes/hashes, owned artifact/split records, no row-index import |
+| Scripts and inline content | Exact source content; no execution during import |
+| Skills, discovery fields, frontmatter and all resource files | Owned Motoro Skills/files; UTF-8/base64 encoding and order from v2 metadata |
+| Knowledge trees and MCP requirements | Owned managed copies and disconnected registrations; explicit local configuration |
+| Optional attempts, observations, row slots, conversations, node evidence, usage/errors | Source-attributed historical files and identity mappings; no native runtime records or latest-result projection |
+| Attributable durable output/artifact files | Exact source files with hashes and attempt attribution; re-exportable source evidence |
+| Missing/excluded dependencies and unavailable history | Visible diagnostics and preserved inventories; no same-name substitution |
+
+The PostgreSQL tests cover independent owners and both dataset modes, exact CSV
+and binary Skill bytes, publication after acknowledgement, source re-export,
+ownership isolation and cross-database crash/retry/cancel boundaries. Archive
+tests cover corruption, unsafe members, limits, compatibility and non-execution.
+Native Motoro step/resume histories were never exported and cannot be restored.

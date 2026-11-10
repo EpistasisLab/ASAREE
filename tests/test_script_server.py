@@ -48,6 +48,75 @@ def test_runs_the_wired_script_with_no_arguments(tmp_path: Path) -> None:
     assert len(out["code_sha256"]) == 64
 
 
+def test_wired_child_resolves_custom_storage_roots_without_inheriting_secrets(tmp_path, monkeypatch):
+    import asaree_workspace_core
+    import pandas as pd
+    from asaree_workspace_core import Workspace
+
+    data_root = tmp_path / "data"
+    workspace_root = tmp_path / "separate-workspaces"
+    dataset_root = tmp_path / "unrelated-datasets"
+    for key in ss._STORAGE_ENV:
+        monkeypatch.setenv(key, str(tmp_path / key.lower()))
+    monkeypatch.setenv("ASAREE_DATA_ROOT", str(data_root))
+    monkeypatch.setenv("ASAREE_DATASET_WORKSPACE_DIR", str(workspace_root))
+    monkeypatch.setenv("ASAREE_DATASET_STORAGE_DIR", str(dataset_root))
+    monkeypatch.setenv("ASAREE_PRODUCT_DATABASE_URL", "postgresql://private")
+    monkeypatch.setenv("ASAREE_INTERNAL_MCP_API_KEY", "private")
+    dataset_root.mkdir()
+    frame = pd.DataFrame({"x": ["original exact value"], "target": [1]})
+    for name in ("train", "test"):
+        frame.to_parquet(dataset_root / f"{name}.parquet", index=False)
+    Workspace.open("experiment/cell", root=str(workspace_root), target_column="target",
+                   seed_train_path=str(dataset_root / "train.parquet"),
+                   seed_test_path=str(dataset_root / "test.parquet"))
+    package_root = str(Path(asaree_workspace_core.__file__).parent.parent)
+    source = (
+        f"import sys; sys.path.insert(0, {package_root!r})\n"
+        "import os, json\n"
+        "from asaree_workspace_core import Workspace\n"
+        "from asaree_workspace_core.storage import resolve, storage_roots\n"
+        "ws = Workspace('experiment/cell', root=str(storage_roots()['workspaces']))\n"
+        "print(json.dumps({'values': ws.read_head()[0]['x'].tolist(), "
+        "'path': str(resolve('managed://datasets/train.parquet')), "
+        "'keys': sorted(k for k in os.environ if k.startswith('ASAREE_'))}))\n"
+    )
+    ctx = _wire(tmp_path, source)
+    ctx.request_context.meta.model_extra["motoro.workspace_id"] = "experiment/cell"
+    result = _run(ctx=ctx)
+    assert result["exit_code"] == 0, result
+    child = json.loads(result["stdout"])
+    assert child["values"] == ["original exact value"]
+    assert child["path"] == str(dataset_root / "train.parquet")
+    assert child["keys"] == sorted([*ss._STORAGE_ENV, "ASAREE_RUN_CONTEXT"])
+    standalone = _run(ctx=_wire(tmp_path, "import os, json\nprint(json.dumps(sorted(k for k in os.environ "
+                                           "if k.startswith('ASAREE_'))))"))
+    assert standalone["exit_code"] == 0, standalone
+    assert json.loads(standalone["stdout"]) == ["ASAREE_RUN_CONTEXT"]
+
+
+def test_interrupted_inline_script_publish_preserves_complete_shared_script(tmp_path, monkeypatch):
+    root = tmp_path / "workspaces"
+    workspace = root / "experiment/cell"
+    workspace.mkdir(parents=True)
+    monkeypatch.setenv("ASAREE_DATASET_WORKSPACE_DIR", str(root))
+    ctx = _FakeCtx({"motoro.workspace_id": "experiment/cell"})
+    code = "print('complete script')"
+    first = _run(ctx=ctx, code=code)
+    assert first["exit_code"] == 0, first
+    script = next(workspace.glob("inline-*.py"))
+    ready_bytes = script.read_bytes()
+
+    def interrupted_replace(*args):
+        raise OSError("interrupted publication")
+
+    monkeypatch.setattr(Path, "replace", interrupted_replace)
+    interrupted = _run(ctx=ctx, code=code)
+    assert "interrupted publication" in interrupted["error"]
+    assert script.read_bytes() == ready_bytes
+    assert ready_bytes == code.encode("utf-8")
+
+
 def test_plain_python_needs_no_dataset_or_entry_point(tmp_path: Path) -> None:
     # What the sklearn script tools reject and this exists for: no
     # predict_proba, no data_path, no target column.

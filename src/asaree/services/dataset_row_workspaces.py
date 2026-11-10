@@ -9,12 +9,15 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
+from asaree_workspace_core.storage import atomic_write
+
 from asaree.config import get_settings
 from asaree.services.dataset_row_csv import (
     DatasetRowCsvError,
     RowSource,
     materialize_row_csv,
     project_row,
+    row_csv_bytes,
 )
 
 
@@ -26,9 +29,7 @@ def row_attempt_workspace_id(run_id: uuid.UUID) -> str:
 
 
 def _workspace_root() -> Path:
-    # Keep attempt data beside registered datasets while separating it from
-    # their immutable originals and the shared whole-dataset workspaces.
-    return Path(get_settings().dataset_storage_dir).resolve().parent
+    return Path(get_settings().dataset_workspace_dir).resolve()
 
 
 def _node_directory(root: Path, workspace_id: str, agent_node_id: str) -> Path:
@@ -121,6 +122,14 @@ def prepare_agent_row_inputs(
         ).hexdigest()
         destination = directory / f"{token}.csv"
         manifest = directory / "row-view.json"
+        if destination.is_symlink() or manifest.is_symlink():
+            raise DatasetRowCsvError("workspace_conflict", "Agent workspace input is a symlink")
+
+        def recognized_preparation(item: Path, names: tuple[str, str] = (destination.name, manifest.name)) -> bool:
+            # A process may die before atomic_write's finally removes its
+            # private staging file. Ignore these bytes; never adopt them.
+            return (item.is_file() and not item.is_symlink() and item.name.endswith(".preparing")
+                    and any(item.name.startswith(f".{name}.") for name in names))
         manifest_value = json.dumps(
             {
                 "dataset_id": source_id,
@@ -140,29 +149,27 @@ def prepare_agent_row_inputs(
                     )
             except OSError as exc:
                 raise DatasetRowCsvError("source_unavailable", "Agent workspace cannot be verified") from exc
-        elif directory.exists() and any(directory.iterdir()):
+        elif directory.exists() and any(item != destination and not recognized_preparation(item)
+                                        for item in directory.iterdir()):
             raise DatasetRowCsvError("workspace_conflict", "Agent workspace contains unrecognized files")
         # Let the CSV writer quote fields, then compare with an independently
         # materialized candidate so existing same-run files are never trusted.
         if destination.exists():
-            temp_view = directory / f".{token}.verify.csv"
             try:
-                materialize_row_csv(view, destination=temp_view)
-                expected_bytes = temp_view.read_bytes()
-                temp_view.unlink()
+                expected_bytes = row_csv_bytes(view)
             except OSError as exc:
                 raise DatasetRowCsvError("source_unavailable", "row snapshot cannot be verified") from exc
             if destination.read_bytes() != expected_bytes:
                 raise DatasetRowCsvError(
                     "workspace_conflict", "existing row snapshot differs from requested source view"
                 )
-        else:
-            materialize_row_csv(view, destination=destination)
         if not manifest.exists():
             try:
-                manifest.write_text(manifest_value, encoding="utf-8")
+                atomic_write(manifest, manifest_value.encode("utf-8"), overwrite=False)
             except OSError as exc:
                 raise DatasetRowCsvError("source_unavailable", "Agent workspace metadata cannot be written") from exc
+        if not destination.exists():
+            materialize_row_csv(view, destination=destination)
         row_inputs.append(
             {
                 "name": record["name"],

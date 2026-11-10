@@ -253,8 +253,17 @@ async def execute_result_export(_ctx: dict[str, Any], job_id: str) -> None:
                         checkpoint = time.monotonic()
 
                 schema = await _write_analysis_csv(db, job, scope, write)
+                import os
+
+                output.flush()
+                os.fsync(output.fileno())
+            if temporary.stat().st_size != written:
+                raise OSError("Export size verification failed")
             await asyncio.to_thread(temporary.replace, destination)
-            await asyncio.to_thread(export_path(identifier, metadata=True).write_text, json.dumps(schema, indent=2))
+            from asaree_workspace_core.storage import atomic_write
+
+            await asyncio.to_thread(atomic_write, export_path(identifier, metadata=True),
+                                    json.dumps(schema, indent=2).encode())
             async with get_session() as status_db:
                 await status_db.execute(
                     update(ResultJob)

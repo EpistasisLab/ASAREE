@@ -15,8 +15,10 @@ cross-database join.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from motoro import CoreSettings
-from pydantic import Field
+from pydantic import Field, model_validator
 from pydantic_settings import SettingsConfigDict
 
 
@@ -56,13 +58,16 @@ class AsareeSettings(CoreSettings):
     # falls back to dynamic client registration where the provider supports it.
     mcp_oauth_client_metadata_url: str | None = None
 
-    # Local disk, matching ARES's current approach — see
-    # project_plan/core_asaree_use_case.md §9: metadata (this database) and
-    # hashes are what matter; where the bytes physically live is a separate,
-    # deliberately deferred decision.
-    dataset_storage_dir: str = "./data/datasets"
-    result_export_dir: str = "./data/result-exports"
-    result_row_index_dir: str = "./data/result-row-indexes"
+    # Shared managed storage, extending the source/split artifact contract.
+    # Nonempty per-directory overrides win over the root (including legacy
+    # overrides). Resolve once and pass absolute paths to MCP children.
+    data_root: str = "./data"
+    dataset_storage_dir: str = ""
+    dataset_workspace_dir: str = ""
+    result_export_dir: str = ""
+    result_row_index_dir: str = ""
+    backup_dir: str = ""
+    scratch_dir: str = ""
 
     # The one directory a user may browse and register OKF bundles under
     # (GET /okf/browse, POST /okf/bundles -- services/okf_bundles.py). Every
@@ -86,14 +91,14 @@ class AsareeSettings(CoreSettings):
     # these are storage ASAREE owns and creates on the user's behalf, the same
     # way dataset_storage_dir is. Keeping them apart also means an uploaded
     # document never shows up as a stray folder in the bundle browser.
-    okf_document_dir: str = "./data/okf-documents"
+    okf_document_dir: str = ""
 
     # Where UPLOADED bundles are stored (POST /okf/bundles/upload) -- a whole
     # folder the user picked in their BROWSER, which the server has no path to
     # and so must be given a copy of. Same reasoning as okf_document_dir for
     # keeping it out of okf_bundle_root, and separate from it only so the two
     # kinds of upload stay tellable apart on disk.
-    okf_bundle_upload_dir: str = "./data/okf-bundles"
+    okf_bundle_upload_dir: str = ""
 
     # Encrypts per-user LLM provider API keys at rest (user_llm_settings).
     # Deliberately ASAREE's own — core's services.encryption is explicitly a
@@ -146,6 +151,16 @@ class AsareeSettings(CoreSettings):
     metric_producer_max_concurrency: int = Field(default=4, ge=1)
     metric_producer_timeout_seconds: float = Field(default=30, gt=0)
 
+    @model_validator(mode="after")
+    def resolve_storage(self) -> AsareeSettings:
+        from asaree_workspace_core.storage import NAMESPACES, storage_roots
+
+        values = {field: getattr(self, field) for field, _ in NAMESPACES.values()}
+        roots = storage_roots({**values, "data_root": self.data_root})
+        for namespace, (field, _) in NAMESPACES.items():
+            object.__setattr__(self, field, str(roots[namespace]))
+        return self
+
 
 _instance: AsareeSettings | None = None
 
@@ -155,4 +170,19 @@ def get_settings() -> AsareeSettings:
     global _instance
     if _instance is None:
         _instance = AsareeSettings()
+        configure_storage_environment(_instance)
     return _instance
+
+
+def configure_storage_environment(settings: AsareeSettings) -> None:
+    """Pass only nonsecret, absolute storage configuration to MCP children."""
+    import os
+
+    from asaree_workspace_core.storage import NAMESPACES
+
+    allowed = {name.strip() for name in settings.mcp_allowed_env_vars.split(",") if name.strip()}
+    for field in ["data_root", *(field for field, _ in NAMESPACES.values())]:
+        name = f"ASAREE_{field.upper()}"
+        os.environ[name] = str(Path(getattr(settings, field)).expanduser().resolve())
+        allowed.add(name)
+    settings.mcp_allowed_env_vars = ",".join(sorted(allowed))

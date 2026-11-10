@@ -52,6 +52,7 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+from asaree_workspace_core.storage import NAMESPACES, atomic_write
 from mcp.server import FastMCP
 from mcp.server.fastmcp import Context
 
@@ -103,7 +104,8 @@ _MAX_TIMEOUT = 900
 # a wired script is user-authored code that has no business reading either.
 # Inheriting os.environ would hand every one of them over. What's left is what a
 # script plausibly needs to run; its workspace is supplied as its cwd.
-_ENV_PASSTHROUGH = ("PATH", "HOME", "LANG", "LC_ALL", "TMPDIR", "ASAREE_DATASET_WORKSPACE_DIR")
+_STORAGE_ENV = ("ASAREE_DATA_ROOT", *(f"ASAREE_{field.upper()}" for field, _ in NAMESPACES.values()))
+_ENV_PASSTHROUGH = ("PATH", "HOME", "LANG", "LC_ALL", "TMPDIR", *_STORAGE_ENV)
 
 
 def _ambient_value(ctx: Context[Any, Any, Any] | None, key: str) -> Any:
@@ -118,7 +120,13 @@ def _ambient_value(ctx: Context[Any, Any, Any] | None, key: str) -> Any:
         extra = getattr(ctx.request_context.meta, "model_extra", None) or {}
     except Exception:  # noqa: BLE001 -- no request context outside a live call
         return None
-    return extra.get(key)
+    from asaree_workspace_core.storage import map_ambient_paths, resolve
+
+    if not key.startswith("motoro.ambient."):
+        return extra.get(key)
+    ambient = {name.removeprefix("motoro.ambient."): value for name, value in extra.items()
+               if name.startswith("motoro.ambient.")}
+    return map_ambient_paths(ambient, lambda value: str(resolve(value))).get(key.removeprefix("motoro.ambient."))
 
 
 def _ambient(ctx: Context[Any, Any, Any] | None, key: str) -> str:
@@ -187,7 +195,9 @@ def _working_dir(workspace_id: str, script: Path) -> Path:
     workspace from ambient ``_meta`` instead of an argument.
     """
     if workspace_id:
-        root = Path(os.environ.get("ASAREE_DATASET_WORKSPACE_DIR", "./data/workspaces")).resolve()
+        from asaree_workspace_core.storage import storage_roots
+
+        root = storage_roots()["workspaces"]
         candidate = (root / workspace_id).resolve()
         if root in candidate.parents and candidate.is_dir():
             return candidate
@@ -392,7 +402,7 @@ def run_wired_script(
             if run_dir == Path.cwd():
                 inline_dir = Path(tempfile.mkdtemp(prefix=".asaree-inline-"))
             script_file = (inline_dir or run_dir) / f"inline-{code_sha256[:12]}.py"
-            script_file.write_text(source)
+            atomic_write(script_file, source.encode("utf-8"))
         except OSError as e:
             if inline_dir is not None:
                 shutil.rmtree(inline_dir, ignore_errors=True)
@@ -402,7 +412,8 @@ def run_wired_script(
     if not workspace_id:
         # A standalone script has no ASAREE workspace to resolve. Do not expose
         # the server's workspace root merely because it exists in the parent.
-        env.pop("ASAREE_DATASET_WORKSPACE_DIR", None)
+        for key in _STORAGE_ENV:
+            env.pop(key, None)
     # Unbuffered so a script killed by the timeout has still flushed what it
     # printed -- the whole value of a partial result is that it survives.
     env["PYTHONUNBUFFERED"] = "1"

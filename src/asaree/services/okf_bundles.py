@@ -221,12 +221,7 @@ def owner_upload_root(owner_id: uuid.UUID) -> Path:
 
 
 def is_uploaded_path(path: Path | None) -> bool:
-    """Whether a bundle directory is a copy ASAREE stored.
-
-    Decides whether deleting the registration also deletes the files: storage
-    this module created has no original behind it, while a pointed-at folder
-    is the user's own and predates ASAREE entirely.
-    """
+    """Location hint for compatibility displays; never evidence of ownership."""
     if path is None:
         return False
     try:
@@ -297,7 +292,7 @@ async def register_uploaded_bundle(*, owner_id: uuid.UUID, files: list[tuple[str
         return await mcp_service.register_server(
             name=server_name_for(owner_id, directory),
             transport="stdio",
-            command=command_for_bundle(directory),
+            command=command_for_bundle(directory, managed=True),
             owner_id=owner_id,
         )
     except Exception:
@@ -309,18 +304,12 @@ async def register_uploaded_bundle(*, owner_id: uuid.UUID, files: list[tuple[str
 
 
 async def delete_bundle(config: Any) -> None:
-    """Forget the registration, and delete the files if ASAREE stored them.
-
-    The one place the two halves of this module diverge on destruction: an
-    uploaded bundle's directory is a copy nothing else points at, so leaving it
-    would accumulate orphans no screen can reach, while a pointed-at folder is
-    the user's own and must survive being un-registered.
-    """
-    path = bundle_path_from_command(config.command)
-    directory = Path(path) if path else None
+    """Unregister without deleting external files or retained knowledge state."""
     await mcp_service.delete_server(config.id)
-    if is_uploaded_path(directory) and directory is not None and directory.is_dir():
-        shutil.rmtree(directory, ignore_errors=True)
+    # Registration removal is not proof that no publication, historical
+    # attempt or retained workspace needs this mutable knowledge state.
+    # Retain managed copies for explicit operator cleanup. External files
+    # are never owned, even when located beneath a managed upload root.
 
 
 def server_name_for(owner_id: uuid.UUID, path: Path) -> str:
@@ -336,14 +325,17 @@ def server_name_for(owner_id: uuid.UUID, path: Path) -> str:
     return f"{BUNDLE_SERVER_NAME_PREFIX}{slug}-{digest}"
 
 
-def command_for_bundle(path: Path) -> str:
+def command_for_bundle(path: Path, *, managed: bool = False) -> str:
     """The stored stdio ``command`` that serves *path*.
 
     ``shlex.quote`` handles spaces; a path carrying a shell metacharacter is
     rejected outright by :func:`validate_bundle_path` before reaching here,
     since quoting cannot save it (Motoro validates the post-split tokens).
     """
-    return f"{command_for(_BUNDLE_SERVER_MODULE)} --bundle {shlex.quote(str(path))}"
+    from asaree.services.managed_storage import reference_for
+
+    value = reference_for(path) if managed else str(path)
+    return f"{command_for(_BUNDLE_SERVER_MODULE)} --bundle {shlex.quote(value)}"
 
 
 def bundle_path_from_command(command: str | None) -> str | None:
@@ -363,7 +355,11 @@ def bundle_path_from_command(command: str | None) -> str | None:
     if "--bundle" not in parts:
         return None
     index = parts.index("--bundle")
-    return parts[index + 1] if index + 1 < len(parts) else None
+    if index + 1 >= len(parts):
+        return None
+    from asaree.services.managed_storage import resolve_reference
+
+    return str(resolve_reference(parts[index + 1]))
 
 
 def validate_bundle_path(relative: str | None) -> Path:

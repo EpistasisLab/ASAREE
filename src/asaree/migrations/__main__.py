@@ -25,7 +25,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--url", default=None, help="Database URL. Defaults to product_database_url.")
     ap.add_argument("--revision", default=None, help="Target revision. Defaults: head, or -1 for downgrade.")
     ap.add_argument("--core-url", default=None, help="backup only: core's database. Defaults to database_url.")
-    ap.add_argument("--dir", default="backups", help="backup only: where dumps are written.")
+    ap.add_argument("--dir", default=None, help="backup only: override the configured managed backup directory.")
     ap.add_argument("--keep", type=int, default=5, help="backup only: automatic dumps kept per database.")
     args = ap.parse_args(argv)
 

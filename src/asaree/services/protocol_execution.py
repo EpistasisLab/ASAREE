@@ -1562,16 +1562,16 @@ def _materialize_script(workspace_id: str | None, node_id: str, code: str) -> st
         return ""
     safe_node = _UNSAFE_WORKSPACE_LABEL_CHAR.sub("_", node_id)
     try:
-        root = Path(WORKSPACE_ROOT).resolve()
+        root = _workspace_storage_root()
         directory = (root / workspace_id / "scripts").resolve()
         if root not in directory.parents:  # workspace_id is already sanitized; belt and braces
             return ""
         directory.mkdir(parents=True, exist_ok=True)
         path = directory / f"{safe_node}.py"
         # Atomic: a tool reading this concurrently must never see a half-write.
-        tmp = directory / f"{safe_node}.py.tmp"
-        tmp.write_text(code)
-        tmp.replace(path)
+        from asaree_workspace_core.storage import atomic_write
+
+        atomic_write(path, code.encode())
     except OSError:
         logger.warning("script_materialize_failed", extra={"workspace_id": workspace_id, "node_id": node_id})
         return ""
@@ -1584,11 +1584,27 @@ def _script_workspace_id(workspace_id: str | None, protocol_run_id: uuid.UUID | 
     return workspace_id or (f"_protocol_runs/{protocol_run_id}/{safe_agent}" if protocol_run_id else None)
 
 
+_IMPORTED_WORKSPACE_ROOT = WORKSPACE_ROOT
+
+
+def _workspace_storage_root() -> Path:
+    if WORKSPACE_ROOT != _IMPORTED_WORKSPACE_ROOT:
+        return Path(WORKSPACE_ROOT).resolve()  # compatibility for explicit callers/tests
+    from asaree.config import get_settings
+
+    return Path(get_settings().dataset_workspace_dir).resolve()
+
+
 def _cleanup_adhoc_scripts(ambient_meta: dict[str, Any] | None) -> None:
     """Remove standalone-run script files after their consuming agent stops."""
-    adhoc_root = (Path(WORKSPACE_ROOT).resolve() / "_protocol_runs").resolve()
-    for item in (ambient_meta or {}).get("script_paths") or []:
-        path = Path(str(item.get("path") or "")).resolve()
+    scripts = (ambient_meta or {}).get("script_paths") or []
+    if not scripts:
+        return
+    from asaree_workspace_core.storage import resolve
+
+    adhoc_root = (_workspace_storage_root() / "_protocol_runs").resolve()
+    for item in scripts:
+        path = resolve(str(item.get("path") or "")).resolve()
         if adhoc_root not in path.parents:
             continue
         with contextlib.suppress(OSError):
@@ -1596,6 +1612,15 @@ def _cleanup_adhoc_scripts(ambient_meta: dict[str, Any] | None) -> None:
         for directory in (path.parent, path.parent.parent, path.parent.parent.parent):
             with contextlib.suppress(OSError):
                 directory.rmdir()
+
+
+def _durable_ambient(ambient: dict[str, Any]) -> dict[str, Any]:
+    from asaree_workspace_core.storage import managed_reference, map_ambient_paths
+
+    from asaree.services.managed_storage import roots
+
+    return map_ambient_paths(ambient, lambda value: managed_reference(Path(value), roots())
+                             if Path(value).is_absolute() else value)
 
 
 def _ambient_meta_for(
@@ -4449,7 +4474,7 @@ async def _run_agent_node(
             # Precomputed by the caller when it also needed to know whether the
             # script got bound (_build_user_input's script_bound); recomputed
             # here only for a caller that didn't care.
-            **({"ambient_meta": resolved_ambient} if resolved_ambient else {}),
+            **({"ambient_meta": _durable_ambient(resolved_ambient)} if resolved_ambient else {}),
         },
     )
     timeout = fields["max_run_duration_seconds"] or get_settings().worker_job_timeout_seconds

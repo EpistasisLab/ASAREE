@@ -57,9 +57,44 @@ ASAREE records are read under one repeatable-read snapshot. Motoro resources use
 a separate snapshot; filesystem captures verify opened files and detect tree
 changes. Mutable external knowledge has no cross-file transaction or historical
 snapshot. The manifest records this limitation rather than claiming publication
-fidelity. Externally registered directories must be authorized through ownership
-and isolated from platform storage; broad roots, other owners' knowledge,
-symlinks and ambiguous overlaps are reported as unresolved dependencies.
+fidelity. Uploaded bundles and documents use the application's per-owner storage
+boundary. An external registration or shared browse access alone does not prove
+authority to download the registered directory. Broad roots, other owners'
+knowledge, symlinks and ambiguous overlaps are unresolved dependencies.
+
+### External knowledge export grants
+
+Operators can authorize a specific external bundle for a user with the
+`knowledge_export_grants` setting, supplied as JSON through
+`ASAREE_KNOWLEDGE_EXPORT_GRANTS`, for example:
+
+```json
+{"00000000-0000-0000-0000-000000000001":["/srv/research/approved-cohort-bundle"]}
+```
+
+The key is the application user's UUID. Each absolute path must match the
+registered bundle root exactly; there is no implicit grant to descendants or
+ancestors. A grant is the operator's assertion that **all content under that
+exact root is authorized for that user**. It is not inferred from filesystem
+ownership, a registration's owner field, or absence of competing registrations.
+Configure only narrow named bundle roots after reviewing their full contents.
+
+Grants support isolated legacy bundles outside today's browse root without
+moving or adopting their files. They do not override rejection of the shared
+browse root/its ancestors, platform-storage overlaps, or foreign/ownerless
+knowledge registrations and other users' grants that overlap in either direction
+or exactly. Missing or malformed grants, unreadable registration evidence and
+ambiguous knowledge boundaries are reported as unresolved before content capture;
+diagnostics do not expose another owner's identifiers, paths, commands or bytes.
+
+Set the same configuration on the API and worker processes, particularly
+`asaree-results-worker`, which builds packages. In the supplied Compose setup,
+the configured environment file is already forwarded to `asaree-app`,
+`asaree-worker`, and `asaree-results-worker`; a host-shell variable alone is not
+automatically forwarded. Deployment overrides can set the JSON value in those
+services' `environment` mappings. External paths must be mounted consistently
+in the exporting worker. No grant is required for authorized uploaded bundles
+and documents, and this correction changes no database schema or package format.
 
 Credential/connection fields, including typed fallback and sampling snapshot
 fields, and recognized credential files are excluded. Dataset bytes, prompts,
@@ -78,6 +113,12 @@ without publication attribution are not assigned to historical versions; the
 dependency inventory records unavailable or unscoped evidence.
 AgentRun IDs in node evidence are source provenance; native Motoro step history
 and resume/control snapshots are not bundled.
+Workspace scratch is recognized structurally at `.scratch/` under the workspace
+root or its `dataset=`/`agent=` slots. User artifacts such as
+`outputs/working/prediction.csv`, `outputs/cache/`, `outputs/scratch/`, and
+`outputs/.scratch/` remain durable content. Temporary preparation names use the
+reserved hidden producer naming pattern; an ordinary `results.preparing/`
+output directory is preserved.
 
 Archive generation streams file bytes and SQL evidence slices, spools inventories
 to plain files, and discards tar member metadata after writing. Memory does not

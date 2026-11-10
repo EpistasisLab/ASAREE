@@ -16,6 +16,7 @@ cross-database join.
 from __future__ import annotations
 
 from pathlib import Path
+from uuid import UUID
 
 from motoro import CoreSettings
 from pydantic import Field, model_validator
@@ -83,6 +84,11 @@ class AsareeSettings(CoreSettings):
     # laptop with the server somewhere else is out of reach either way, and
     # deliberately so: nothing here tunnels to a client machine.
     okf_bundle_root: str = "~"
+
+    # Operator-approved exact external bundle roots per application owner.
+    # Registration/browse access is not authority to download a whole external
+    # tree. No implicit subtree grants; managed owner uploads need no entry.
+    knowledge_export_grants: dict[UUID, list[Path]] = Field(default_factory=dict)
 
     # Where UPLOADED single-concept OKF documents are stored (POST
     # /okf/documents -- services/okf_documents.py). Deliberately NOT inside

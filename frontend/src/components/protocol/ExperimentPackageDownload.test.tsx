@@ -88,7 +88,10 @@ it('starts from the viewed historical publication and explicitly opts into resul
   vi.spyOn(experimentsApi, 'createResultJob').mockResolvedValue({ id: 'job', kind: 'export', status: 'pending',
     protocol_revision_id: 'old', progress: {}, error: null })
   vi.spyOn(experimentsApi, 'getResultJob').mockResolvedValue({ id: 'job', kind: 'export', status: 'completed',
-    protocol_revision_id: 'old', progress: {}, error: null, download_url: '/old-package', schema_url: '/manifest' })
+    protocol_revision_id: 'old', progress: { completeness: { status: 'incomplete', unresolved_count: 1,
+      included_dependencies: 4, destination_connections: 2,
+      issues: [{ kind: 'split', id: 'historical-split', reason: 'Pinned split unavailable' }] } },
+    error: null, download_url: '/old-package', schema_url: '/manifest' })
   show('old')
   fireEvent.click(screen.getByRole('button', { name: 'Download experiment package' }))
   await waitFor(() => expect(screen.getAllByRole('option')).toHaveLength(2))
@@ -101,6 +104,10 @@ it('starts from the viewed historical publication and explicitly opts into resul
     expect.objectContaining({ kind: 'export', format: 'experiment_package', include_results: true })))
   expect(await screen.findByRole('link', { name: 'Download prepared package' })).toHaveAttribute('href', '/old-package')
   expect(screen.getByRole('link', { name: 'Manifest' })).toHaveAttribute('href', '/manifest')
+  expect(screen.getByText('Incomplete package')).toBeInTheDocument()
+  expect(screen.getByText('4 included dependencies')).toBeInTheDocument()
+  expect(screen.getByText(/2 destination connection requirements/)).toBeInTheDocument()
+  expect(screen.getByText(/Pinned split unavailable/)).toBeInTheDocument()
 })
 
 it('does not offer publication for an unchanged published experiment', async () => {

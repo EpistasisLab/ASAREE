@@ -115,7 +115,7 @@ async def create_protocol_run(
 
     imported_protocol = await db.get(Protocol, protocol_id)
     if imported_protocol is not None:
-        await require_configured(db, imported_protocol.experiment_id)
+        await require_configured(db, imported_protocol.experiment_id, validate_draft=protocol_revision_id is None)
     if dataset_row is not None:
         _validate_dataset_row_snapshot(dataset_row)
     row_slot: FactorialRowResult | None = None

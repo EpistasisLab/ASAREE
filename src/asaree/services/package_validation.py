@@ -360,6 +360,13 @@ def validate_references(root: Path, limits: Limits, manifest: dict[str, Any], ma
     for file in (root / 'requirements/mcp').glob('*.json'):
         requirement = document(payload_path(root, file.relative_to(root).as_posix()), limits)
         source = canonical_identity(requirement['id'])
+        if (not isinstance(requirement.get('required_tool_names', []), list)
+            or any(not isinstance(tool, str) for tool in requirement.get('required_tool_names', []))
+            or not isinstance(requirement.get('tool_names', []), list)
+            or any(not isinstance(tool, str) for tool in requirement.get('tool_names', []))
+            or (requirement.get('service_identity') is not None
+                and not isinstance(requirement['service_identity'], str))):
+            raise PackageError('Invalid MCP service identity or required tool names')
         if file.name != f'{source}.json':
             raise PackageError('MCP requirement filename and identity disagree')
         remember('mcp', source, requirement)

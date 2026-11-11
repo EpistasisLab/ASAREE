@@ -39,6 +39,19 @@ def test_exporter_archive_preflight_preserves_exact_source_files(tmp_path, versi
             assert (tmp_path / 'read' / member.name).read_bytes() == tar.extractfile(member).read()
 
 
+@pytest.mark.parametrize('field,value', [
+    ('required_tool_names', {}), ('required_tool_names', [None]),
+    ('tool_names', ['valid', {}]), ('service_identity', []),
+])
+def test_malformed_destination_requirements_are_rejected_during_inspection(tmp_path, field, value):
+    source = str(uuid.uuid4())
+    def modify(writer):
+        writer.json(f'requirements/mcp/{source}.json', {
+            'id': source, 'name': 'Untrusted', 'transport': 'stdio', field: value})
+    with pytest.raises(PackageError, match='service identity or required tool names'):
+        inspect(package(tmp_path, modify=modify), tmp_path / 'read', Limits(), threading.Event())
+
+
 @pytest.mark.parametrize('version', [0, 3, '2'])
 def test_rejects_unsupported_schema_without_guessing(tmp_path, version):
     with pytest.raises(PackageError, match='Unsupported'):

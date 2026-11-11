@@ -121,6 +121,13 @@ export function ExperimentPackageDownload({ experimentId, protocol, selectedVers
         {job.data?.status === 'cancelled' && <p role="status" className="text-xs">Package preparation cancelled.</p>}
         {busy && <p role="status" className="font-mono text-xs">Preparing package · {job.data?.progress.bytes?.toLocaleString() ?? 0} bytes</p>}
         {linkPending && <p role="status" className="text-xs text-muted-foreground">Refreshing download link…</p>}
+        {job.data?.status === 'completed' && job.data.progress.completeness && <section aria-label="Package preflight" className="space-y-1 rounded border p-3 text-sm">
+          <p className="font-medium">{job.data.progress.completeness.status === 'incomplete' ? 'Incomplete package' : 'Package content complete'}</p>
+          <p>{job.data.progress.completeness.included_dependencies} included dependencies</p>
+          <p>{job.data.progress.completeness.destination_connections} destination connection requirements · credentials excluded</p>
+          <p>{job.data.progress.completeness.unresolved_count} missing or unresolved dependencies</p>
+          {job.data.progress.completeness.issues.map((issue, index) => <p key={index} className="text-xs text-amber-400">{issue.kind} <span className="font-mono">{issue.id}</span>: {issue.reason}</p>)}
+        </section>}
         {job.data?.status === 'completed' && job.data.progress.sha256 && <p className="break-all font-mono text-xs text-muted-foreground">SHA-256: {job.data.progress.sha256}</p>}
         <div className="flex flex-wrap gap-2">
           {needsPublish && <Button size="sm" disabled={busy} onClick={() => {

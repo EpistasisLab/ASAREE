@@ -36,7 +36,7 @@ from asaree.models.package_import import ImportedIdentity, PackageImport
 from asaree.models.protocol import Protocol
 from asaree.models.protocol_revision import ProtocolRevision
 from asaree.models.protocol_run import ProtocolRun
-from asaree.models.user import User
+from asaree.models.user_llm_setting import UserLLMSetting
 from asaree.services import experiment_packages as packages
 from asaree.services import okf_bundles, okf_documents
 from asaree.services import package_imports as imports
@@ -47,6 +47,52 @@ from asaree.services.package_reconstruction import Reconstruction, require_confi
 from asaree.services.package_validation import Limits, inspect
 
 results_db = _results_db
+
+
+def storage_settings(root):
+    from asaree_workspace_core.storage import NAMESPACES
+
+    return AsareeSettings(_env_file=None, data_root=str(root),
+                          **{field: '' for field, _ in NAMESPACES.values()})
+
+
+async def select_test_provider(db, job):
+    from asaree.services.package_setup import select_connection
+
+    setting = UserLLMSetting(user_id=job.owner_id, provider='openai', api_key_encrypted='destination-only')
+    db.add(setting)
+    await db.flush()
+    await select_connection(db, job, 'provider', 'openai', setting.id)
+
+
+async def test_provider_factor_alternatives_need_explicit_owned_connections(results_db, monkeypatch, tmp_path):
+    from asaree.services import package_reconstruction, package_setup
+
+    db, scope, _, owner = results_db
+    settings = storage_settings(tmp_path / 'provider-setup')
+    monkeypatch.setattr('asaree.services.managed_storage.get_settings', lambda: settings)
+    experiment = await db.get(ResearchExperiment, scope.experiment_id)
+    protocol = await db.get(Protocol, scope.protocol_id)
+    experiment.design_spec = {'factors': [{'name': 'Models', 'levels': [
+        {'provider': 'openai', 'model': 'first'}, {'provider': 'anthropic', 'model': 'second'}]}]}
+    protocol.graph = {'nodes': [{'id': 'model', 'type': 'model_openai', 'data': {
+        'config': {'provider': 'openai', 'model': 'first'}, 'factor_bindings': {'config': 'Models'}}}], 'edges': []}
+    job = PackageImport(id=uuid.uuid4(), owner_id=owner.id, experiment_id=experiment.id, status='completed',
+        request_key=uuid.uuid4().hex, preflight={}, progress={}, expires_at=datetime.now(UTC) + timedelta(days=1))
+    db.add(job)
+    await db.flush()
+    await select_test_provider(db, job)
+    with pytest.raises(ValueError, match='anthropic'):
+        await package_reconstruction.require_configured(db, experiment.id)
+    anthropic = UserLLMSetting(user_id=owner.id, provider='anthropic', api_key_encrypted='destination-anthropic')
+    db.add(anthropic)
+    await db.flush()
+    with pytest.raises(ValueError, match='authorized'):
+        await package_setup.select_connection(db, job, 'provider', 'openai', anthropic.id)
+    await package_setup.select_connection(db, job, 'provider', 'anthropic', anthropic.id)
+    await package_reconstruction.require_configured(db, experiment.id)
+    assert job.configured_at is None
+    assert anthropic.api_key_encrypted == 'destination-anthropic'
 
 
 @pytest.mark.parametrize('repair', ['split', 'rebind'])
@@ -135,7 +181,8 @@ async def test_missing_pinned_split_blocks_configuration_until_repaired(
         protocol.graph = draft
         expected_split = None
     await db.flush()
-    await api.configuration(job.id, command, db, owner)
+    await select_test_provider(db, job)
+    assert job.configured_at is None
     await publish_protocol_endpoint(protocol.id, owner, db)
     publication = await db.get(ProtocolRevision, protocol.published_revision_id)
     pin = publication.dataset_inputs['inputs'][0]
@@ -164,17 +211,134 @@ async def resource_db():
     await engine.dispose()
 
 
+@pytest_asyncio.fixture
+async def destination_results_db():
+    async for value in _results_db.__wrapped__():
+        yield value
+
+
+@pytest_asyncio.fixture
+async def destination_resource_db():
+    async for value in resource_db.__wrapped__():
+        yield value
+
+
+@pytest.mark.parametrize('builtin_state', ['compatible', 'incompatible', 'ambiguous'])
+async def test_destination_services_and_explicit_custom_mapping(
+    results_db, resource_db, destination_results_db, destination_resource_db,
+    tmp_path, monkeypatch, builtin_state,
+):
+    from asaree.services import package_reconstruction, package_setup
+    from asaree.services.package_reconstruction import readiness_issues
+
+    source_db, scope, _, source_owner = results_db
+    db, _, _, owner = destination_results_db
+    settings = storage_settings(tmp_path / 'destination')
+    monkeypatch.setattr('asaree.config.get_settings', lambda: settings)
+    monkeypatch.setattr('asaree.services.managed_storage.get_settings', lambda: settings)
+    source_builtin = MCPServerConfig(id=uuid.uuid4(), name='Source built-in', is_system=True,
+        transport=MCPTransport.STDIO, command='uv run --directory /source python -m asaree_sklearn_eda',
+        stdio_env_encrypted='SOURCE_SECRET', capabilities={'tools': [{'name': 'describe'}]})
+    source_custom = MCPServerConfig(id=uuid.uuid4(), name='Source custom', owner_id=source_owner.id,
+        transport=MCPTransport.HTTP, url='https://source.invalid/SECRET',
+        headers_encrypted='SOURCE_SECRET', capabilities={'tools': [{'name': 'custom'}]})
+    resource_db.add_all([source_builtin, source_custom])
+    await resource_db.flush()
+    job = PackageImport(id=uuid.uuid4(), owner_id=owner.id, request_key=uuid.uuid4().hex,
+        status='queued', preflight={}, progress={}, expires_at=datetime.now(UTC) + timedelta(days=1))
+    db.add(job)
+    await db.flush()
+    root = imports.directory(job.id)
+    stage = root / 'writer'
+    stage.mkdir(parents=True)
+    graph = {'nodes': [
+        {'id': 'agent', 'type': 'agent', 'data': {'config': {'system_prompt': 'Do nothing'}}},
+        {'id': 'model', 'type': 'model_openai', 'data': {'config': {'provider': 'openai', 'model': 'gpt-test'}}},
+        {'id': 'builtin', 'type': 'mcp_tool', 'data': {'config': {
+            'server_id': str(source_builtin.id), 'server_name': source_builtin.name, 'tool_names': ['describe']}}},
+        {'id': 'custom', 'type': 'mcp_tool', 'data': {'config': {
+            'server_id': str(source_custom.id), 'server_name': source_custom.name, 'tool_names': ['custom']},
+            'factor_bindings': {'config.server_id': 'Connection'}}}],
+        'edges': [{'source': 'model', 'target': 'agent', 'targetHandle': 'model'}]}
+    design_spec = {'factors': [{'name': 'Connection', 'levels': [str(source_custom.id)]}]}
+    writer = packages.PackageWriter(root / 'archive.tar.gz', stage)
+    writer.json('publication/canvas.json', graph)
+    writer.json('publication/settings.json', {'design_spec': design_spec})
+    writer.json('experiment-metadata.json', {'name': 'Service portability'})
+    for server in (source_builtin, source_custom):
+        await packages._server(resource_db, writer, {'server_id': str(server.id)}, source_owner.id)
+    writer.finish({'format': 'asaree.experiment-package', 'schema_version': 2,
+        'experiment_id': str(scope.experiment_id), 'protocol_id': str(scope.protocol_id),
+        'publication': {'id': str(scope.protocol_revision_id), 'version': 1}, 'results_included': False})
+    job.preflight = inspect(root / 'archive.tar.gz', root / 'payload', Limits(), threading.Event())
+    requirements = ''.join(path.read_text() for path in (root / 'payload/requirements/mcp').glob('*.json'))
+    assert 'SOURCE_SECRET' not in requirements
+    destination_builtin = MCPServerConfig(id=uuid.uuid4(), name='Renamed built-in', is_system=True,
+        transport=MCPTransport.STDIO, command='uv run --directory /destination python -m asaree_sklearn_eda',
+        stdio_env_encrypted='DESTINATION_SECRET', capabilities={'tools': [
+            {'name': 'describe' if builtin_state != 'incompatible' else 'other'}]})
+    custom = MCPServerConfig(id=uuid.uuid4(), name='Destination custom', owner_id=owner.id,
+        transport=MCPTransport.HTTP, url='https://destination.invalid', headers_encrypted='DESTINATION_HEADERS',
+        capabilities={'tools': [{'name': 'custom'}]})
+    foreign = MCPServerConfig(id=uuid.uuid4(), name='Foreign custom', owner_id=source_owner.id,
+        transport=MCPTransport.HTTP, url='https://foreign.invalid', capabilities={'tools': [{'name': 'custom'}]})
+    destination_resource_db.add_all([destination_builtin, custom, foreign])
+    if builtin_state == 'ambiguous':
+        destination_resource_db.add(MCPServerConfig(id=uuid.uuid4(), name='Second built-in', is_system=True,
+            transport=MCPTransport.STDIO, command='python -m asaree_sklearn_eda',
+            capabilities={'tools': [{'name': 'describe'}]}))
+    await destination_resource_db.flush()
+    importer = Reconstruction(db, job, root / 'payload', Limits())
+    job.experiment_id = await importer.activate(destination_resource_db)
+    job.status = 'completed'
+    await db.flush()
+    protocol = await db.scalar(select(Protocol).where(Protocol.experiment_id == job.experiment_id))
+    builtin = next(node for node in protocol.graph['nodes'] if node['id'] == 'builtin')
+    assert (builtin['data']['config']['server_id'] == str(destination_builtin.id)) == (builtin_state == 'compatible')
+    owned_requirement = await db.get(ImportedIdentity, (job.id, 'mcp', str(source_builtin.id)))
+    assert owned_requirement.local_id not in {source_builtin.id, destination_builtin.id}
+    @asynccontextmanager
+    async def destination_resources(**kwargs):
+        yield destination_resource_db
+    monkeypatch.setattr(package_reconstruction, 'system_session', destination_resources)
+    monkeypatch.setattr(package_setup, 'system_session', destination_resources)
+    options = await package_setup.setup_options(db, job)
+    with pytest.raises(HTTPException) as publication_error:
+        await publish_protocol_endpoint(protocol.id, owner, db)
+    assert publication_error.value.status_code == 422
+    assert publication_error.value.detail['message'] == 'Setup needed'
+    assert any(issue['node_id'] == 'model' for issue in publication_error.value.detail['issues'])
+    requirement = next(item for item in options['mcp'] if item['source_id'] == str(source_custom.id))
+    assert [candidate['id'] for candidate in requirement['candidates']] == [str(custom.id)]
+    with pytest.raises(ValueError):
+        await package_setup.select_connection(db, job, 'mcp', str(source_custom.id), foreign.id)
+    await package_setup.select_connection(db, job, 'mcp', str(source_custom.id), custom.id)
+    experiment = await db.get(ResearchExperiment, job.experiment_id)
+    assert experiment.design_spec['factors'][0]['levels'][0]['server_id'] == str(custom.id)
+    assert experiment.design_spec['factors'][0]['levels'][0]['server_name'] == custom.name
+    assert experiment.design_spec['factors'][0]['level_type'] == 'tool_config'
+    custom_node = next(node for node in protocol.graph['nodes'] if node['id'] == 'custom')
+    assert custom_node['data']['config']['server_name'] == custom.name
+    await select_test_provider(db, job)
+    issues = await readiness_issues(db, job)
+    assert not issues if builtin_state == 'compatible' else issues[0]['node_id'] == 'builtin'
+    assert destination_builtin.stdio_env_encrypted == 'DESTINATION_SECRET'
+    assert destination_builtin.command.startswith('uv run --directory /destination')
+    assert custom.headers_encrypted == 'DESTINATION_HEADERS' and custom.url == 'https://destination.invalid'
+    assert await source_db.get(ResearchExperiment, job.experiment_id) is None
+
+
 @pytest.mark.parametrize('mode', ['whole_dataset', 'per_row'])
 @pytest.mark.parametrize('include_results', [False, True])
 async def test_export_import_independent_owner_and_reexport(
-    results_db, resource_db, tmp_path, monkeypatch, mode, include_results,
+    results_db, resource_db, destination_results_db, destination_resource_db,
+    tmp_path, monkeypatch, mode, include_results,
 ):
     db, scope, cell, owner = results_db
-    destination_owner = User(email=f'{uuid.uuid4()}@example.test', hashed_password='test', display_name='Destination')
-    db.add(destination_owner)
-    await db.flush()
-    settings = AsareeSettings(_env_file=None, data_root=str(tmp_path / 'storage'))
+    destination_db, _, _, destination_owner = destination_results_db
+    settings = storage_settings(tmp_path / 'storage')
     monkeypatch.setattr('asaree.config.get_settings', lambda: settings)
+    monkeypatch.setattr('asaree.services.managed_storage.get_settings', lambda: settings)
     monkeypatch.setattr('asaree.services.datasets.get_settings', lambda: settings)
     monkeypatch.setattr(okf_bundles, 'get_settings', lambda: settings)
     monkeypatch.setattr(okf_documents, 'get_settings', lambda: settings)
@@ -286,8 +450,8 @@ async def test_export_import_independent_owner_and_reexport(
         await quick_split_dataset(db, dataset=secondary, seed=3)
     job = PackageImport(id=uuid.uuid4(), owner_id=destination_owner.id, request_key=uuid.uuid4().hex,
                         status='queued', preflight={}, progress={}, expires_at=datetime.now(UTC) + timedelta(days=1))
-    db.add(job)
-    await db.flush()
+    destination_db.add(job)
+    await destination_db.flush()
     root = imports.directory(job.id)
     root.mkdir(parents=True)
     staging = root / 'writer'
@@ -346,6 +510,20 @@ async def test_export_import_independent_owner_and_reexport(
         'experiment_id': str(scope.experiment_id), 'protocol_id': str(scope.protocol_id),
         'publication': {'id': str(publication.id), 'version': 1},
         'design_revision_id': str(scope.design_revision_id), 'results_included': include_results})
+    # Cross-installation boundary: independent PostgreSQL schemas, owners,
+    # registrations, managed roots and saved credentials. Only archive bytes cross.
+    archive_bytes = archive.read_bytes()
+    source_root = root
+    settings = storage_settings(tmp_path / 'destination-storage')
+    root = imports.directory(job.id)
+    assert root != source_root
+    root.mkdir(parents=True)
+    archive = root / 'archive.tar.gz'
+    archive.write_bytes(archive_bytes)
+    db, resource_db = destination_db, destination_resource_db
+    assert await db.get(RegisteredDataset, dataset.id) is None
+    assert await resource_db.get(Skill, skill.id) is None
+    assert await resource_db.get(MCPServerConfig, server.id) is None
     summary = inspect(archive, root / 'payload', Limits(), threading.Event())
     job.preflight, job.sha256 = summary, hashlib.sha256(archive.read_bytes()).hexdigest()
     importer = Reconstruction(db, job, root / 'payload', Limits())
@@ -382,7 +560,8 @@ async def test_export_import_independent_owner_and_reexport(
     for path, encoding, content, position in nested_resources:
         restored = local_files[path]
         assert (restored.encoding, restored.content, restored.position) == (encoding, content, position)
-    with pytest.raises(ValueError, match='local dependency'):
+    monkeypatch.setattr('asaree.services.package_reconstruction.system_session', resource_session)
+    with pytest.raises(ValueError, match='destination openai'):
         await require_configured(db, experiment_id)
     assert await db.scalar(select(func.count()).select_from(ProtocolRun).where(
         ProtocolRun.owner_id == destination_owner.id)) == 0
@@ -415,12 +594,12 @@ async def test_export_import_independent_owner_and_reexport(
     monkeypatch.setattr(sampling_snapshots, 'resolve_discovery_context', AsyncMock(return_value={
         'provider': 'openai', 'credential_revision': 'local-fixture', 'discovered_at': None}))
     monkeypatch.setattr(package_reconstruction, 'system_session', resource_session)
+    await select_test_provider(db, job)
     async def read_local_server(identifier):
         return await resource_db.get(MCPServerConfig, identifier)
     monkeypatch.setattr('asaree.services.reported_metrics.mcp_service.get_server', read_local_server)
     await db.flush()
-    await api.configuration(job.id, api.Configuration(connections_configured=True, dependencies_resolved=True),
-                            db, destination_owner)
+    assert job.configured_at is None  # Normal publication needs no separate acknowledgement.
     await publish_protocol_endpoint(protocol.id, destination_owner, db)
     local_publication = await db.get(ProtocolRevision, protocol.published_revision_id)
     assert local_publication.dataset_inputs['bindings'] == publication.dataset_inputs['bindings']
@@ -474,6 +653,16 @@ async def test_export_import_independent_owner_and_reexport(
             nested = reexport.extractfile(f'sources/{job.id}/source.tar.gz').read()
             assert hashlib.sha256(nested).hexdigest() == job.sha256
     assert manifest['schema_version'] == 2
+    # Later draft setup changes do not revoke an immutable local publication.
+    broken = copy.deepcopy(protocol.graph)
+    broken_dataset = next(node for node in broken['nodes'] if node['type'] == 'dataset')
+    broken_dataset['data']['config']['dataset_id'] = str(uuid.uuid4())
+    protocol.graph = broken
+    await db.flush()
+    with pytest.raises(ValueError, match='Dataset dependency'):
+        await require_configured(db, experiment_id)
+    await require_configured(db, experiment_id, validate_draft=False)
+    assert local_publication.graph != broken
 
 
 async def test_v1_skill_binary_content_is_restored_with_explicit_unknown_source_metadata(

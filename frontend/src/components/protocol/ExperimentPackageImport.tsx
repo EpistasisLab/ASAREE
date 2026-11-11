@@ -11,6 +11,7 @@ import type { PackageImport } from '@/types/packageImports'
 import { newRequestKey } from '@/lib/requestKey'
 import { FileDropInput } from './FileDropInput'
 import { JsonSourceViewer } from './JsonSourceViewer'
+import { ImportedExperimentSetup } from './ImportedExperimentSetup'
 
 const provenanceLabels: Record<string, string> = {
   publication_pinned: 'Published snapshot',
@@ -99,7 +100,6 @@ export function ExperimentPackageImport({ experimentId }: { experimentId?: strin
   const [file, setFile] = useState<File | null>(null)
   const [selected, setSelected] = useState<string | null>(null)
   const [offset, setOffset] = useState(0)
-  const [acknowledged, setAcknowledged] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [uploading, setUploading] = useState(false)
   const [preview, setPreview] = useState<{ importId: string; path: string; text?: string; error?: string; loading: boolean } | null>(null)
@@ -170,7 +170,7 @@ export function ExperimentPackageImport({ experimentId }: { experimentId?: strin
     setPreview(null)
   }
   const select = (item: PackageImport) => {
-    setSelected(item.id); setOffset(0); setAcknowledged(false); setError(null); closePreview()
+    setSelected(item.id); setOffset(0); setError(null); closePreview()
   }
 
   return <Card>
@@ -255,12 +255,7 @@ export function ExperimentPackageImport({ experimentId }: { experimentId?: strin
           }}>Cancel import</Button>}
           {current.experiment_id && <Button render={<Link to={`/experiments/${current.experiment_id}/protocol`} />}>Open editable draft</Button>}
         </div>
-        {current.status === 'completed' && !current.configured_at && <div className="space-y-2">
-          <p className="text-sm">Open the editable draft to configure model connections and resolve missing datasets, skills, or tools. Return here to confirm local setup before publishing the experiment.</p>
-          <p className="text-xs text-muted-foreground">This checks local dependency records and unlocks publication. It does not test credentials or connect to external services.</p>
-          <label className="flex gap-2 text-sm"><input type="checkbox" checked={acknowledged} onChange={(event) => setAcknowledged(event.target.checked)} />I configured local connections and resolved required dependencies.</label>
-          <Button disabled={!acknowledged} onClick={() => void packageImportsApi.configure(current.id).then(() => job.refetch()).catch((cause: unknown) => setError(String(cause)))}>Acknowledge local configuration</Button>
-        </div>}
+        {current.status === 'completed' && current.experiment_id && !experimentId && <ImportedExperimentSetup importId={current.id} experimentId={current.experiment_id} />}
       </div>}
     </CardContent>
     <Dialog open={preview !== null && preview.importId === selected} onOpenChange={open => { if (!open) closePreview() }}>

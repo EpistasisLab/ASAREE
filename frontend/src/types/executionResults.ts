@@ -11,7 +11,8 @@ export interface ExecutionFilters {
 export interface ResultJob {
   id: string; kind: 'plan' | 'cancel' | 'export'
   status: 'pending' | 'awaiting_confirmation' | 'queued' | 'running' | 'completed' | 'failed' | 'cancelled' | 'expired'
-  progress: { scanned?: number; planned?: number; created?: number; skipped?: number; cancelled?: number; bytes?: number; cell_count?: number; replicate_count?: number; sha256?: string }
+  progress: { scanned?: number; planned?: number; created?: number; skipped?: number; cancelled?: number; bytes?: number; cell_count?: number; replicate_count?: number; sha256?: string
+    completeness?: { status: string; unresolved_count: number; included_dependencies: number; destination_connections: number; issues: { id: string; kind: string; reason: string }[] } }
   error: string | null; protocol_revision_id: string | null; download_url?: string; schema_url?: string
 }
 export interface UsageSummary {

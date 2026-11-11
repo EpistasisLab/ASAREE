@@ -26,7 +26,7 @@ class PackageImport(Base, TimestampMixin):
     experiment_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("research_experiments.id", ondelete="SET NULL"))
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     generation: Mapped[int] = mapped_column(Integer, default=0)
-    # Explicit local configuration acknowledgement is separate from source facts.
+    # Legacy acknowledgement timestamp; current readiness never uses it as a gate.
     configured_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 

@@ -42,7 +42,9 @@ def test_archive_hashes_inventory_and_tar_metadata_are_bounded(tmp_path):
     result = writer.finish({"schema_version": 1})
     contents = unpack(tmp_path)
     inventory = [json.loads(line) for line in contents["files.jsonl"].splitlines()]
-    assert result["completeness"] == {"status": "incomplete", "unresolved_count": 1}
+    assert result["completeness"] == {"status": "incomplete", "unresolved_count": 1,
+        "included_dependencies": 0, "destination_connections": 0,
+        "issues": [{"id": "missing", "kind": "dataset", "reason": "missing"}]}
     assert result["file_count"] == 1251
     for record in [*inventory, result["files"]]:
         assert record["sha256"] == hashlib.sha256(contents[record["path"]]).hexdigest()

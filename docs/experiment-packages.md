@@ -181,16 +181,47 @@ New local exports retain source manifests/publications and typed mappings under
 as an opaque nested evidence file. Nested archives are never executed or used
 as native runtime state.
 
-Configure the draft's model credentials, MCP connections and unresolved
-dependencies locally, acknowledge configuration, then use normal publication.
-Acknowledgement checks owned dataset/Skill/server dependencies without connecting
-to external services. Normal publication resolves new local sampling/input
+Open the imported experiment's editable draft. Its setup panel reports **Ready to
+publish** or **Setup needed**, with links to affected canvas nodes. Select saved
+destination provider connections and compatible custom MCP connections there;
+multiple compatible connections always require an explicit selection. Missing
+credentials can be configured in Profile. Refresh readiness after setup changes.
+Normal publication validates the current draft and every factor alternative;
+there is no acknowledgement checkbox and no return to the upload screen.
+Incomplete drafts remain editable and source evidence remains inspectable.
+Readiness checks saved records only; live connection tests are explicit actions.
+Normal publication resolves new local sampling/input
 snapshots; it does not rewrite the preserved source evidence. Resource names
 receive an import-specific suffix to avoid collisions. Canvas node IDs remain
 protocol-scoped labels because prompts may address them; new protocol ownership
 creates a fresh identity namespace. Only typed resource references, selections
 and bound factor alternatives are remapped. Opaque strings, scripts, prompts,
 dataset values, observation values and provenance are not searched/replaced.
+
+Imported content receives fresh owned identities, including imported MCP
+requirement identities. Runtime bindings may reference authorized destination
+system services or explicitly selected owned connections. These bindings are
+recorded separately from source-to-local content mappings. New packages record
+stable built-in service identities derived from shipped modules; automatic
+matching requires a trusted system registration, the same service identity,
+all recorded required tools and exactly one compatible destination. The additive
+`service_identity` and `required_tool_names` requirement fields are supported in
+schema 2; required tools include the union of factor alternatives and implicit
+dataset/Script grants. Older requirements without a required-tool subset use
+their recorded full tool list conservatively. Display
+names and source owner IDs never establish compatibility or authorization.
+Older packages without service identities require explicit selection. Destination
+commands, URLs, environment and credentials remain untouched. Scalar MCP identity
+factor alternatives become complete configurations so each selected identity
+retains its matching destination runtime name. Opaque values remain unchanged.
+
+Before downloading a prepared export, the dialog separates included dependencies,
+destination connection requirements and missing/unresolved content. Incomplete
+packages are labelled explicitly and retain actionable dependency diagnostics
+(up to 100 in the summary; the full inventory remains in the package). Connection
+requirements alone do not make content incomplete. The selected historical
+publication remains authoritative; missing history never uses current content.
+Use **Publish & prepare package** to download current draft changes instead.
 
 ### API
 
@@ -210,9 +241,15 @@ All routes below require the importing user's authentication:
    `GET .../{id}/source?path=publication/canvas.json` downloads one original file.
    Omitting `path` re-exports the original source archive byte-for-byte.
    `GET .../{id}/identities?offset=0&limit=50` pages durable typed provenance.
-6. After configuring the editable draft, `POST .../{id}/configuration` with
-   `{"connections_configured":true,"dependencies_resolved":true}` acknowledges
-   local configuration. It does not publish or start execution.
+6. `GET .../{id}/readiness` returns read-only readiness issues with `node_id`,
+   compatible authorized MCP candidates, and saved provider selections.
+   `POST .../{id}/connections` with `{"kind":"mcp","source_id":"source-uuid",
+   "destination_id":"destination-uuid"}` explicitly selects an existing
+   connection. Use `"kind":"provider"` and a provider key such as `"openai"`
+   as `source_id` to select that user's saved provider setting. These actions
+   never connect, test credentials, or invoke packaged code. Publish using the
+   normal protocol publication endpoint. The legacy `/configuration` endpoint
+   remains compatible but its timestamp does not unlock or gate publication.
 
 `GET /api/experiment-package-imports?experiment_id={id}` finds an experiment's
 source history; omitting the filter returns the newest 50 owned requests.
@@ -283,8 +320,10 @@ connection is invoked by inspection or reconstruction.
 | Attributable durable output/artifact files | Exact source files with hashes and attempt attribution; re-exportable source evidence |
 | Missing/excluded dependencies and unavailable history | Visible diagnostics and preserved inventories; no same-name substitution |
 
-The PostgreSQL tests cover independent owners and both dataset modes, exact CSV
-and binary Skill bytes, publication after acknowledgement, source re-export,
+The PostgreSQL tests cover isolated source/destination product and resource
+schemas, different owners/storage paths/credentials, both dataset modes, exact
+CSV/split/binary Skill bytes, publication readiness, built-in compatibility and
+ambiguity, explicit custom mapping, factor alternatives, source re-export,
 ownership isolation and cross-database crash/retry/cancel boundaries. Archive
 tests cover corruption, unsafe members, limits, compatibility and non-execution.
 Native Motoro step/resume histories were never exported and cannot be restored.

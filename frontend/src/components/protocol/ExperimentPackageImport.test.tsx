@@ -99,18 +99,15 @@ it('prevents additional drops and file selection while uploading', async () => {
   expect(upload).toHaveBeenCalledOnce()
 })
 
-it('keeps source history and local-configuration acknowledgement distinct', async () => {
+it('shows readiness and a direct draft link without an acknowledgement gate', async () => {
   const complete = { ...ready, status: 'completed', experiment_id: 'local-experiment' }
-  const configure = vi.spyOn(packageImportsApi, 'configure').mockResolvedValue(complete)
+  vi.spyOn(packageImportsApi, 'readiness').mockResolvedValue({ ready: true, issues: [], mcp: [], providers: [] })
   show([complete])
   vi.mocked(packageImportsApi.get).mockResolvedValue(complete)
   fireEvent.click(await screen.findByRole('button', { name: /request.*Imported/ }))
-  const acknowledge = await screen.findByRole('button', { name: 'Acknowledge local configuration' })
-  expect(acknowledge).toBeDisabled()
+  expect(await screen.findByText('Ready to publish')).toBeInTheDocument()
   expect(screen.getByRole('link', { name: 'Open editable draft' })).toHaveAttribute('href', '/experiments/local-experiment/protocol')
-  fireEvent.click(screen.getByRole('checkbox'))
-  fireEvent.click(acknowledge)
-  await waitFor(() => expect(configure).toHaveBeenCalledWith('request'))
+  expect(screen.queryByRole('checkbox')).not.toBeInTheDocument()
 })
 
 it('inspects immutable observation evidence without coercing null or unavailable values', async () => {

@@ -181,7 +181,8 @@ export const packageImportsApi = {
   command: (id: string, command: 'confirm' | 'cancel' | 'retry') => request<PackageImport>(`${importBase}/${id}/${command}`, { method: 'POST' }),
   files: (id: string, offset = 0) => request<{ items: PackageFile[]; next_offset: number | null }>(`${importBase}/${id}/files?offset=${offset}`),
   source: (id: string, path?: string) => requestBlob(`${importBase}/${id}/source${path ? `?path=${encodeURIComponent(path)}` : ''}`),
-  configure: (id: string) => request<PackageImport>(`${importBase}/${id}/configuration`, { method: 'POST', body: { connections_configured: true, dependencies_resolved: true } }),
+  readiness: (id: string) => request<import('@/types/packageImports').ImportReadiness>(`${importBase}/${id}/readiness`),
+  selectConnection: (id: string, kind: 'mcp' | 'provider', sourceId: string, destinationId: string) => request<import('@/types/packageImports').ImportReadiness>(`${importBase}/${id}/connections`, { method: 'POST', body: { kind, source_id: sourceId, destination_id: destinationId } }),
 }
 
 export const authApi = {

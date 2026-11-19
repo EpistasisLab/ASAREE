@@ -89,6 +89,7 @@ class Reconstruction:
         self.maps: dict[tuple[str, str], str] = {}
         self.names: dict[tuple[str, str], str] = {}
         self.knowledge_namespaces: dict[str, str] = {}
+        self.runtime_bindings: dict[str, str] = {}
 
     async def report(self, phase: str, scanned: int) -> None:
         if self.progress is not None and scanned % 25 == 0:
@@ -184,6 +185,10 @@ class Reconstruction:
             split = self.maps.get(('split', pin.get('split_id')))
             if split:
                 loaded.current_split_id = uuid.UUID(split)
+            elif pin.get('split_id'):
+                # A missing source split is a requirement, never an explicit
+                # original-only selection. Keep it across worker restarts.
+                self.map('unresolved_split', pin['split_id'], pin=pin)
         await self.db.flush()
         return dataset_ids
 
@@ -255,6 +260,7 @@ class Reconstruction:
     async def servers(self, motoro: AsyncSession) -> None:
         from asaree.services import okf_documents
         from asaree.services.okf_bundles import command_for_bundle, server_name_for
+        from asaree.services.package_connections import automatic_match
 
         for file in (self.root / 'requirements/mcp').glob('*.json'):
             source = self.read(file.relative_to(self.root).as_posix())
@@ -269,6 +275,20 @@ class Reconstruction:
                 dep for dep in records(self.root / 'dependencies.jsonl', self.limits)
                 if dep.get('kind') == 'knowledge' and dep.get('id') == source_id and dep.get('status') == 'included'
             ), None)
+            destination_server = None
+            if included is None and source.get('service_identity'):
+                authorized = list((await motoro.scalars(select(MCPServerConfig).where(
+                    (MCPServerConfig.owner_id == self.job.owner_id) | MCPServerConfig.is_system.is_(True),
+                ))).all())
+                destination_server = automatic_match(source, authorized)
+            if destination_server is not None:
+                self.runtime_bindings[source_id] = str(destination_server.id)
+                self.names['mcp', source_id] = destination_server.name
+                self.db.add(ImportedIdentity(import_id=self.job.id, kind='runtime_mcp', source_id=source_id,
+                    local_id=destination_server.id, provenance={'requirement_id': str(local),
+                        'service_identity': source['service_identity'], 'selection': 'automatic'}))
+                # The owned requirement identity remains separate from its runtime binding.
+                continue
             if included is not None:
                 if included.get('directory') != f'resources/knowledge/{source_id}':
                     raise PackageError('Knowledge directory and identity disagree')
@@ -332,7 +352,7 @@ class Reconstruction:
                 name_field = 'dataset_name' if category == 'dataset' else 'skill_name'
                 result[name_field] = self.names.get((category, source), f'unresolved-{result[field]}')
             if category in {'knowledge', 'mcp'}:
-                result[field] = str(self.map('mcp', source))
+                result[field] = self.runtime_bindings.get(source) or str(self.map('mcp', source))
                 result['server_name'] = self.names.get(('mcp', source), f'unconfigured-import-{result[field]}')
             if category == 'knowledge':
                 key = 'document_path' if kind == 'okf_document' else 'bundle_path'
@@ -353,6 +373,7 @@ class Reconstruction:
         graph.pop('sampling_snapshot_version', None)
         factors = {f['name']: f for f in (settings.get('design_spec') or {}).get('factors', [])}
         rewrites: dict[str, tuple[str, str]] = {}
+        base_configs: dict[str, dict[str, Any]] = {}
         for node in graph.get('nodes', []):
             kind, data = node['type'], node.setdefault('data', {})
             data['config'] = self.config(kind, data.get('config') or {})
@@ -360,15 +381,23 @@ class Reconstruction:
                                    ('knowledge_selection', 'knowledge')):
                 if isinstance(data.get(path), list):
                     data[path] = [str(self.map(category, source)) for source in data[path]]
-            for path, factor in (data.get('factor_bindings') or {}).items():
+            for path, factor in list((data.get('factor_bindings') or {}).items()):
                 if path in {'config', 'config.dataset_id', 'config.skill_id', 'config.bundle_id',
                             'config.document_id', 'config.server_id', 'dataset_selection',
                             'skill_selection', 'knowledge_selection'}:
                     rewrites[factor] = kind, path
+                    base_configs[factor] = deepcopy((node.get('data') or {}).get('config') or {})
+                    if path == 'config.server_id' and kind in {'mcp_tool', 'mcp_client_tool', 'mcp_scikit_learn'}:
+                        # Runtime tool dispatch uses both ID and name. A scalar
+                        # alternative must carry its matching destination name.
+                        data['factor_bindings'] = {'config': factor, **{
+                            key: value for key, value in data['factor_bindings'].items() if key != path}}
         for name, (kind, path) in rewrites.items():
             factor = factors.get(name)
             if factor is None:
                 continue
+            if path == 'config.server_id' and kind in {'mcp_tool', 'mcp_client_tool', 'mcp_scikit_learn'}:
+                factor['level_type'] = 'tool_config'
             levels: list[Any] = []
             for level in factor.get('levels', []):
                 if path == 'config' and isinstance(level, dict):
@@ -379,7 +408,10 @@ class Reconstruction:
                     levels.append([str(self.map(category, source)) for source in level])
                 elif path.startswith('config.'):
                     key = path.split('.')[1]
-                    levels.append(self.config(kind, {key: level})[key])
+                    if path == 'config.server_id' and kind in {'mcp_tool', 'mcp_client_tool', 'mcp_scikit_learn'}:
+                        levels.append(self.config(kind, {**base_configs[name], key: level}))
+                    else:
+                        levels.append(self.config(kind, {key: level})[key])
                 else:
                     levels.append(deepcopy(level))
             factor['levels'] = levels
@@ -387,7 +419,8 @@ class Reconstruction:
             if producer.get('producer_id') == 'asaree.mcp_tool':
                 config = producer.get('config') or {}
                 if config.get('server_id'):
-                    config['server_id'] = str(self.map('mcp', config['server_id']))
+                    source = config['server_id']
+                    config['server_id'] = self.runtime_bindings.get(source) or str(self.map('mcp', source))
         return graph, settings
 
     async def activate(self, motoro: AsyncSession) -> uuid.UUID:
@@ -468,28 +501,84 @@ class Reconstruction:
         return experiment_id
 
 
-async def require_configured(db: AsyncSession, experiment_id: uuid.UUID | None) -> None:
-    if experiment_id is not None and await db.scalar(select(PackageImport.id).where(
-        PackageImport.experiment_id == experiment_id,
-        (PackageImport.configured_at.is_(None)) | (PackageImport.status != 'completed'),
-    )):
-        raise ValueError('Imported experiment requires explicit local dependency and connection configuration.')
+async def require_configured(db: AsyncSession, experiment_id: uuid.UUID | None, *, validate_draft: bool = True) -> None:
+    if experiment_id is None:
+        return
+    jobs = (await db.scalars(select(PackageImport).where(PackageImport.experiment_id == experiment_id))).all()
+    for job in jobs:
+        if job.status != 'completed':
+            raise ValueError('Imported experiment activation is incomplete.')
+        if validate_draft:
+            await validate_local_dependencies(db, job)
 
 
 async def validate_local_dependencies(db: AsyncSession, job: PackageImport) -> None:
-    """Read-only validation of every typed alternative; never connect or invoke tools."""
+    issues = await readiness_issues(db, job)
+    if issues:
+        raise ReadinessError(issues)
+
+
+class ReadinessError(ValueError):
+    def __init__(self, issues: list[dict[str, Any]]):
+        self.issues = issues
+        super().__init__('; '.join(issue['message'] for issue in issues))
+
+
+async def readiness_issues(db: AsyncSession, job: PackageImport) -> list[dict[str, Any]]:
+    issues: list[dict[str, Any]] = []
     protocol = await db.scalar(select(Protocol).where(Protocol.experiment_id == job.experiment_id,
                                                      Protocol.owner_id == job.owner_id))
+    if protocol is None:
+        return [{'message': 'Imported editable draft is unavailable', 'node_id': None}]
     experiment = await db.get(ResearchExperiment, job.experiment_id)
-    if protocol is None or experiment is None:
+    for node in protocol.graph.get('nodes', []):
+        try:
+            await validate_node_dependencies(db, job, node, experiment)
+        except ValueError as exc:
+            issues.append({'node_id': node['id'], 'message': str(exc)})
+    from asaree.services.package_setup import runtime_requirement_issues
+
+    issues.extend(await runtime_requirement_issues(db, job, protocol.graph,
+                                                  experiment.design_spec if experiment else None))
+    return issues
+
+
+async def validate_node_dependencies(db: AsyncSession, job: PackageImport, source_node: dict[str, Any],
+                                     experiment: ResearchExperiment | None) -> None:
+    """Read-only validation of every typed alternative; never connect or invoke tools."""
+    if experiment is None:
         raise PackageError('Imported editable draft is unavailable')
+    unresolved_splits = (await db.scalars(select(ImportedIdentity).where(
+        ImportedIdentity.import_id == job.id, ImportedIdentity.kind == 'unresolved_split',
+    ))).all()
+    split_datasets = {
+        identity(job, 'dataset', requirement.provenance['pin']['dataset_id'])
+        for requirement in unresolved_splits
+    }
     async with system_session(
         reason='validate owned import dependency configuration without execution',
     ) as resources:
-        for node in protocol.graph.get('nodes', []):
+        for node in [source_node]:
             for variant in node_variants(node, experiment.design_spec):
                 kind, config = variant.get('type'), (variant.get('data') or {}).get('config') or {}
-                if kind == 'dataset':
+                if config.get('enabled', True) is False:
+                    continue
+                data = variant.get('data') or {}
+                for field, resource_kind, identifier in (
+                    ('dataset_selection', 'dataset', 'dataset_id'),
+                    ('skill_selection', 'skill', 'skill_id'),
+                    ('knowledge_selection', 'mcp_tool', 'server_id'),
+                ):
+                    for selected in data.get(field) or []:
+                        await validate_node_dependencies(db, job, {
+                            'id': node['id'], 'type': resource_kind,
+                            'data': {'config': {identifier: selected}},
+                        }, experiment)
+                if str(kind).startswith(('model_', 'llm_')):
+                    from asaree.services.package_setup import validate_model_connection
+
+                    await validate_model_connection(db, job, config, str(kind), node['id'])
+                elif kind == 'dataset':
                     try:
                         dataset = await db.scalar(select(RegisteredDataset).where(
                             RegisteredDataset.id == uuid.UUID(config.get('dataset_id') or ''),
@@ -498,6 +587,15 @@ async def validate_local_dependencies(db: AsyncSession, job: PackageImport) -> N
                         dataset = None
                     if dataset is None or dataset.raw_artifact is None or dataset.raw_artifact.status != 'ready':
                         raise PackageError(f'Dataset dependency remains unresolved: {node["id"]}')
+                    if dataset.id in split_datasets:
+                        split = dataset.current_split
+                        if (split is None or split.dataset_id != dataset.id
+                            or split.source_sha256 != dataset.raw_sha256
+                            or any(artifact is None or artifact.status != 'ready'
+                                   or artifact.dataset_id != dataset.id
+                                   for artifact in (split.train_artifact, split.test_artifact))):
+                            raise PackageError(f'Pinned split dependency remains unresolved: {node["id"]}. '
+                                               'Restore a local split or explicitly rebind the dataset.')
                 elif kind == 'skill':
                     try:
                         skill = await resources.scalar(select(Skill).where(
@@ -517,3 +615,7 @@ async def validate_local_dependencies(db: AsyncSession, job: PackageImport) -> N
                         server = None
                     if server is None or not (server.command or server.url):
                         raise PackageError(f'Local server connection remains unconfigured: {node["id"]}')
+                    from asaree.services.package_connections import compatible
+
+                    if not compatible({'tool_names': config.get('tool_names') or []}, server):
+                        raise PackageError(f'Local server lacks required tools: {node["id"]}')

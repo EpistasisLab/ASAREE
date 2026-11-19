@@ -16,12 +16,16 @@ export function FileDropInput({
   file,
   onChange,
   placeholder,
+  disabled = false,
+  ariaLabel,
 }: {
   id: string
   accept: string
   file: File | null
   onChange: (file: File | null) => void
   placeholder: string
+  disabled?: boolean
+  ariaLabel?: string
 }) {
   const [dragOver, setDragOver] = useState(false)
 
@@ -29,7 +33,7 @@ export function FileDropInput({
     e.preventDefault()
     setDragOver(false)
     const dropped = e.dataTransfer.files?.[0]
-    if (dropped) onChange(dropped)
+    if (!disabled && dropped) onChange(dropped)
   }
 
   return (
@@ -37,13 +41,14 @@ export function FileDropInput({
       htmlFor={id}
       onDragOver={(e) => {
         e.preventDefault()
-        setDragOver(true)
+        if (!disabled) setDragOver(true)
       }}
       onDragLeave={() => setDragOver(false)}
       onDrop={handleDrop}
       className={cn(
         'flex h-8 w-full cursor-pointer items-center gap-1.5 rounded-lg border border-dashed border-input px-2.5 text-sm text-muted-foreground transition-colors hover:bg-muted/50',
         dragOver && 'border-ring bg-muted/50 ring-3 ring-ring/50',
+        disabled && 'cursor-not-allowed opacity-50',
       )}
     >
       <Upload className="size-3.5 shrink-0" />
@@ -52,6 +57,8 @@ export function FileDropInput({
         id={id}
         type="file"
         accept={accept}
+        aria-label={ariaLabel}
+        disabled={disabled}
         className="sr-only"
         onChange={(e) => {
           const picked = e.target.files?.[0] ?? null

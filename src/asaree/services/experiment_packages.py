@@ -219,6 +219,9 @@ class PackageWriter:
         self.inventory = (staging / "files.jsonl").open("wb")
         self.dependencies = (staging / "dependencies.jsonl").open("wb")
         self.missing = 0
+        self.included = 0
+        self.connections = 0
+        self.issues: list[dict[str, Any]] = []
         self.count = 0
         self.stopping = threading.Event()
         self.checkpoint: Any = None
@@ -234,6 +237,12 @@ class PackageWriter:
                                          "status": status, **details}))
         if status in {"missing", "unresolved", "changed", "forbidden"}:
             self.missing += 1
+            if len(self.issues) < 100:
+                self.issues.append({"id": identity, "kind": kind, "reason": details.get("reason") or status})
+        elif details.get("external_requirement"):
+            self.connections += 1
+        elif status == "included":
+            self.included += 1
 
     def seen(self, kind: str, identity: str) -> bool:
         # Markers bound dedup memory independently of total resources/attempts.
@@ -313,7 +322,9 @@ class PackageWriter:
                               identity="files", inventory=False)
         manifest.update(files=file_index, dependencies=dependency_index, file_count=self.count,
                         completeness={"status": "incomplete" if self.missing else "complete",
-                                      "unresolved_count": self.missing})
+                                      "unresolved_count": self.missing,
+                                      "included_dependencies": self.included,
+                                      "destination_connections": self.connections, "issues": self.issues})
         path = self.staging / "manifest.json"
         path.write_bytes(encoded(manifest))
         self.add(path, "manifest.json", provenance="export_inventory", identity="manifest", inventory=False)
@@ -530,7 +541,7 @@ def capture_tree(writer: PackageWriter, root: Path, directory: str, identity: st
 
 
 async def _server(db: AsyncSession, writer: PackageWriter, config: dict[str, Any], owner: uuid.UUID,
-                  *, knowledge: bool = False) -> None:
+                  *, knowledge: bool = False, required_tools: dict[str, set[str]] | None = None) -> None:
     identity = config.get("bundle_id") or config.get("document_id") or config.get("server_id")
     name = config.get("server_name")
     lookup = str(identity or name or "unconfigured")
@@ -553,10 +564,18 @@ async def _server(db: AsyncSession, writer: PackageWriter, config: dict[str, Any
     # Raw commands/URLs may embed arbitrary credentials. Keep portable tool
     # requirements, never a connection secret or deployment-specific command.
     if not writer.seen("mcp_requirement", server_id):
+        from asaree.services.package_connections import service_identity
+
+        available_tools = [t.get('name') for t in (server.capabilities or {}).get('tools', [])
+                           if isinstance(t, dict) and isinstance(t.get('name'), str)]
+        required = set(available_tools)
+        if required_tools is not None and (server_id in required_tools or server.name in required_tools):
+            required = required_tools.get(server_id, set()) | required_tools.get(server.name, set())
         await archive_io(writer, writer.json, f"requirements/mcp/{server_id}.json", {
             "id": server_id, "name": server.name, "transport": server.transport.value,
-            "tool_names": [t.get("name") for t in (server.capabilities or {}).get("tools", []) if isinstance(t, dict)],
+            "tool_names": available_tools, "required_tool_names": sorted(required),
             "configuration_required": True, "connection_material": "excluded",
+            "service_identity": service_identity(server),
             "knowledge_kind": ("document" if okf_documents.is_document_server(server) else
                                "bundle" if server.name.startswith(okf_bundles.BUNDLE_SERVER_NAME_PREFIX) else None),
         }, provenance="captured_at_download", identity=server_id)
@@ -674,6 +693,27 @@ async def authorize_knowledge_export(db: AsyncSession, root: Path, owner: uuid.U
 
 
 async def _resources(writer: PackageWriter, graph: dict[str, Any], settings: dict[str, Any], owner: uuid.UUID) -> None:
+    from asaree.services.system_mcp_servers import (
+        SCRIPT_AGENT_TOOLS,
+        UNSPLIT_DATASET_AGENT_TOOLS,
+        WORKSPACE_AGENT_TOOLS,
+    )
+
+    # Union every alternative before writing a server's single requirement.
+    required_tools: dict[str, set[str]] = {}
+    for node in graph.get('nodes') or []:
+        for variant in node_variants(node, settings.get('design_spec')):
+            if variant.get('type') in {'okf_bundle', 'okf_document', 'mcp_tool', 'mcp_scikit_learn', 'mcp_client_tool'}:
+                config = (variant.get('data') or {}).get('config') or {}
+                reference = config.get('bundle_id') or config.get('document_id') or config.get('server_id')
+                reference = str(reference or config.get('server_name') or '')
+                required_tools.setdefault(reference, set()).update(config.get('tool_names') or [])
+    kinds = {node.get('type') for node in graph.get('nodes') or []}
+    for kind, name, tools in (('script', 'asaree-script', SCRIPT_AGENT_TOOLS),
+                              ('dataset', 'asaree-workspace', WORKSPACE_AGENT_TOOLS),
+                              ('dataset', 'scikit-learn-mcp', UNSPLIT_DATASET_AGENT_TOOLS)):
+        if kind in kinds:
+            required_tools.setdefault(name, set()).update(tools)
     async with system_session(reason="owned portable experiment resource capture") as db:
         await db.connection(execution_options={"isolation_level": "REPEATABLE READ"})
         for node in graph.get("nodes") or []:
@@ -690,12 +730,17 @@ async def _resources(writer: PackageWriter, graph: dict[str, Any], settings: dic
                 if kind == "skill":
                     await _skill(db, writer, str(config.get("skill_id") or ""), owner)
                 elif kind in {"okf_bundle", "okf_document", "mcp_tool", "mcp_scikit_learn", "mcp_client_tool"}:
-                    await _server(db, writer, config, owner, knowledge=kind in {"okf_bundle", "okf_document"})
+                    await _server(db, writer, config, owner, knowledge=kind in {"okf_bundle", "okf_document"},
+                                  required_tools=required_tools)
                 elif kind.startswith(("model_", "llm_")):
                     digest = hashlib.sha256(encoded(config)).hexdigest()
                     if not writer.seen("model", digest):
                         await archive_io(writer, writer.json, f"requirements/models/{digest}.json", safe_config(config),
                                          identity=node["id"])
+                        writer.dependency(digest, 'model_connection', 'publication_pinned',
+                            external_requirement=True, node_id=node['id'],
+                            file=f'requirements/models/{digest}.json',
+                            reason='Select an authorized destination provider connection.')
                 elif kind == "script":
                     code = config.get("code")
                     if isinstance(code, str):
@@ -711,7 +756,7 @@ async def _resources(writer: PackageWriter, graph: dict[str, Any], settings: dic
         for kind, server in (("script", "asaree-script"), ("dataset", "asaree-workspace"),
                              ("dataset", "scikit-learn-mcp")):
             if kind in kinds:
-                await _server(db, writer, {"server_name": server}, owner)
+                await _server(db, writer, {"server_name": server}, owner, required_tools=required_tools)
         writer.dependency("motoro_resource_capture", "capture_window", "captured_at_download",
                           completed_at=datetime.now(UTC), note="Separate snapshot from ASAREE publication/results.")
 
@@ -914,7 +959,9 @@ async def execute_package(db: AsyncSession, job: ResultJob, temporary: Path, des
     experiment = await db.scalar(select(ResearchExperiment).where(
         ResearchExperiment.id == job.experiment_id, ResearchExperiment.owner_id == job.owner_id,
     ))
-    publication = await db.scalar(select(ProtocolRevision).join(Protocol).where(
+    publication = await db.scalar(select(ProtocolRevision).join(
+        Protocol, ProtocolRevision.protocol_id == Protocol.id,
+    ).where(
         ProtocolRevision.id == job.protocol_revision_id, ProtocolRevision.protocol_id == job.protocol_id,
         Protocol.experiment_id == job.experiment_id, Protocol.owner_id == job.owner_id,
     ))
@@ -1006,7 +1053,8 @@ async def execute_package(db: AsyncSession, job: ResultJob, temporary: Path, des
     await archive_io(writer, atomic_write, export_path(job.id, metadata=True), encoded(manifest))
     async with get_session() as status_db:
         await status_db.execute(update(ResultJob).where(ResultJob.id == job.id, ResultJob.status != "cancelled").values(
-            status="completed", progress={"bytes": destination.stat().st_size, "sha256": digest}, error=None,
+            status="completed", progress={"bytes": destination.stat().st_size, "sha256": digest,
+                                          "completeness": manifest['completeness']}, error=None,
         ))
 
 

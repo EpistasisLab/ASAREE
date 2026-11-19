@@ -31,9 +31,9 @@ def storage_roots(values: Mapping[str, str] | None = None) -> dict[str, Path]:
     overrides). Standalone packages read the inherited process environment.
     """
     values = values or {}
-    data = Path(values.get("data_root") or os.environ.get("ASAREE_DATA_ROOT") or "./data").expanduser().resolve()
+    data = Path(values.get("data_root", os.environ.get("ASAREE_DATA_ROOT")) or "./data").expanduser().resolve()
     return {
-        namespace: Path(values.get(field) or os.environ.get(f"ASAREE_{field.upper()}") or data / suffix)
+        namespace: Path(values.get(field, os.environ.get(f"ASAREE_{field.upper()}")) or data / suffix)
         .expanduser().resolve()
         for namespace, (field, suffix) in NAMESPACES.items()
     }

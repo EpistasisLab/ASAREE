@@ -478,6 +478,12 @@ async def publish_protocol_endpoint(
         # is_conversation_strategy.
         experiment = await get_experiment(db, protocol.experiment_id) if protocol.experiment_id else None
         design_spec = experiment.design_spec if experiment is not None else None
+        from asaree.services.package_reconstruction import ReadinessError, require_configured
+
+        try:
+            await require_configured(db, protocol.experiment_id)
+        except ReadinessError as exc:
+            raise HTTPException(422, detail={'message': 'Setup needed', 'issues': exc.issues}) from exc
         validate_coordination_strategy(design_spec, graph=protocol.graph)
         validate_stage_plan(design_spec)
         validate_prompt_references(graph=protocol.graph)

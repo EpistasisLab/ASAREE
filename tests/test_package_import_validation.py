@@ -39,6 +39,19 @@ def test_exporter_archive_preflight_preserves_exact_source_files(tmp_path, versi
             assert (tmp_path / 'read' / member.name).read_bytes() == tar.extractfile(member).read()
 
 
+@pytest.mark.parametrize('field,value', [
+    ('required_tool_names', {}), ('required_tool_names', [None]),
+    ('tool_names', ['valid', {}]), ('service_identity', []),
+])
+def test_malformed_destination_requirements_are_rejected_during_inspection(tmp_path, field, value):
+    source = str(uuid.uuid4())
+    def modify(writer):
+        writer.json(f'requirements/mcp/{source}.json', {
+            'id': source, 'name': 'Untrusted', 'transport': 'stdio', field: value})
+    with pytest.raises(PackageError, match='service identity or required tool names'):
+        inspect(package(tmp_path, modify=modify), tmp_path / 'read', Limits(), threading.Event())
+
+
 @pytest.mark.parametrize('version', [0, 3, '2'])
 def test_rejects_unsupported_schema_without_guessing(tmp_path, version):
     with pytest.raises(PackageError, match='Unsupported'):
@@ -206,6 +219,32 @@ def test_missing_name_only_dependencies_remain_explicit_diagnostics(tmp_path, ve
     assert summary['unresolved_count'] == 2
     assert {record['id'] for record in summary['diagnostics']} == {
         'unavailable legacy name', 'unavailable external tool'}
+
+
+@pytest.mark.parametrize('referenced', [False, True])
+@pytest.mark.parametrize('fault', ['different_id', 'noncanonical_id', 'noncanonical_filename'])
+def test_split_identity_must_match_filename_and_pin(tmp_path, referenced, fault):
+    source, split = str(uuid.uuid4()), str(uuid.uuid4())
+    identifier = str(uuid.uuid4()) if fault == 'different_id' else split
+    if fault == 'noncanonical_id':
+        identifier = identifier.upper()
+    filename = split.upper() if fault == 'noncanonical_filename' else split
+
+    def modify(writer):
+        writer.dependency(source, 'dataset', 'publication_pinned', status='missing')
+        writer.json(f'inputs/splits/{filename}.json', {
+            'id': identifier, 'dataset_id': source, 'source_sha256': '0' * 64,
+            'train_artifact_id': None, 'test_artifact_id': None,
+        })
+        if referenced:
+            writer.json('inputs/bindings.json', {'schema_version': 1, 'inputs': [{
+                'dataset_id': source, 'mode': 'whole_dataset', 'raw_artifact': None,
+                'raw_sha256': '0' * 64, 'split_id': split,
+                'train_artifact': None, 'test_artifact': None,
+            }]})
+
+    with pytest.raises(PackageError, match='identity|canonical'):
+        inspect(package(tmp_path, modify=modify), tmp_path / 'read', Limits(), threading.Event())
 
 
 @pytest.mark.parametrize('version', [1, 2])

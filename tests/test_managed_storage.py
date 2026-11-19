@@ -60,6 +60,22 @@ def test_configuration_precedence_and_cross_process_visibility(clean_storage, mo
     assert completed.stdout.strip() == settings.dataset_workspace_dir
 
 
+@pytest.mark.parametrize('namespace', list(storage_roots()))
+def test_empty_storage_override_precedes_environment(clean_storage, monkeypatch, namespace):
+    from asaree_workspace_core.storage import NAMESPACES
+
+    field, suffix = NAMESPACES[namespace]
+    monkeypatch.setenv(f'ASAREE_{field.upper()}', str(clean_storage / 'old'))
+    values = {'data_root': str(clean_storage / 'new'), field: ''}
+    assert storage_roots(values)[namespace] == clean_storage / 'new' / suffix
+    settings = AsareeSettings(_env_file=None, **values)
+    assert getattr(settings, field) == str(clean_storage / 'new' / suffix)
+
+
+def test_empty_data_root_precedes_environment(clean_storage):
+    assert storage_roots({'data_root': ''})['datasets'] == Path('data/datasets').resolve()
+
+
 def test_references_reject_traversal_and_symlinks(clean_storage):
     roots = storage_roots()
     roots["datasets"].mkdir(parents=True)

@@ -211,6 +211,38 @@ class Configuration(BaseModel):
     dependencies_resolved: bool
 
 
+@router.get('/{identifier}/readiness')
+async def readiness(identifier: uuid.UUID, db: DbSession, user: CurrentUser) -> dict[str, Any]:
+    from asaree.services.package_setup import setup_options
+
+    job = await owned(db, identifier, user.id)
+    if job.status != 'completed':
+        raise HTTPException(409, 'Complete import before configuring the draft')
+    return await setup_options(db, job)
+
+
+class ConnectionSelection(BaseModel):
+    kind: str
+    source_id: str
+    destination_id: uuid.UUID
+
+
+@router.post('/{identifier}/connections')
+async def select_destination(identifier: uuid.UUID, command: ConnectionSelection,
+                             db: DbSession, user: CurrentUser) -> dict[str, Any]:
+    from asaree.services.package_setup import select_connection, setup_options
+
+    job = await owned(db, identifier, user.id, lock=True)
+    if job.status != 'completed':
+        raise HTTPException(409, 'Complete import before configuring the draft')
+    try:
+        await select_connection(db, job, command.kind, command.source_id, command.destination_id)
+    except (ValueError, OSError) as exc:
+        raise HTTPException(422, 'Choose an authorized compatible destination connection.') from exc
+    await db.commit()
+    return await setup_options(db, job)
+
+
 @router.post('/{identifier}/configuration')
 async def configuration(
     identifier: uuid.UUID, command: Configuration, db: DbSession, user: CurrentUser,

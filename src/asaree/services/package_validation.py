@@ -360,6 +360,13 @@ def validate_references(root: Path, limits: Limits, manifest: dict[str, Any], ma
     for file in (root / 'requirements/mcp').glob('*.json'):
         requirement = document(payload_path(root, file.relative_to(root).as_posix()), limits)
         source = canonical_identity(requirement['id'])
+        if (not isinstance(requirement.get('required_tool_names', []), list)
+            or any(not isinstance(tool, str) for tool in requirement.get('required_tool_names', []))
+            or not isinstance(requirement.get('tool_names', []), list)
+            or any(not isinstance(tool, str) for tool in requirement.get('tool_names', []))
+            or (requirement.get('service_identity') is not None
+                and not isinstance(requirement['service_identity'], str))):
+            raise PackageError('Invalid MCP service identity or required tool names')
         if file.name != f'{source}.json':
             raise PackageError('MCP requirement filename and identity disagree')
         remember('mcp', source, requirement)
@@ -400,6 +407,12 @@ def validate_references(root: Path, limits: Limits, manifest: dict[str, Any], ma
                 raise PackageError('Skill resource exceeds configured document/resource limit')
             if dep['encoding'] == 'utf-8':
                 file.read_bytes().decode('utf-8')
+    for file in (root / 'inputs/splits').glob('*.json'):
+        split = document(payload_path(root, file.relative_to(root).as_posix()), limits)
+        source = canonical_identity(split['id'])
+        if file.name != f'{source}.json':
+            raise PackageError('Split filename and identity disagree')
+        remember('split', source, split)
     bindings_path = root / 'inputs/bindings.json'
     if bindings_path.exists():
         bindings = document(bindings_path, limits)
@@ -438,7 +451,8 @@ def validate_references(root: Path, limits: Limits, manifest: dict[str, Any], ma
                 split_path = payload_path(root, f'inputs/splits/{canonical_identity(pin["split_id"])}.json')
                 if split_path.exists():
                     split = document(split_path, limits)
-                    if (split['dataset_id'] != pin['dataset_id'] or split['source_sha256'] != pin['raw_sha256']
+                    if (canonical_identity(split['id']) != pin['split_id']
+                        or split['dataset_id'] != pin['dataset_id'] or split['source_sha256'] != pin['raw_sha256']
                         or split['train_artifact_id'] != (pin.get('train_artifact') or {}).get('id')
                         or split['test_artifact_id'] != (pin.get('test_artifact') or {}).get('id')):
                         raise PackageError('Pinned split relationship mismatch')

@@ -42,7 +42,9 @@ def test_archive_hashes_inventory_and_tar_metadata_are_bounded(tmp_path):
     result = writer.finish({"schema_version": 1})
     contents = unpack(tmp_path)
     inventory = [json.loads(line) for line in contents["files.jsonl"].splitlines()]
-    assert result["completeness"] == {"status": "incomplete", "unresolved_count": 1}
+    assert result["completeness"] == {"status": "incomplete", "unresolved_count": 1,
+        "included_dependencies": 0, "destination_connections": 0,
+        "issues": [{"id": "missing", "kind": "dataset", "reason": "missing"}]}
     assert result["file_count"] == 1251
     for record in [*inventory, result["files"]]:
         assert record["sha256"] == hashlib.sha256(contents[record["path"]]).hexdigest()
@@ -427,7 +429,15 @@ async def test_legacy_package_reports_missing_history_and_optional_results(tmp_p
     job = SimpleNamespace(id=uuid.uuid4(), owner_id=uuid.uuid4(), experiment_id=uuid.uuid4(), protocol_id=uuid.uuid4(),
                           protocol_revision_id=publication.id, design_revision_id=None,
                           params={"selection": {"include_results": include_results}})
-    db = SimpleNamespace(scalar=AsyncMock(side_effect=[SimpleNamespace(), publication]))
+    records = iter([SimpleNamespace(), publication])
+    queries = []
+
+    async def scalar(statement):
+        # Compile the real worker queries: a plain AsyncMock hides ambiguous joins.
+        queries.append(statement.compile(dialect=postgresql.dialect()))
+        return next(records)
+
+    db = SimpleNamespace(scalar=AsyncMock(side_effect=scalar))
     status_db = SimpleNamespace(scalar=AsyncMock(return_value="running"), execute=AsyncMock())
 
     @asynccontextmanager
@@ -441,6 +451,10 @@ async def test_legacy_package_reports_missing_history_and_optional_results(tmp_p
     monkeypatch.setattr(packages, "_results", results)
     monkeypatch.setattr(result_exports, "get_settings", lambda: SimpleNamespace(result_export_dir=str(tmp_path)))
     await packages.execute_package(db, job, tmp_path / "partial", tmp_path / "package.tar.gz")
+    assert "JOIN protocols ON protocol_revisions.protocol_id = protocols.id" in str(queries[1])
+    assert set(queries[1].params.values()) == {
+        job.protocol_revision_id, job.protocol_id, job.experiment_id, job.owner_id,
+    }
     manifest = json.loads(unpack(tmp_path)["manifest.json"])
     assert manifest["completeness"]["status"] == "incomplete"
     assert json.loads(unpack(tmp_path)["publication/settings.json"]) == {}

@@ -43,7 +43,6 @@ async def publish_protocol(
     """Freeze canvas, experiment settings, and generated design as one version."""
     from asaree.services.package_reconstruction import require_configured
 
-    await require_configured(db, protocol.experiment_id)
     protocol = (
         await db.execute(
             select(Protocol)
@@ -57,6 +56,7 @@ async def publish_protocol(
                         .with_for_update().execution_options(populate_existing=True))
         if protocol.experiment_id is not None else None
     )
+    await require_configured(db, protocol.experiment_id)
     design = await get_current_revision(db, experiment.id) if experiment is not None else None
     plan = resolve_dataset_row_plan(protocol.graph)
     if plan is not None:

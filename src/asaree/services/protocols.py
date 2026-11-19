@@ -82,8 +82,10 @@ async def create_protocol(
     description: str | None = None,
     experiment_id: uuid.UUID | None = None,
     graph: dict[str, Any] | None = None,
+    identifier: uuid.UUID | None = None,
 ) -> Protocol:
     protocol = Protocol(
+        **({'id': identifier} if identifier else {}),
         name=name,
         description=description,
         experiment_id=experiment_id,

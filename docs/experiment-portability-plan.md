@@ -1,5 +1,11 @@
 # Experiment portability implementation
 
+Historical implementation notes for the original package workflow. The current
+product contract is [experiment packages](experiment-packages.md): publication
+before export, configuration/input assets only, automatic draft creation, recreated
+persona snapshots, and node-based repairs. The confirmation/setup and results
+paths described below have been superseded.
+
 Branch: `fix/package-export-publication-join`; starting HEAD: `f27437d`.
 Preserve existing ancestry and leave PR #56 (base `develop`) unmerged.
 

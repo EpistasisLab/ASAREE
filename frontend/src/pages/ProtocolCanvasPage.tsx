@@ -301,7 +301,7 @@ export function ProtocolCanvasPage() {
         <div className="flex shrink-0 flex-wrap items-center gap-3 rounded-md border bg-card px-3 py-2 text-xs" aria-label="Experiment version controls">
           <Button variant="ghost" size="sm" disabled={!experimentVersions?.length} onClick={() => { setVersionSearch(''); setVersionBrowserOpen(true) }}>Version history</Button>
           {protocolQuery.data && experimentId && <ExperimentPackageDownload experimentId={experimentId}
-            protocol={protocolQuery.data} selectedVersionId={versionId} />}
+            protocol={protocolQuery.data} selectedVersionId={versionId} draftBusy={draftBusy} />}
           <p className="text-muted-foreground">{versionId ? 'Canvas, Design, Runs, and Results show this saved version · read-only.'
             : !publishedVersion ? 'Publish the experiment to create its first version.'
               : hasChanges ? `Changes are not published. Runs and Results use version ${publishedVersion}.`

@@ -60,8 +60,8 @@ import {
 import '@xyflow/react/dist/style.css'
 import { Lock, Play, Plus, Square, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { ApiError, experimentsApi, protocolsApi, packageImportsApi } from '@/api/client'
-import { ImportedExperimentSetup } from './ImportedExperimentSetup'
+import { ApiError, experimentsApi, protocolsApi } from '@/api/client'
+import { NodeResourceIssuesProvider } from './NodeResourceIssues'
 import { CONNECTOR_HANDLES } from '@/lib/coordinationStrategy'
 import { graphWithFactorBaseline, reconcileFactorBaselines, type FactorBindingDiscrepancy } from '@/lib/factorBindings'
 import { newNodeId } from '@/lib/nodeId'
@@ -419,8 +419,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   const [nodes, setNodes, onNodesChange] = useNodesState<Node>(migrateLegacyNodes(initialGraph))
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>(migrateLegacyHandles(initialGraph))
   const queryClient = useQueryClient()
-  const importedSources = useQuery({ queryKey: ['package-imports', experimentId], enabled: !!experimentId,
-    queryFn: () => packageImportsApi.list(experimentId!) })
+
 
   // Mirrors the canvas's own live state into the shared query cache on
   // every change -- immediate, not debounced like autosave below, since
@@ -2308,13 +2307,10 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
 
   return (
     <ProtocolCanvasActionsProvider value={canvasActions}>
+    <NodeResourceIssuesProvider experimentId={experimentId} protocolId={protocolId} selectedNodeId={selectedNodeId} nodes={nodes}
+      onGraphChange={graph => { setNodes(migrateLegacyNodes(graph)); setEdges(migrateLegacyHandles(graph)) }}>
       <div className="flex h-full min-w-0 w-full">
         <div ref={paneRef} className="relative min-w-0 flex-1">
-          {experimentId && !experimentLocked && importedSources.data?.filter(source => source.status === 'completed').map(source =>
-            <div key={source.id} className="absolute left-3 top-3 z-20 max-h-[40%] max-w-lg overflow-auto bg-background">
-              <ImportedExperimentSetup importId={source.id} experimentId={experimentId} protocolId={protocolId}
-                onSelectNode={setSelectedNodeId} onGraphChange={graph => { setNodes(migrateLegacyNodes(graph)); setEdges(migrateLegacyHandles(graph)) }} />
-            </div>)}
           <ReactFlow
             nodes={nodesWithRunStatus}
             edges={renderedEdges}
@@ -3173,6 +3169,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
           onSave={(next) => editFactorMutation.mutateAsync({ oldName: editingFactor.name, next })}
         />
       )}
+    </NodeResourceIssuesProvider>
     </ProtocolCanvasActionsProvider>
   )
 })

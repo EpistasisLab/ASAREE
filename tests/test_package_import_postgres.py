@@ -12,7 +12,6 @@ from contextlib import asynccontextmanager
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
@@ -29,9 +28,6 @@ from asaree.api.protocols import publish_protocol_endpoint
 from asaree.config import AsareeSettings
 from asaree.models.dataset import RegisteredDataset
 from asaree.models.experiment import ResearchExperiment
-from asaree.models.factorial_cell import FactorialCell
-from asaree.models.factorial_replicate_result import FactorialReplicateResult
-from asaree.models.factorial_row_result import FactorialRowResult
 from asaree.models.package_import import ImportedIdentity, PackageImport
 from asaree.models.protocol import Protocol
 from asaree.models.protocol_revision import ProtocolRevision
@@ -40,7 +36,7 @@ from asaree.models.user_llm_setting import UserLLMSetting
 from asaree.services import experiment_packages as packages
 from asaree.services import okf_bundles, okf_documents
 from asaree.services import package_imports as imports
-from asaree.services.dataset_inputs import freeze_dataset_inputs, resolve_attempt_inputs
+from asaree.services.dataset_inputs import freeze_dataset_inputs
 from asaree.services.datasets import create_dataset, quick_split_dataset
 from asaree.services.design_generation import generate_design_cells
 from asaree.services.package_reconstruction import Reconstruction, require_configured
@@ -57,16 +53,15 @@ def storage_settings(root):
 
 
 async def select_test_provider(db, job):
-    from asaree.services.package_setup import select_connection
-
     setting = UserLLMSetting(user_id=job.owner_id, provider='openai', api_key_encrypted='destination-only')
     db.add(setting)
     await db.flush()
-    await select_connection(db, job, 'provider', 'openai', setting.id)
 
 
-async def test_provider_factor_alternatives_need_explicit_owned_connections(results_db, monkeypatch, tmp_path):
-    from asaree.services import package_reconstruction, package_setup
+async def test_provider_factor_alternatives_use_saved_owned_connections_automatically(
+    results_db, monkeypatch, tmp_path,
+):
+    from asaree.services import package_reconstruction
 
     db, scope, _, owner = results_db
     settings = storage_settings(tmp_path / 'provider-setup')
@@ -87,9 +82,6 @@ async def test_provider_factor_alternatives_need_explicit_owned_connections(resu
     anthropic = UserLLMSetting(user_id=owner.id, provider='anthropic', api_key_encrypted='destination-anthropic')
     db.add(anthropic)
     await db.flush()
-    with pytest.raises(ValueError, match='authorized'):
-        await package_setup.select_connection(db, job, 'provider', 'openai', anthropic.id)
-    await package_setup.select_connection(db, job, 'provider', 'anthropic', anthropic.id)
     await package_reconstruction.require_configured(db, experiment.id)
     assert job.configured_at is None
     assert anthropic.api_key_encrypted == 'destination-anthropic'
@@ -160,10 +152,9 @@ async def test_missing_pinned_split_blocks_configuration_until_repaired(
     monkeypatch.setattr(package_reconstruction, 'system_session', resources)
     monkeypatch.setattr(sampling_snapshots, 'build_model_config', AsyncMock(return_value=ModelConfig(model='gpt-test')))
     monkeypatch.setattr(sampling_snapshots, 'resolve_discovery_context', AsyncMock(return_value={}))
-    command = api.Configuration(connections_configured=True, dependencies_resolved=True)
-    with pytest.raises(HTTPException, match='split') as error:
-        await api.configuration(job.id, command, db, owner)
-    assert error.value.status_code == 422 and job.configured_at is None
+    readiness = await api.readiness(job.id, db, owner)
+    assert not readiness['ready']
+    assert any('split' in issue['message'] for issue in readiness['issues'])
     with pytest.raises(HTTPException) as error:
         await publish_protocol_endpoint(protocol.id, owner, db)
     assert error.value.status_code == 422 and protocol.published_revision_id is None
@@ -221,6 +212,112 @@ async def destination_results_db():
 async def destination_resource_db():
     async for value in resource_db.__wrapped__():
         yield value
+
+
+async def test_legacy_json_creates_only_a_draft_and_uses_shared_collision_handling(results_db, monkeypatch):
+    from asaree.api import experiments as api_experiments
+    from asaree.services.experiments import create_experiment_with_available_name
+
+    db, _, _, owner = results_db
+    existing = await create_experiment_with_available_name(db, name='Imported JSON', owner_id=owner.id)
+    existing.archived_at = datetime.now(UTC)
+    monkeypatch.setattr(api_experiments.mcp_service, 'list_servers', AsyncMock(return_value=[]))
+    graph = {'nodes': [{'id': 'draft-node', 'type': 'agent',
+                       'data': {'config': {'system_prompt': 'Preserve the current draft'}}}], 'edges': []}
+    request = api_experiments.ImportExperimentDefinitionRequest(name='Imported JSON', graph=graph,
+        hypothesis='Preserve this hypothesis',
+        published_graph={'nodes': [{'id': 'old-node', 'type': 'agent', 'data': {}}], 'edges': []})
+    for number in (2, 3):
+        created = await api_experiments.import_experiment_definition_endpoint(request, owner, db)
+        assert created.name == f'Imported JSON ({number})'
+        assert created.hypothesis == 'Preserve this hypothesis'
+        protocol = await db.scalar(select(Protocol).where(Protocol.experiment_id == created.id))
+        assert protocol.graph == graph
+        assert protocol.published_revision_id is None
+        assert await db.scalar(select(func.count()).select_from(ProtocolRevision).where(
+            ProtocolRevision.protocol_id == protocol.id)) == 0
+
+
+async def test_persona_snapshots_and_subagents_survive_repeated_independent_imports(
+    results_db, resource_db, tmp_path, monkeypatch,
+):
+    from asaree.models.persona import Persona
+    from asaree.services.experiments import create_experiment_with_available_name
+    from asaree.services.personas import get_persona, list_personas, snapshot_identity
+
+    db, _, _, owner = results_db
+    settings = storage_settings(tmp_path / 'personas')
+    monkeypatch.setattr('asaree.services.managed_storage.get_settings', lambda: settings)
+    config = {'mode': 'library', 'persona_ids': [str(uuid.uuid4()), str(uuid.uuid4())],
+        'persona_text': '# First\r\nBe careful.\n\n# Second\nBe curious. λ',
+        'persona_label': 'Combined persona', 'persona_file': 'combined.md'}
+    graph = {'nodes': [
+        {'id': 'parent', 'type': 'agent', 'data': {'config': {'system_prompt': 'Delegate to @child'},
+            'factor_bindings': {'sub_agent_selection': 'Workers', 'persona_selection': 'Personas'},
+            'sub_agent_selection': ['child'], 'persona_selection': ['persona']}},
+        {'id': 'child', 'type': 'sub_agent', 'data': {'config': {'system_prompt': 'Preserve my instructions'}}},
+        {'id': 'persona', 'type': 'persona', 'data': {'config': config}},
+    ], 'edges': [{'source': 'child', 'target': 'parent', 'targetHandle': 'sub_agents'},
+                 {'source': 'persona', 'target': 'parent', 'targetHandle': 'persona'}]}
+    design = {'factors': [{'name': 'Workers', 'level_type': 'sub_agent_toggle', 'levels': [[], ['child']]},
+                           {'name': 'Personas', 'level_type': 'persona_toggle', 'levels': [[], ['persona']]}]}
+
+    @asynccontextmanager
+    async def resources(**kwargs):
+        yield resource_db
+
+    monkeypatch.setattr(packages, 'system_session', resources)
+    await resource_db.connection()
+    await create_experiment_with_available_name(db, name='Portable', owner_id=owner.id)
+    imported_ids, persona_ids = [], []
+    for number in range(2):
+        job = PackageImport(id=uuid.uuid4(), owner_id=owner.id, request_key=uuid.uuid4().hex,
+            status='queued', preflight={}, progress={}, expires_at=datetime.now(UTC) + timedelta(days=1))
+        db.add(job)
+        await db.flush()
+        root = imports.directory(job.id)
+        stage = root / 'writer'
+        stage.mkdir(parents=True)
+        writer = packages.PackageWriter(root / 'archive.tar.gz', stage)
+        writer.json('publication/canvas.json', graph)
+        writer.json('publication/settings.json', {'design_spec': design})
+        writer.json('experiment-metadata.json', {'name': 'Portable'})
+        await packages._resources(writer, graph, {'design_spec': design}, owner.id)
+        assert writer.missing == 0
+        writer.finish({'format': 'asaree.experiment-package', 'schema_version': 2,
+            'experiment_id': str(uuid.uuid4()), 'protocol_id': str(uuid.uuid4()),
+            'publication': {'id': str(uuid.uuid4()), 'version': 1}, 'results_included': False})
+        job.preflight = inspect(root / 'archive.tar.gz', root / 'payload', Limits(), threading.Event())
+        importer = Reconstruction(db, job, root / 'payload', Limits())
+        job.experiment_id = await importer.activate(resource_db)
+        await db.flush()
+        local_id = uuid.UUID(importer.maps['persona', snapshot_identity(config)])
+        assert await get_persona(db, local_id, owner_id=owner.id) is None  # Staged resources stay hidden.
+        job.status = 'completed'
+        await db.flush()
+        persona = await get_persona(db, local_id, owner_id=owner.id)
+        assert persona.prompt == config['persona_text']
+        assert persona.source_filename == 'combined.md'
+        assert persona.name == 'Combined persona'  # Personas allow duplicate display names.
+        assert persona.id not in [uuid.UUID(value) for value in config['persona_ids']]
+        markdown = root / f'payload/resources/personas/{snapshot_identity(config)}.md'
+        assert markdown.read_bytes() == persona.prompt.encode()
+        protocol = await db.scalar(select(Protocol).where(Protocol.experiment_id == job.experiment_id))
+        experiment = await db.get(ResearchExperiment, job.experiment_id)
+        assert experiment.name == f'Portable ({number + 2})'
+        assert experiment.design_spec['factors'] == design['factors']
+        assert protocol.published_revision_id is None
+        assert [node['id'] for node in protocol.graph['nodes']] == ['parent', 'child', 'persona']
+        assert protocol.graph['nodes'][0]['data']['sub_agent_selection'] == ['child']
+        assert protocol.graph['nodes'][0]['data']['config']['system_prompt'] == 'Delegate to @child'
+        restored = protocol.graph['nodes'][2]['data']['config']
+        assert restored['persona_ids'] == [str(local_id)] and restored['persona_text'] == config['persona_text']
+        assert restored['persona_sources'][0]['id'] == str(local_id)
+        imported_ids.append(job.experiment_id)
+        persona_ids.append(local_id)
+    assert len(set(imported_ids)) == len(set(persona_ids)) == 2
+    assert len(await list_personas(db, owner_id=owner.id)) == 2
+    assert await db.scalar(select(func.count()).select_from(Persona).where(Persona.owner_id == owner.id)) == 2
 
 
 @pytest.mark.parametrize('builtin_state', ['compatible', 'incompatible', 'ambiguous'])
@@ -329,10 +426,9 @@ async def test_destination_services_and_explicit_custom_mapping(
 
 
 @pytest.mark.parametrize('mode', ['whole_dataset', 'per_row'])
-@pytest.mark.parametrize('include_results', [False, True])
 async def test_export_import_independent_owner_and_reexport(
     results_db, resource_db, destination_results_db, destination_resource_db,
-    tmp_path, monkeypatch, mode, include_results,
+    tmp_path, monkeypatch, mode,
 ):
     db, scope, cell, owner = results_db
     destination_db, _, _, destination_owner = destination_results_db
@@ -469,47 +565,10 @@ async def test_export_import_independent_owner_and_reexport(
         yield resource_db
     monkeypatch.setattr(packages, 'system_session', source_resources)
     await packages._resources(writer, portable_graph, portable_settings, owner.id)
-    if include_results:
-        parent, factor_values = (await db.execute(select(
-            FactorialReplicateResult, FactorialCell.factor_values,
-        ).join(FactorialCell).where(FactorialCell.design_revision_id == design.id).limit(1))).one()
-        slot = None
-        if mode == 'per_row':
-            slot = FactorialRowResult(replicate_result_id=parent.id, protocol_revision_id=publication.id,
-                dataset_id=dataset.id, raw_sha256=dataset.raw_sha256, row_index=0)
-            db.add(slot)
-            await db.flush()
-        row_snapshot = {'dataset_id': str(dataset.id), 'raw_sha256': dataset.raw_sha256,
-                        'row_index': 0, 'values': {'x': '01'}} if slot else None
-        from asaree.services.protocol_execution import apply_factor_bindings
-        attempt_inputs = resolve_attempt_inputs(publication.dataset_inputs, apply_factor_bindings(graph, factor_values),
-                                                 dataset_row=row_snapshot)
-        run = ProtocolRun(protocol_id=scope.protocol_id, owner_id=owner.id,
-            protocol_revision_id=publication.id, design_revision_id=scope.design_revision_id, status='completed',
-            replicate_result_id=parent.id, row_result_id=slot.id if slot else None,
-            dataset_row=row_snapshot, dataset_inputs=attempt_inputs, factor_values=factor_values,
-            attempt_result={'measurement': {'observations': [
-                {'metric_id': 'null', 'status': 'measured', 'value': None},
-                {'metric_id': 'missing', 'status': 'unavailable'},
-                {'metric_id': 'legacy', 'provenance': 'legacy.unknown', 'value': str(dataset.id)}]}})
-        db.add(run)
-        db.add(ProtocolRun(protocol_id=scope.protocol_id, owner_id=owner.id,
-            protocol_revision_id=publication.id, design_revision_id=scope.design_revision_id,
-            replicate_result_id=parent.id, row_result_id=slot.id if slot else None, status='failed',
-            dataset_row=row_snapshot, dataset_inputs=attempt_inputs, factor_values=factor_values,
-            attempt_result={'legacy': {'provenance': 'legacy.unknown', 'value': str(dataset.id)}},
-            created_at=datetime.now(UTC) - timedelta(hours=1)))
-        await db.flush()
-        outputs = Path(settings.dataset_workspace_dir) / str(scope.experiment_id) / str(run.id) / 'agent=agent'
-        outputs.mkdir(parents=True)
-        (outputs / 'output.bin').write_bytes(binary)
-        await packages._results(db, writer, SimpleNamespace(owner_id=owner.id, protocol_id=scope.protocol_id,
-            protocol_revision_id=publication.id, design_revision_id=scope.design_revision_id,
-            experiment_id=scope.experiment_id), AsyncMock(), graph)
     manifest = writer.finish({'format': 'asaree.experiment-package', 'schema_version': 2,
         'experiment_id': str(scope.experiment_id), 'protocol_id': str(scope.protocol_id),
         'publication': {'id': str(publication.id), 'version': 1},
-        'design_revision_id': str(scope.design_revision_id), 'results_included': include_results})
+        'design_revision_id': str(scope.design_revision_id), 'results_included': False})
     # Cross-installation boundary: independent PostgreSQL schemas, owners,
     # registrations, managed roots and saved credentials. Only archive bytes cross.
     archive_bytes = archive.read_bytes()
@@ -561,12 +620,12 @@ async def test_export_import_independent_owner_and_reexport(
         restored = local_files[path]
         assert (restored.encoding, restored.content, restored.position) == (encoding, content, position)
     monkeypatch.setattr('asaree.services.package_reconstruction.system_session', resource_session)
-    with pytest.raises(ValueError, match='destination openai'):
+    with pytest.raises(ValueError, match='saved openai'):
         await require_configured(db, experiment_id)
     assert await db.scalar(select(func.count()).select_from(ProtocolRun).where(
         ProtocolRun.owner_id == destination_owner.id)) == 0
     identities = (await db.scalars(select(ImportedIdentity).where(ImportedIdentity.import_id == job.id))).all()
-    assert len([row for row in identities if row.kind == 'historical_attempt']) == 2 * int(include_results)
+    assert not any(row.kind.startswith('historical_') for row in identities)
     # Exact source re-export is a first-class owned API operation, including
     # evidence absent from current execution projections.
     response = await api.source(job.id, db, destination_owner)
@@ -631,11 +690,11 @@ async def test_export_import_independent_owner_and_reexport(
     await packages._datasets(db, second, local_publication, destination_owner.id)
     await packages._design(db, second, local_publication)
     await packages._resources(second, local_graph, local_settings, destination_owner.id)
-    await packages._import_sources(db, second, experiment_id, include_results=include_results)
+    await packages._import_sources(db, second, experiment_id)
     second.finish({'format': 'asaree.experiment-package', 'schema_version': 2,
         'experiment_id': str(experiment_id), 'protocol_id': str(protocol.id),
         'publication': {'id': str(local_publication.id), 'version': local_publication.revision},
-        'design_revision_id': str(local_publication.design_revision_id), 'results_included': include_results})
+        'design_revision_id': str(local_publication.design_revision_id), 'results_included': False})
     inspect(root / 'second.tar.gz', root / 'second-payload', Limits(), threading.Event())
     import tarfile
     with tarfile.open(root / 'second.tar.gz') as reexport:
@@ -649,9 +708,7 @@ async def test_export_import_independent_owner_and_reexport(
             dependency = next(entry for entry in reexport_dependencies if entry.get('kind') == 'skill_file'
                               and entry.get('file') == f'resources/skills/{local_skill.id}/{path}')
             assert (dependency['encoding'], dependency['position']) == (encoding, position)
-        if include_results:
-            nested = reexport.extractfile(f'sources/{job.id}/source.tar.gz').read()
-            assert hashlib.sha256(nested).hexdigest() == job.sha256
+        assert not any(name.startswith('results/') or name.endswith('/source.tar.gz') for name in reexport.getnames())
     assert manifest['schema_version'] == 2
     # Later draft setup changes do not revoke an immutable local publication.
     broken = copy.deepcopy(protocol.graph)
@@ -741,8 +798,6 @@ async def test_missing_source_stays_unresolved_instead_of_using_an_existing_same
     async def resources(**kwargs):
         yield resource_db
     monkeypatch.setattr('asaree.services.package_reconstruction.system_session', resources)
-    from fastapi import HTTPException
-    with pytest.raises(HTTPException, match='unresolved') as rejected:
-        await api.configuration(job.id, api.Configuration(connections_configured=True, dependencies_resolved=True),
-                                db, owner)
-    assert rejected.value.status_code == 422 and job.configured_at is None
+    readiness = await api.readiness(job.id, db, owner)
+    assert not readiness['ready']
+    assert any('unresolved' in issue['message'] for issue in readiness['issues'])

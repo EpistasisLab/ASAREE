@@ -21,6 +21,7 @@ from asaree.models.database import get_session
 from asaree.models.dataset import RegisteredDataset
 from asaree.models.experiment import ResearchExperiment
 from asaree.models.package_import import ImportedIdentity, PackageImport
+from asaree.models.persona import Persona
 from asaree.models.protocol import Protocol
 from asaree.services import managed_storage
 from asaree.services.package_reconstruction import Reconstruction, identity
@@ -118,6 +119,9 @@ async def remove_staged_product(db: Any, job: PackageImport) -> None:
                                                          ImportedIdentity.kind == 'dataset')
     await db.execute(delete(RegisteredDataset).where(RegisteredDataset.id.in_(identifiers),
                                                     RegisteredDataset.owner_id == job.owner_id))
+    await db.execute(delete(Persona).where(Persona.owner_id == job.owner_id, Persona.id.in_(
+        select(ImportedIdentity.local_id).where(ImportedIdentity.import_id == job.id,
+                                               ImportedIdentity.kind == 'persona'))))
     await db.execute(delete(ImportedIdentity).where(ImportedIdentity.import_id == job.id))
     job.experiment_id = None
 
@@ -147,8 +151,8 @@ async def execute_package_import(_ctx: dict[str, Any], job_id: str) -> None:
                 async with get_session() as status_db:
                     await status_db.execute(update(PackageImport).where(
                         PackageImport.id == identifier, PackageImport.status == 'validating',
-                    ).values(status='awaiting_confirmation', preflight=preflight, sha256=sha256,
-                             progress={'phase': 'preflight_ready'}, error=None))
+                    ).values(status='queued', preflight=preflight, sha256=sha256,
+                             progress={'phase': 'validated'}, error=None))
                 return
             await checkpoint(identifier, 'reconstructing')
             if await asyncio.to_thread(digest, archive) != job.sha256:

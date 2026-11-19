@@ -144,12 +144,11 @@ async def test_durable_crash_retry_cancel_cleanup_and_ownership(import_databases
     await imports.execute_package_import({}, str(job.id))
     async with product.begin() as db:
         checked = await db.get(PackageImport, job.id)
-        assert checked.status == 'awaiting_confirmation'
+        assert checked.status == 'queued'
         assert await db.scalar(select(func.count()).select_from(ResearchExperiment)) == 0
         with pytest.raises(Exception) as denied:
-            await api.confirm(job.id, db, foreign)
+            await api.get(job.id, db, foreign)
         assert denied.value.status_code == 404
-        await api.confirm(job.id, db, owner)
     kill_after_resource_commit = resource_commits + 1
     with pytest.raises(WorkerKilled):
         await imports.execute_package_import({}, str(job.id))
@@ -179,8 +178,6 @@ async def test_durable_crash_retry_cancel_cleanup_and_ownership(import_databases
     shutil.copyfile(imports.directory(job.id) / 'archive.tar.gz',
                     imports.directory(repeated.id) / 'archive.tar.gz')
     await imports.execute_package_import({}, str(repeated.id))
-    async with product.begin() as db:
-        await api.confirm(repeated.id, db, owner)
     kill_after_resource_commit = resource_commits + 2
     with pytest.raises(WorkerKilled):
         await imports.execute_package_import({}, str(repeated.id))
@@ -207,8 +204,6 @@ async def test_durable_crash_retry_cancel_cleanup_and_ownership(import_databases
         db.add(cancelled)
     write_archive(cancelled, imports.directory(cancelled.id))
     await imports.execute_package_import({}, str(cancelled.id))
-    async with product.begin() as db:
-        await api.confirm(cancelled.id, db, owner)
     original_checkpoint = imports.checkpoint
 
     async def cancel_at_activation(identifier, phase, **progress):
@@ -312,7 +307,7 @@ async def test_expiry_isolates_malformed_upload_and_compensation_failure_from_pe
         assert retained.experiment_id == staged_experiments[failing.id]
         assert await db.get(ResearchExperiment, retained.experiment_id) is not None
         assert await db.get(ResearchExperiment, staged_experiments[staged.id]) is None
-        assert (await db.get(PackageImport, pending.id)).status == 'awaiting_confirmation'
+        assert (await db.get(PackageImport, pending.id)).status == 'queued'
     assert not root.exists()
     assert not imports.directory(staged.id).exists()
     assert imports.directory(failing.id).exists()

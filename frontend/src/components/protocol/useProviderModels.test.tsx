@@ -12,7 +12,7 @@ afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks() })
 
 it('automatically refreshes a mounted provider model list without navigation', async () => {
   vi.useFakeTimers()
-  vi.spyOn(llmSettingsApi, 'list').mockResolvedValue([])
+  vi.spyOn(llmSettingsApi, 'list').mockResolvedValue([{ provider: 'openai', api_base: null, azure_project_endpoint: null }])
   const response = (id: string): LLMSettingModelsResponse => ({
     models: [{ id, label: id, supports_temperature: true, supports_effort: false, effort_levels: [], supports_tool_calling: true }],
     source: 'api',
@@ -38,7 +38,7 @@ it.each([
   ['truly-unknown', false, true, 'medium'],
 ] as const)('uses backend capabilities for off-catalog %s and run warnings', async (model, temperature, effort, defaultEffort) => {
   vi.useFakeTimers()
-  vi.spyOn(llmSettingsApi, 'list').mockResolvedValue([])
+  vi.spyOn(llmSettingsApi, 'list').mockResolvedValue([{ provider: 'openai', api_base: null, azure_project_endpoint: null }])
   vi.spyOn(llmSettingsApi, 'listModels').mockResolvedValue({ models: [], source: 'static', note: null })
   const metadata = { supports_temperature: temperature, supports_effort: effort, effort_levels: effort ? ['low', 'medium', 'high'] : [], default_effort: defaultEffort }
   const resolve = vi.spyOn(llmSettingsApi, 'modelCapabilities').mockResolvedValue(metadata)
@@ -62,7 +62,7 @@ it.each([
 
 it('debounces changed custom IDs and never displays the previous model capabilities', async () => {
   vi.useFakeTimers()
-  vi.spyOn(llmSettingsApi, 'list').mockResolvedValue([])
+  vi.spyOn(llmSettingsApi, 'list').mockResolvedValue([{ provider: 'openai', api_base: null, azure_project_endpoint: null }])
   vi.spyOn(llmSettingsApi, 'listModels').mockResolvedValue({ models: [], source: 'static', note: null })
   const metadata = { supports_temperature: false, supports_effort: true, effort_levels: ['medium'], default_effort: 'medium' }
   const resolve = vi.spyOn(llmSettingsApi, 'modelCapabilities').mockResolvedValue(metadata)
@@ -85,7 +85,7 @@ it('debounces changed custom IDs and never displays the previous model capabilit
 
 it('does not resolve custom capabilities when an explicit override is present', async () => {
   vi.useFakeTimers()
-  vi.spyOn(llmSettingsApi, 'list').mockResolvedValue([])
+  vi.spyOn(llmSettingsApi, 'list').mockResolvedValue([{ provider: 'openai', api_base: null, azure_project_endpoint: null }])
   vi.spyOn(llmSettingsApi, 'listModels').mockResolvedValue({ models: [], source: 'static', note: null })
   const resolve = vi.spyOn(llmSettingsApi, 'modelCapabilities')
   const override = { supports_temperature: true, supports_effort: false, effort_levels: [], default_effort: null }
@@ -101,7 +101,7 @@ it('does not resolve custom capabilities when an explicit override is present', 
 
 it('reports a failed custom lookup instead of guessing effort', async () => {
   vi.useFakeTimers()
-  vi.spyOn(llmSettingsApi, 'list').mockResolvedValue([])
+  vi.spyOn(llmSettingsApi, 'list').mockResolvedValue([{ provider: 'openai', api_base: null, azure_project_endpoint: null }])
   vi.spyOn(llmSettingsApi, 'listModels').mockResolvedValue({ models: [], source: 'static', note: null })
   vi.spyOn(llmSettingsApi, 'modelCapabilities').mockRejectedValue(new Error('offline'))
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })

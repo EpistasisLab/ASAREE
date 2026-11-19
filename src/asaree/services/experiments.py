@@ -72,12 +72,14 @@ async def create_experiment(
     name: str,
     owner_id: uuid.UUID,
     description: str | None = None,
+    hypothesis: str | None = None,
     design_type: str = "factorial",
     task_brief: dict[str, Any] | None = None,
     design_spec: dict[str, Any] | None = None,
     measurement_plan: dict[str, Any] | None = None,
     metric_recommendations: dict[str, Any] | None = None,
     dataset_ids: Sequence[uuid.UUID] | None = None,
+    identifier: uuid.UUID | None = None,
 ) -> ResearchExperiment:
     spec = dict(design_spec or {})
     normalized_measurement_plan = normalize_measurement_plan(measurement_plan) if measurement_plan is not None else None
@@ -100,8 +102,10 @@ async def create_experiment(
     elif design_spec is None:
         spec["metrics"] = design_metrics_from_measurement_plan(normalized_measurement_plan)
     experiment = ResearchExperiment(
+        **({'id': identifier} if identifier else {}),
         name=name,
         description=description,
+        hypothesis=hypothesis,
         design_type=design_type,
         task_brief=task_brief,
         design_spec=spec,
@@ -115,6 +119,25 @@ async def create_experiment(
         await set_experiment_datasets(db, experiment.id, dataset_ids)
     await db.refresh(experiment)
     return experiment
+
+
+async def create_experiment_with_available_name(
+    db: AsyncSession, *, name: str, owner_id: uuid.UUID, **fields: Any,
+) -> ResearchExperiment:
+    """Use the normal creation contract, retrying only a concurrent name collision."""
+    from asaree.services.resource_names import available_name
+
+    for _ in range(_ALLOCATION_ATTEMPTS):
+        names = (await db.scalars(select(ResearchExperiment.name).where(
+            ResearchExperiment.owner_id == owner_id))).all()
+        candidate = available_name(name, names)
+        try:
+            async with db.begin_nested():
+                return await create_experiment(db, name=candidate, owner_id=owner_id, **fields)
+        except IntegrityError as exc:
+            if _UNIQUE_NAME_INDEX not in str(exc.orig):
+                raise
+    raise ExperimentNameAllocationError('Could not allocate an available experiment name; retry creation.')
 
 
 async def _next_untitled_number(db: AsyncSession, owner_id: uuid.UUID) -> int:

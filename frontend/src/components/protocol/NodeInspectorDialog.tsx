@@ -5,6 +5,7 @@ import { Dialog, DialogContent } from '@/components/ui/dialog'
 import { Label } from '@/components/ui/label'
 import { Slider } from '@/components/ui/slider'
 import { cardAccent, cn, HUD_ACCENT_RING_CLASSNAME } from '@/lib/utils'
+import { NodeInspectorResourceIssues } from './NodeResourceIssues'
 
 // Midpoint of the slider's own 20-100 range -- a visible, legible starting
 // point that still shows the transparency effect is there, rather than
@@ -135,7 +136,7 @@ export function NodeInspectorDialog({
             </div>
           </div>
         </div>
-        <div className={cn('min-h-0 flex-1 space-y-4 overflow-y-auto p-4', bodyClassName)}>{children}</div>
+        <div className={cn('min-h-0 flex-1 space-y-4 overflow-y-auto p-4', bodyClassName)}><NodeInspectorResourceIssues />{children}</div>
       </DialogContent>
     </Dialog>
   )

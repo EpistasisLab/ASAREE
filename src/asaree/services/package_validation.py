@@ -245,8 +245,8 @@ def validate(root: Path, limits: Limits, count: int) -> dict[str, Any]:
     if (manifest.get('format') != 'asaree.experiment-package'
         or type(manifest.get('schema_version')) is not int or manifest['schema_version'] not in (1, 2)):
         raise PackageError('Unsupported experiment package format/version; supported: 1, 2')
-    if type(manifest.get('results_included')) is not bool:
-        raise PackageError('results_included must be a Boolean')
+    if manifest.get('results_included') is not False:
+        raise PackageError('Experiment packages contain configuration and input assets only; results are unsupported')
     for key, name in (('files', 'files.jsonl'), ('dependencies', 'dependencies.jsonl')):
         if manifest[key]['path'] != name:
             raise PackageError(f'Invalid {key} inventory locator')
@@ -262,12 +262,12 @@ def validate(root: Path, limits: Limits, count: int) -> dict[str, Any]:
         (markers / hashlib.sha256(name.encode()).hexdigest()).touch(exist_ok=False)
         verify(root, record)
         if name.split('/')[0] not in {'dependencies.jsonl', 'publication', 'experiment-metadata.json',
-                                      'design', 'inputs', 'resources', 'requirements', 'results', 'sources'}:
+                                      'design', 'inputs', 'resources', 'requirements', 'sources'}:
             raise PackageError(f'Unsupported payload category: {name}')
         schema_json = name in {'experiment-metadata.json', 'publication/canvas.json', 'publication/settings.json',
                                'inputs/bindings.json', 'design/revision.json'} or name.startswith((
             'inputs/datasets/', 'inputs/splits/', 'requirements/', 'resources/skill-metadata/',
-            'results/attempts/', 'results/rows/'))
+            'resources/personas/'))
         if schema_json and name.endswith('.json'):
             document(root / name, limits)
         elif name in {'dependencies.jsonl', 'design/cells.jsonl', 'design/replicates.jsonl'}:
@@ -292,6 +292,26 @@ def validate(root: Path, limits: Limits, count: int) -> dict[str, Any]:
     settings = document(root / 'publication/settings.json', limits)
     if not isinstance(graph, dict) or not isinstance(settings, dict):
         raise PackageError('Canvas and settings must be objects')
+    for path in (root / 'resources/personas').glob('*.json'):
+        from asaree.services.personas import MAX_PROMPT_BYTES, snapshot_identity
+
+        persona = document(path, limits)
+        source = snapshot_identity(persona['config'])
+        prompt = persona['config'].get('persona_text') or ''
+        if (persona['id'] != source or path.stem != source or not isinstance(prompt, str)
+            or len(prompt.encode()) > MAX_PROMPT_BYTES
+            or (path.with_suffix('.md')).read_bytes() != prompt.encode()):
+            raise PackageError('Persona snapshot identity or content mismatch')
+    from asaree.services.experiment_packages import node_variants
+    from asaree.services.personas import snapshot_identity
+
+    for node in graph.get('nodes', []):
+        if node.get('type') != 'persona':
+            continue
+        for variant in node_variants(node, settings.get('design_spec')):
+            source = snapshot_identity((variant.get('data') or {}).get('config') or {})
+            if not (root / f'resources/personas/{source}.json').is_file():
+                raise PackageError('Persona snapshot is missing from the package')
     node_ids = [node['id'] for node in graph.get('nodes', [])]
     if len(set(node_ids)) != len(node_ids):
         raise PackageError('Duplicate canvas node identity')
@@ -467,22 +487,3 @@ def validate_references(root: Path, limits: Limits, manifest: dict[str, Any], ma
                 if type(record['replicate_number']) is not int or record['replicate_number'] < 1:
                     raise PackageError('Invalid planned replicate number')
             remember(category, record['id'], record)
-    for path in (root / 'results/rows').glob('*.json'):
-        row = document(path, limits)
-        require('replicate', row['replicate_result_id'])
-        if row['protocol_revision_id'] != manifest['publication']['id']:
-            raise PackageError('Historical row belongs to a different publication')
-        remember('row', row['id'], row)
-    for path in (root / 'results/attempts').glob('*/attempt.json'):
-        attempt = document(path, limits)
-        if path.parent.name != str(uuid.UUID(attempt['id'])):
-            raise PackageError('Attempt path and identity disagree')
-        if not manifest.get('results_included'):
-            raise PackageError('Results present while manifest excludes results')
-        if attempt.get('replicate_result_id'):
-            require('replicate', attempt['replicate_result_id'])
-        if attempt.get('row_result_id') and manifest['schema_version'] >= 2:
-            require('row', attempt['row_result_id'])
-        remember('attempt', attempt['id'], attempt)
-    for file in (root / 'results/artifacts').glob('*'):
-        require('attempt', file.name)

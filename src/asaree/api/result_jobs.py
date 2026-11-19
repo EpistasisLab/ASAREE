@@ -3,7 +3,7 @@
 import uuid
 from dataclasses import replace
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
@@ -28,7 +28,7 @@ class Command(BaseModel):
     rerun_slot_ids: list[uuid.UUID] = Field(default_factory=list, max_length=100)
     rerun_completed: bool = False
     format: str = Field(default="analysis_csv", pattern="^(analysis_csv|experiment_package)$")
-    include_results: bool = False
+    include_results: Literal[False] = False
 
 
 def payload(job: ResultJob) -> dict[str, Any]:

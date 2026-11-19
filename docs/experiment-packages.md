@@ -1,329 +1,132 @@
-# Published experiment packages
+# Experiment packages
 
-The canvas top bar offers **Download experiment package**. Select a published
-version, including an older version, and optionally include its results. The
-separate **Download draft definition JSON** action remains a draft definition
-export without dependency files.
+The canvas **Download** action exports the published experiment and all required
+input assets as a `.tar.gz` package. Publish the current draft before exporting;
+Download does not publish it or offer a publish-and-export shortcut. When browsing
+a historical version, Download exports that selected version.
 
-API clients create the same owned export job used by Results CSV downloads:
+Packages contain the canvas, experiment settings, measurement plan, design,
+datasets and exact split files, scripts, Skills and their bundled files, knowledge
+content, and saved persona snapshots as Markdown. Factor alternatives and
+sub-agent definitions/wiring are included. Missing, changed, unreadable or
+unauthorized required content fails preparation with a diagnostic; an incomplete
+archive is never published as a download. Saved destination connections are
+requirements rather than bundled assets. Credentials are excluded.
 
-```http
-POST /api/experiments/{experiment_id}/execution-results/jobs?protocol_id={protocol_id}&protocol_revision_id={publication_id}
-Content-Type: application/json
+Results, observations, execution history, execution output artifacts, queues,
+workspace resume state, row indexes, caches and scratch are excluded. Package
+import does not restore results. Existing Results CSV exports are separate.
 
-{"kind":"export","format":"experiment_package","include_results":false,"request_key":"unique-client-request"}
-```
+## Create experiment from file
 
-The publication ID is mandatory. Partial cell, replicate, or row selections are
-not supported for a package. Poll the returned job ID through the existing job
-endpoint. Completed jobs provide a native `download_url`, a manifest
-`schema_url`, and `progress.sha256` for the compressed archive. Links are signed
-for five minutes; requesting job status renews the link. Prepared files expire
-24 hours after job creation. Cancellation and failure never publish partial
-archives as completed downloads.
+Use **Create experiment from file** from the existing header menu. It accepts:
 
-## Schema versions and compatibility
+- Legacy `.json` experiment definitions, which have no asset file contents.
+- `.tar.gz` packages containing the complete definition and input assets.
 
-New exports use schema **2**. Imports accept schemas **1 and 2**; other versions
-are rejected before confirmation. Version 2 adds structured Skill metadata,
-Skill file encodings/order, dataset registration metadata, knowledge registration kinds/empty-tree counts, publication notes and
-stable row-slot evidence. These additions close reconstruction gaps found by
-auditing the actual version 1 exporter. Version 1 files remain readable and
-re-exportable; the importer parses recorded Skill frontmatter, but never claims
-to recover omitted source filenames, original resource encodings/order or row
-slot facts. Such omissions are explicitly reported in preflight. A v1 binary
-Skill resource is represented locally as base64 without claiming that was its
-original storage encoding.
+After choosing the file and creating the experiment, package inspection and
+reconstruction proceed automatically. There is no preflight acceptance or
+connection-acknowledgement step. Progress and failures appear in the same dialog;
+failed requests can be retried. Completion opens the new experiment's canvas.
+Both formats create an **unpublished editable draft**. A JSON file's source
+published snapshot does not create a destination publication.
 
-Both versions require canonical UUIDs for typed archive identities. MCP
-requirement filenames, their IDs and included knowledge directory names must
-agree; inconsistent packages are rejected rather than assigning new meanings to
-their paths. Explicit missing/unresolved dependencies remain diagnostics, including
-legacy name-only lookups. Only a Skill's exact root `SKILL.md` is its entrypoint;
-nested files such as `references/SKILL.md` are ordinary bundled resources. Version
-2 retains their recorded encoding/order; version 1 retains their bytes with the
-same explicit unknown source metadata as other v1 resources.
+Saved provider connections resolve through the destination user's ordinary
+provider settings. Trusted built-in MCP registrations match only when their
+stable service identity and required tools agree and the match is unique. Custom
+MCP connections are never selected automatically. Missing or ambiguous connections
+appear as node warnings; choose a compatible saved connection in the affected
+node inspector. Missing credentials are repaired in Profile. Normal discovery
+and validation handle connectivity; import never starts packaged commands,
+executes scripts, invokes tools, tests credentials or runs an experiment.
 
-The common archive layout is:
+## Destination identities and storage
 
-The `.tar.gz` archive contains:
+The imported experiment, protocol and owned resources receive fresh destination
+identities. Typed references are remapped, including factor alternatives,
+measurement bindings, and ordered dataset/Skill/knowledge selections. Node IDs
+remain scoped to the new protocol so edges, sub-agent selections and prompt
+references continue to agree. Prompts, scripts and data are opaque content;
+hard-coded external addresses or paths inside them are not rewritten.
 
-| Member | Meaning |
+Dataset sources and exact split bytes are retained in managed storage. Knowledge
+registrations point to destination managed directories. Each distinct saved
+persona snapshot becomes a reusable destination Persona; a node combining
+multiple personas recreates its exact combined prompt as one entry. Source
+persona IDs do not become live destination references. Changing a library persona
+does not change an imported node's saved text.
+
+Normal experiment creation and protocol naming are reused. Experiment names keep
+the original when available, otherwise use the existing `Name (2)` convention.
+Resource names follow their owning namespace's uniqueness and validation rules;
+there is no unconditional import-UUID suffix. Source manifests and typed identity
+mappings retain offline provenance without requiring access to the source
+installation.
+
+## Format and integrity
+
+Packages use `asaree.experiment-package`, schema 2. Payloads contain:
+
+| Path | Contents |
 | --- | --- |
-| `manifest.json` | Format/version, selected publication, capture window, software requirements, completeness and inventory hashes |
-| `files.jsonl` | One record per payload member: relative path, source identity, byte count, SHA-256 and provenance |
-| `dependencies.jsonl` | Included, missing, unresolved and intentionally excluded dependencies, with reasons |
-| `publication/` | Selected canvas and experiment settings, including factors, bindings and measurements |
-| `experiment-metadata.json` | Current name/description, explicitly captured at download time |
-| `design/` | Referenced design declaration and generated cell/replicate identities |
-| `inputs/` | Pinned dataset bindings, originals, exact split files and split provenance |
-| `resources/` | Scripts, rendered stored Skills with all bundled resources, and authorized knowledge content |
-| `requirements/` | Model configurations and MCP server/tool requirements without connection secrets |
-| `results/` | Optional version-scoped attempts, observations, recorded evidence and retained attributable files |
-| `sources/` | Imported source manifests/publications and typed identity mappings; with results selected, the exact original source archive |
+| `manifest.json` | Publication identity, capture information, software requirements and inventory hashes |
+| `files.jsonl`, `dependencies.jsonl` | Member hashes, sizes, dependency identities and connection requirements |
+| `publication/`, `experiment-metadata.json` | Canvas and experiment configuration |
+| `design/` | Generated design and pending replicate slots, without results |
+| `inputs/` | Pinned datasets, exact originals/splits and provenance |
+| `resources/` | Scripts, Skills, knowledge and persona Markdown snapshots |
+| `requirements/` | Credential-free provider and MCP requirements |
+| `sources/` | Imported source configuration and identity provenance |
 
-The manifest hashes both inventories. `files.jsonl` hashes dependency inventory
-bytes but does not hash itself or the manifest, avoiding circular references.
-Dataset artifact UUIDs map to paths through the dependency inventory. Arrays in
-pinned bindings preserve their recorded ordering and row projections. Resources
-are deduplicated within this export by stable identity, never across owners.
+Published configuration and dataset input identities are pinned. Reusable Skills
+and knowledge are captured at download time; the manifest records that distinction.
+ASAREE and Motoro have separate database snapshots, and mutable files have no
+historical transaction guarantee. Packages are logical exports, not database
+backups or promises of identical external-model outputs.
 
-`publication_pinned` identifies recorded publication/configuration and verified
-input identities. `captured_at_download` identifies mutable reusable library or
-knowledge content. Skill entry points are rendered from stored metadata/body;
-bundled UTF-8 and base64 assets retain their stored content. `recorded_attempt`
-identifies an attempt's own facts, rather than a latest-attempt projection.
-`legacy.unknown` records history that cannot be established. Missing historical
-settings, sources, splits or files never resolve to the current draft or split.
+Archive inspection verifies hashes, identity relationships and file counts before
+creating records. It enforces compressed/expanded/member/document limits and
+rejects traversal paths, links, special files and excluded credential-file names.
 
-ASAREE records are read under one repeatable-read snapshot. Motoro resources use
-a separate snapshot; filesystem captures verify opened files and detect tree
-changes. Mutable external knowledge has no cross-file transaction or historical
-snapshot. The manifest records this limitation rather than claiming publication
-fidelity. Uploaded bundles and documents use the application's per-owner storage
-boundary. An external registration or shared browse access alone does not prove
-authority to download the registered directory. Broad roots, other owners'
-knowledge, symlinks and ambiguous overlaps are unresolved dependencies.
+## External knowledge export grants
 
-### External knowledge export grants
+Uploaded, owned knowledge is exportable. Registering an external path or allowing
+it to be browsed does not authorize packaging its contents. Operators can grant a
+user access to one exact external bundle root with `knowledge_export_grants`
+(`ASAREE_KNOWLEDGE_EXPORT_GRANTS`), a JSON mapping of user UUIDs to absolute paths.
+Grants do not authorize ancestors/descendants, broad roots, platform-storage
+overlaps, or another owner's overlapping registrations. Configure the same grants
+and mounted paths on the API and results worker. Ambiguous authorization fails
+export without including foreign content.
 
-Operators can authorize a specific external bundle for a user with the
-`knowledge_export_grants` setting, supplied as JSON through
-`ASAREE_KNOWLEDGE_EXPORT_GRANTS`, for example:
+## API
 
-```json
-{"00000000-0000-0000-0000-000000000001":["/srv/research/approved-cohort-bundle"]}
-```
+Create an owned export job with
+`POST /api/experiments/{experiment_id}/execution-results/jobs`, supplying
+`protocol_id` and `protocol_revision_id` query parameters and a body such as
+`{"kind":"export","format":"experiment_package","request_key":"unique-key"}`.
+Results requests are rejected. Poll the existing job endpoint for its native
+download URL. Signed links last five minutes and refresh on status reads;
+prepared downloads expire after 24 hours.
 
-The key is the application user's UUID. Each absolute path must match the
-registered bundle root exactly; there is no implicit grant to descendants or
-ancestors. A grant is the operator's assertion that **all content under that
-exact root is authorized for that user**. It is not inferred from filesystem
-ownership, a registration's owner field, or absence of competing registrations.
-Configure only narrow named bundle roots after reviewing their full contents.
+Create an import with `POST /api/experiment-package-imports` and
+`{"request_key":"unique-key"}`, upload raw gzip bytes through
+`PUT /api/experiment-package-imports/{id}/upload`, then poll
+`GET /api/experiment-package-imports/{id}`. Validation queues reconstruction
+automatically. The owned `cancel` and `retry` actions remain available. The
+`readiness` and `connections` routes support canvas warnings and inspector repairs;
+they do not constitute a separate setup workflow. Source-file and identity readers
+remain authenticated diagnostic interfaces.
 
-Grants support isolated legacy bundles outside today's browse root without
-moving or adopting their files. They do not override rejection of the shared
-browse root/its ancestors, platform-storage overlaps, or foreign/ownerless
-knowledge registrations and other users' grants that overlap in either direction
-or exactly. Missing or malformed grants, unreadable registration evidence and
-ambiguous knowledge boundaries are reported as unresolved before content capture;
-diagnostics do not expose another owner's identifiers, paths, commands or bytes.
-
-Set the same configuration on the API and worker processes, particularly
-`asaree-results-worker`, which builds packages. In the supplied Compose setup,
-the configured environment file is already forwarded to `asaree-app`,
-`asaree-worker`, and `asaree-results-worker`; a host-shell variable alone is not
-automatically forwarded. Deployment overrides can set the JSON value in those
-services' `environment` mappings. External paths must be mounted consistently
-in the exporting worker. No grant is required for authorized uploaded bundles
-and documents, and this correction changes no database schema or package format.
-
-Credential/connection fields, including typed fallback and sampling snapshot
-fields, and recognized credential files are excluded. Dataset bytes, prompts,
-scripts and opaque experimental values are preserved. Known knowledge display
-paths become relative archive directories; sampling snapshot keys identify
-credential-free explicit input in the archive, rather than executable runtime
-resolver requests. Importers must use this schema and restore connections;
-the package is not a direct runtime-resume image.
-
-Optional results include every retained production attempt for the selected
-publication and design. They exclude test runs, node previews, other versions,
-queues, workspace resume/control state, regenerable row views/indexes, caches
-and scratch. UUID-isolated retained outputs include Agent slots and Script
-working directories. Shared legacy workspaces and experiment-level artifacts
-without publication attribution are not assigned to historical versions; the
-dependency inventory records unavailable or unscoped evidence.
-AgentRun IDs in node evidence are source provenance; native Motoro step history
-and resume/control snapshots are not bundled.
-Workspace scratch is recognized structurally at `.scratch/` under the workspace
-root or its `dataset=`/`agent=` slots. User artifacts such as
-`outputs/working/prediction.csv`, `outputs/cache/`, `outputs/scratch/`, and
-`outputs/.scratch/` remain durable content. Temporary preparation names use the
-reserved hidden producer naming pattern; an ordinary `results.preparing/`
-output directory is preserved.
-Materialized Script source exclusions apply only to the producer's immediate
-`scripts/` directory (including a recorded standalone Agent's directory).
-Row-input CSVs and `row-view.json` are excluded only at the exact
-`agents/<64-hex Agent key>/` location inside a row attempt. Nested output files
-and whole-workspace artifacts retain their bytes even when their names resemble
-these inputs.
-
-Archive generation streams file bytes and SQL evidence slices, spools inventories
-to plain files, and discards tar member metadata after writing. Memory does not
-grow with the number of attempts, archive members or dataset rows. Publication
-configuration and one bounded Skill/resource record are processed at a time.
-Copying/compression run off the event loop; cancellation stops and joins active
-writer work before cleanup. No new database or SQLite inventory is introduced.
-
-A package is a logical export, not a database backup. Resuming workspaces and
-reproducing external model/tool outputs are outside its scope. See
-[ADR 0003](adr/0003-immutable-dataset-inputs-and-managed-artifacts.md).
-
-## Import workflow
-
-On **Experiments**, choose a `.tar.gz` package under **Import experiment
-package**. Upload starts inspection only. Review the source version, schema,
-file categories, missing dependencies, historical results and local configuration
-requirements, then explicitly confirm creating a new experiment. The persistent
-request list lets you return after navigation or a browser restart. Cancel before
-activation or retry a failed unexpired request. A distinct request creates a
-distinct owned experiment even for identical archive bytes.
-
-The new experiment contains an editable draft and planned cells/replicates.
-It has no selected local publication and no fabricated completed executions.
-Imported source publications, resolver/sampling snapshots, all retained attempts,
-observations and artifacts stay immutable in managed files. **Download experiment
-package → Imported source evidence** exposes those files separately from local
-Runs/Results projections. It also provides an exact source package re-export.
-New local exports retain source manifests/publications and typed mappings under
-`sources/`; including results additionally preserves the original source archive
-as an opaque nested evidence file. Nested archives are never executed or used
-as native runtime state.
-
-Open the imported experiment's editable draft. Its setup panel reports **Ready to
-publish** or **Setup needed**, with links to affected canvas nodes. Select saved
-destination provider connections and compatible custom MCP connections there;
-multiple compatible connections always require an explicit selection. Missing
-credentials can be configured in Profile. Refresh readiness after setup changes.
-Normal publication validates the current draft and every factor alternative;
-there is no acknowledgement checkbox and no return to the upload screen.
-Incomplete drafts remain editable and source evidence remains inspectable.
-Readiness checks saved records only; live connection tests are explicit actions.
-Normal publication resolves new local sampling/input
-snapshots; it does not rewrite the preserved source evidence. Resource names
-receive an import-specific suffix to avoid collisions. Canvas node IDs remain
-protocol-scoped labels because prompts may address them; new protocol ownership
-creates a fresh identity namespace. Only typed resource references, selections
-and bound factor alternatives are remapped. Opaque strings, scripts, prompts,
-dataset values, observation values and provenance are not searched/replaced.
-
-Imported content receives fresh owned identities, including imported MCP
-requirement identities. Runtime bindings may reference authorized destination
-system services or explicitly selected owned connections. These bindings are
-recorded separately from source-to-local content mappings. New packages record
-stable built-in service identities derived from shipped modules; automatic
-matching requires a trusted system registration, the same service identity,
-all recorded required tools and exactly one compatible destination. The additive
-`service_identity` and `required_tool_names` requirement fields are supported in
-schema 2; required tools include the union of factor alternatives and implicit
-dataset/Script grants. Older requirements without a required-tool subset use
-their recorded full tool list conservatively. Display
-names and source owner IDs never establish compatibility or authorization.
-Older packages without service identities require explicit selection. Destination
-commands, URLs, environment and credentials remain untouched. Scalar MCP identity
-factor alternatives become complete configurations so each selected identity
-retains its matching destination runtime name. Opaque values remain unchanged.
-
-Before downloading a prepared export, the dialog separates included dependencies,
-destination connection requirements and missing/unresolved content. Incomplete
-packages are labelled explicitly and retain actionable dependency diagnostics
-(up to 100 in the summary; the full inventory remains in the package). Connection
-requirements alone do not make content incomplete. The selected historical
-publication remains authoritative; missing history never uses current content.
-Use **Publish & prepare package** to download current draft changes instead.
-
-### API
-
-All routes below require the importing user's authentication:
-
-1. `POST /api/experiment-package-imports` with `{"request_key":"client-unique-key"}`.
-   The same owner/key returns the same durable request.
-2. `PUT /api/experiment-package-imports/{id}/upload` with raw gzip archive bytes.
-   A disconnected upload can be repeated before inspection; no multipart buffering
-   is required.
-3. Poll `GET /api/experiment-package-imports/{id}` for status, progress, diagnostics,
-   preflight, source SHA-256 and destination experiment ID.
-4. `POST .../{id}/confirm` explicitly queues activation. Repeated confirmation is
-   idempotent. `POST .../{id}/cancel` cancels before completed activation;
-   `POST .../{id}/retry` re-inspects a failed request before another confirmation.
-5. `GET .../{id}/files?offset=0&limit=50` pages source inventory;
-   `GET .../{id}/source?path=publication/canvas.json` downloads one original file.
-   Omitting `path` re-exports the original source archive byte-for-byte.
-   `GET .../{id}/identities?offset=0&limit=50` pages durable typed provenance.
-6. `GET .../{id}/readiness` returns read-only readiness issues with `node_id`,
-   compatible authorized MCP candidates, and saved provider selections.
-   `POST .../{id}/connections` with `{"kind":"mcp","source_id":"source-uuid",
-   "destination_id":"destination-uuid"}` explicitly selects an existing
-   connection. Use `"kind":"provider"` and a provider key such as `"openai"`
-   as `source_id` to select that user's saved provider setting. These actions
-   never connect, test credentials, or invoke packaged code. Publish using the
-   normal protocol publication endpoint. The legacy `/configuration` endpoint
-   remains compatible but its timestamp does not unlock or gate publication.
-
-`GET /api/experiment-package-imports?experiment_id={id}` finds an experiment's
-source history; omitting the filter returns the newest 50 owned requests.
-
-### Lifecycle, limits and recovery
+## Lifecycle, limits and recovery
 
 The existing results worker relays durable `validating`, `queued` and `activating`
-requests. PostgreSQL advisory locks serialize a request across workers. Archive
-extraction, inventories and evidence use filesystem staging, not SQLite. Hashes
-and references are verified before activation and the archive is re-inspected
-before reconstruction. IDs derive from the request and typed source identity;
-retry adopts only that request's owned staged resources. Motoro and ASAREE use
-separate transactions. Skills stay soft-deleted and MCP registrations stay
-disconnected/hidden during resource staging. Native experiment/protocol readers
-hide incomplete activation. The relay finishes an interrupted visibility flip;
-failures/cancellation compensate only records allocated by that request.
+requests. Advisory locks serialize work on a request. Deterministic identities
+within that request permit recovery without duplicating resources; separate
+requests create separate experiments. Content is staged before visibility changes,
+and incomplete resources remain hidden. Cancellation/failure cleanup removes only
+that request's staged resources. Uncompleted requests expire after 24 hours.
+Completed input assets and source provenance remain available in managed storage.
 
-Uncompleted requests expire after 24 hours; cancellation schedules cleanup on the
-next results-worker relay. Cleanup waits for the request's worker lock and removes
-only its staging paths and resources. Completed imports are durable evidence and
-do not inherit download-export expiry. Include their files and database records
-in coordinated backups. The API and results worker must share the same managed
-storage configuration.
-
-Never-validated uploads have no staged resources: cleanup discards their private
-files without parsing partially extracted inventories. Each expired request has
-its own cleanup transaction. A compensation failure retains that request with
-`compensation_required` progress for retry while other requests continue through
-cleanup and enqueueing. Staged resources still receive owned deterministic-ID
-compensation; their cleanup is not skipped when another upload is malformed.
-
-Configurable environment limits (positive integers):
-
-| Setting (`ASAREE_` prefix) | Default |
-| --- | --- |
-| `PACKAGE_IMPORT_MAX_COMPRESSED` | 1 GiB |
-| `PACKAGE_IMPORT_MAX_EXPANDED` | 8 GiB |
-| `PACKAGE_IMPORT_MAX_MEMBERS` | 100,000 files |
-| `PACKAGE_IMPORT_MAX_DOCUMENT` | 16 MiB per JSON document, JSONL record or Skill resource |
-
-Files stream in bounded blocks; attempt inventories are disk-backed. JSON canvas,
-settings and one evidence document must fit the configured document limit.
-Archives exceeding any limit fail inspection with a diagnostic; increase limits
-deliberately for larger recorded evidence. Traversal, links, special/sparse files,
-duplicate/conflicting members, invalid JSON, unsupported schemas, unlisted files,
-incorrect hashes/sizes and inconsistent typed references are rejected. Archive
-metadata is bounded before parsing: only the exporter's ordinary files and local
-PAX path/size extensions are accepted; global/GNU sparse/nested extensions are
-rejected. Resource filename extensions do not turn opaque contents into schema
-documents; binary Skill, knowledge and artifact bytes remain opaque.
-Archive
-ownership fields never confer authorization. No packaged script/tool or server
-connection is invoked by inspection or reconstruction.
-
-### Export-to-import coverage audit
-
-| Exported component | Local reconstruction / retained evidence |
-| --- | --- |
-| Manifest, inventories, source version and capture provenance | Immutable exact original files, source archive SHA-256, durable owned request |
-| Canvas, Agent configs, model requirements, settings, measurements | Editable sanitized draft; source snapshots retained separately; local publication required |
-| Design declarations, cells, planned replicates | New local IDs; typed references and resource-valued factor alternatives remapped |
-| Dataset bindings, projections and ordering | Exact source binding evidence; graph wiring/order retained; new owned registrations |
-| Original CSVs, pinned split files and split provenance | Exact filesystem bytes/hashes, owned artifact/split records, no row-index import |
-| Scripts and inline content | Exact source content; no execution during import |
-| Skills, discovery fields, frontmatter and all resource files | Owned Motoro Skills/files; UTF-8/base64 encoding and order from v2 metadata |
-| Knowledge trees and MCP requirements | Owned managed copies and disconnected registrations; explicit local configuration |
-| Optional attempts, observations, row slots, conversations, node evidence, usage/errors | Source-attributed historical files and identity mappings; no native runtime records or latest-result projection |
-| Attributable durable output/artifact files | Exact source files with hashes and attempt attribution; re-exportable source evidence |
-| Missing/excluded dependencies and unavailable history | Visible diagnostics and preserved inventories; no same-name substitution |
-
-The PostgreSQL tests cover isolated source/destination product and resource
-schemas, different owners/storage paths/credentials, both dataset modes, exact
-CSV/split/binary Skill bytes, publication readiness, built-in compatibility and
-ambiguity, explicit custom mapping, factor alternatives, source re-export,
-ownership isolation and cross-database crash/retry/cancel boundaries. Archive
-tests cover corruption, unsafe members, limits, compatibility and non-execution.
-Native Motoro step/resume histories were never exported and cannot be restored.
+See [managed storage](managed-storage.md) and
+[ADR 0003](adr/0003-immutable-dataset-inputs-and-managed-artifacts.md).

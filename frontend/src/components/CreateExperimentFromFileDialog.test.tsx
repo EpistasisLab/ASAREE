@@ -1,0 +1,58 @@
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { afterEach, expect, it, vi } from 'vitest'
+import { experimentsApi, packageImportsApi } from '@/api/client'
+import type { Experiment } from '@/types/experiments'
+import type { PackageImport } from '@/types/packageImports'
+import { CreateExperimentFromFileDialog } from './CreateExperimentFromFileDialog'
+
+afterEach(() => vi.restoreAllMocks())
+
+function show() {
+  const imported = vi.fn()
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  render(<QueryClientProvider client={client}><CreateExperimentFromFileDialog open onOpenChange={vi.fn()} onImported={imported} /></QueryClientProvider>)
+  return { imported, client }
+}
+
+it('keeps legacy JSON definitions and creates their draft without restoring a publication', async () => {
+  const create = vi.spyOn(experimentsApi, 'importDefinition').mockResolvedValue({ id: 'new' } as Experiment)
+  const { imported } = show()
+  const definition = { name: 'Old experiment', graph: { nodes: [], edges: [] },
+    canvas: { published: { graph: { nodes: [{ id: 'historical' }], edges: [] } } } }
+  const file = new File([JSON.stringify(definition)], 'experiment.json', { type: 'application/json' })
+  fireEvent.change(screen.getByLabelText('Experiment definition'), { target: { files: [file] } })
+  fireEvent.click(await screen.findByRole('button', { name: 'Create experiment' }))
+  await waitFor(() => expect(imported).toHaveBeenCalledWith('new'))
+  expect(create).toHaveBeenCalledWith(expect.objectContaining({ name: 'Old experiment', graph: definition.graph }))
+  expect(create.mock.calls[0][0]).not.toHaveProperty('published_graph')
+})
+
+it('uploads a package and opens its draft automatically without a confirmation or setup step', async () => {
+  const job = { id: 'import', status: 'completed', experiment_id: 'restored', progress: {}, preflight: {} } as PackageImport
+  vi.spyOn(packageImportsApi, 'create').mockResolvedValue(job)
+  const upload = vi.spyOn(packageImportsApi, 'upload').mockResolvedValue(job)
+  vi.spyOn(packageImportsApi, 'get').mockResolvedValue(job)
+  const command = vi.spyOn(packageImportsApi, 'command')
+  const { imported } = show()
+  const file = new File(['archive bytes'], 'experiment.tar.gz', { type: 'application/gzip' })
+  fireEvent.change(screen.getByLabelText('Experiment definition'), { target: { files: [file] } })
+  fireEvent.click(screen.getByRole('button', { name: 'Create experiment' }))
+  await waitFor(() => expect(imported).toHaveBeenCalledWith('restored'))
+  expect(upload).toHaveBeenCalledWith('import', file)
+  expect(command).not.toHaveBeenCalled()
+  expect(screen.queryByText(/Confirm import/)).not.toBeInTheDocument()
+})
+
+it('reports a failed package import without navigating to a partial experiment', async () => {
+  const job = { id: 'import', status: 'failed', experiment_id: null, error: 'Hash mismatch', progress: {}, preflight: {} } as PackageImport
+  vi.spyOn(packageImportsApi, 'create').mockResolvedValue(job)
+  vi.spyOn(packageImportsApi, 'upload').mockResolvedValue(job)
+  vi.spyOn(packageImportsApi, 'get').mockResolvedValue(job)
+  const { imported } = show()
+  fireEvent.change(screen.getByLabelText('Experiment definition'), { target: { files: [new File(['x'], 'bad.tar.gz')] } })
+  fireEvent.click(screen.getByRole('button', { name: 'Create experiment' }))
+  expect(await screen.findByText('Hash mismatch')).toBeInTheDocument()
+  expect(imported).not.toHaveBeenCalled()
+  expect(screen.getByRole('button', { name: 'Retry import' })).toBeInTheDocument()
+})

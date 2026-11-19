@@ -57,17 +57,14 @@ async def validate_model_connection(db: AsyncSession, job: PackageImport, config
     provider = config.get('provider') or kind.removeprefix('model_').removeprefix('llm_')
     setting = await db.scalar(select(UserLLMSetting).where(
         UserLLMSetting.user_id == job.owner_id, UserLLMSetting.provider == provider))
-    selection = await db.get(ImportedIdentity, (job.id, 'runtime_provider', provider))
-    if setting is None or selection is None or selection.local_id != setting.id:
-        raise ValueError(f'Select the saved destination {provider} connection for Model node {node_id}.')
+    if setting is None:
+        raise ValueError(f'Configure your saved {provider} connection for Model node {node_id}.')
     for fallback in config.get('fallback_models') or []:
         await validate_model_connection(db, job, fallback, kind, node_id)
 
 
 async def setup_options(db: AsyncSession, job: PackageImport) -> dict[str, Any]:
-    from asaree.models.experiment import ResearchExperiment
     from asaree.services import package_imports
-    from asaree.services.experiment_packages import node_variants
     from asaree.services.package_reconstruction import readiness_issues
     from asaree.services.package_validation import document
 
@@ -85,28 +82,8 @@ async def setup_options(db: AsyncSession, job: PackageImport) -> dict[str, Any]:
                 'selected_id': str(binding.local_id) if binding else None,
                 'candidates': [{'id': str(server.id), 'name': server.name} for server in servers
                                if compatible(source, server)]})
-    protocol = await db.scalar(select(Protocol).where(Protocol.experiment_id == job.experiment_id))
-    experiment = await db.get(ResearchExperiment, job.experiment_id)
-    required_providers: set[str] = set()
-
-    def require_provider(config: dict[str, Any], kind: str) -> None:
-        required_providers.add(config.get('provider') or kind.removeprefix('model_').removeprefix('llm_'))
-        for fallback in config.get('fallback_models') or []:
-            require_provider(fallback, kind)
-
-    for node in (protocol.graph if protocol else {}).get('nodes', []):
-        if str(node.get('type', '')).startswith(('model_', 'llm_')):
-            for variant in node_variants(node, experiment.design_spec if experiment else None):
-                require_provider((variant.get('data') or {}).get('config') or {}, node['type'])
-    settings = (await db.scalars(select(UserLLMSetting).where(UserLLMSetting.user_id == job.owner_id,
-        UserLLMSetting.provider.in_(required_providers)))).all()
-    providers = []
-    for setting in settings:
-        binding = await db.get(ImportedIdentity, (job.id, 'runtime_provider', setting.provider))
-        providers.append({'provider': setting.provider, 'id': str(setting.id),
-                          'selected': binding is not None and binding.local_id == setting.id})
     issues = await readiness_issues(db, job)
-    return {'ready': not issues, 'issues': issues, 'mcp': requirements, 'providers': providers}
+    return {'ready': not issues, 'issues': issues, 'mcp': requirements}
 
 
 def rebind_definition(graph: dict[str, Any], design: dict[str, Any] | None,
@@ -165,13 +142,7 @@ async def select_connection(db: AsyncSession, job: PackageImport, kind: str,
     from asaree.services.package_reconstruction import identity
     from asaree.services.package_validation import canonical_identity, document
 
-    if kind == 'provider':
-        setting = await db.scalar(select(UserLLMSetting).where(UserLLMSetting.id == destination,
-            UserLLMSetting.user_id == job.owner_id, UserLLMSetting.provider == source))
-        if setting is None:
-            raise ValueError('Choose an authorized saved connection for this provider.')
-        mapping_kind = 'runtime_provider'
-    elif kind == 'mcp':
+    if kind == 'mcp':
         source = canonical_identity(source)
         path = package_imports.directory(job.id) / f'payload/requirements/mcp/{source}.json'
         requirement = document(path, package_imports.limits())

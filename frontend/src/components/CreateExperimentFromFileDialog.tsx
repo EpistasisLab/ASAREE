@@ -1,11 +1,12 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Upload } from 'lucide-react'
-import { ApiError, experimentsApi } from '@/api/client'
+import { experimentsApi, packageImportsApi } from '@/api/client'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { newRequestKey } from '@/lib/requestKey'
 import { FileDropInput } from '@/components/protocol/FileDropInput'
 import type { DesignSpec, MeasurementPlan } from '@/types/experiments'
 import type { ProtocolGraph } from '@/types/protocols'
@@ -21,7 +22,6 @@ interface ImportedDefinition {
   designSpec: DesignSpec | null
   measurementPlan: MeasurementPlan | null
   graph: ProtocolGraph
-  publishedGraph: ProtocolGraph | null
   protocolDescription: string | null
 }
 
@@ -44,10 +44,6 @@ function parseDefinition(text: string): ImportedDefinition {
   // usable, while still creating a new experiment rather than merging them.
   const experiment = isRecord(parsed.experiment) ? parsed.experiment : parsed
   const canvas = isRecord(parsed.canvas) ? parsed.canvas : parsed
-  const published = isRecord(canvas.published) ? canvas.published : null
-  const publishedGraph = published && isRecord(published.graph) && Array.isArray(published.graph.nodes) && Array.isArray(published.graph.edges)
-    ? published.graph as unknown as ProtocolGraph
-    : null
   const sourceName = optionalString(experiment.name)?.trim() || optionalString(parsed.name)?.trim() || 'Imported Experiment'
 
   return {
@@ -63,19 +59,8 @@ function parseDefinition(text: string): ImportedDefinition {
         ? parsed.measurement_plan
         : null) as unknown as MeasurementPlan | null,
     graph: parsed.graph as unknown as ProtocolGraph,
-    publishedGraph,
     protocolDescription: optionalString(canvas.description) ?? optionalString(parsed.description),
   }
-}
-
-function nextAvailableExperimentName(preferredName: string, existingNames: Iterable<string>): string {
-  const preferred = preferredName.trim() || 'Imported Experiment'
-  const names = new Set(existingNames)
-  if (!names.has(preferred)) return preferred
-
-  let number = 2
-  while (names.has(`${preferred} (${number})`)) number += 1
-  return `${preferred} (${number})`
 }
 
 export function CreateExperimentFromFileDialog({
@@ -89,28 +74,31 @@ export function CreateExperimentFromFileDialog({
 }) {
   const [definition, setDefinition] = useState<ImportedDefinition | null>(null)
   const [name, setName] = useState('')
-  const [nameEdited, setNameEdited] = useState(false)
   const [file, setFile] = useState<File | null>(null)
   const [fileError, setFileError] = useState<string | null>(null)
   const queryClient = useQueryClient()
 
-  const experimentsQuery = useQuery({
-    queryKey: ['experiments', 'all-for-import'],
-    queryFn: () => experimentsApi.list({ includeArchived: true }),
-    enabled: open,
-  })
-  const existingNames = useMemo(
-    () => experimentsQuery.data?.map((experiment) => experiment.name) ?? [],
-    [experimentsQuery.data],
-  )
-
+  const [packageId, setPackageId] = useState<string>()
+  const isPackage = file?.name.toLowerCase().endsWith('.tar.gz') ?? false
+  const packageJob = useQuery({ queryKey: ['package-import', packageId], enabled: !!packageId,
+    queryFn: () => packageImportsApi.get(packageId!),
+    refetchInterval: query => ['completed', 'failed', 'cancelled', 'expired'].includes(query.state.data?.status ?? '') ? false : 1000 })
   useEffect(() => {
-    if (!definition || nameEdited || !experimentsQuery.data) return
-    setName(nextAvailableExperimentName(definition.sourceName, existingNames))
-  }, [definition, existingNames, experimentsQuery.data, nameEdited])
+    if (packageJob.data?.status !== 'completed' || !packageJob.data.experiment_id) return
+    void queryClient.invalidateQueries({ queryKey: ['experiments'] })
+    setPackageId(undefined)
+    onOpenChange(false)
+    onImported(packageJob.data.experiment_id)
+  }, [packageJob.data, queryClient, onOpenChange, onImported])
 
   const importMutation = useMutation({
-    mutationFn: () => {
+    mutationFn: async () => {
+      if (isPackage && file) {
+        const job = await packageImportsApi.create(newRequestKey())
+        await packageImportsApi.upload(job.id, file)
+        setPackageId(job.id)
+        return null
+      }
       if (!definition) throw new Error('Choose an experiment definition first.')
       return experimentsApi.importDefinition({
         name: name.trim(),
@@ -121,56 +109,47 @@ export function CreateExperimentFromFileDialog({
         design_spec: definition.designSpec,
         measurement_plan: definition.measurementPlan,
         graph: definition.graph,
-        published_graph: definition.publishedGraph,
         protocol_description: definition.protocolDescription,
       })
     },
     onSuccess: (experiment) => {
+      if (!experiment) return
       queryClient.invalidateQueries({ queryKey: ['experiments'] })
       onOpenChange(false)
       onImported(experiment.id)
     },
-    onError: async (error) => {
-      // A second tab may create this same name between the lookup above and
-      // the atomic insert. Refresh, then offer the next free suffix instead
-      // of leaving the user to discover and resolve the collision manually.
-      if (!(error instanceof ApiError) || error.status !== 409 || !definition) return
-      const experiments = await queryClient.fetchQuery({
-        queryKey: ['experiments', 'all-for-import'],
-        queryFn: () => experimentsApi.list({ includeArchived: true }),
-      })
-      setName(nextAvailableExperimentName(definition.sourceName, experiments.map((experiment) => experiment.name)))
-      setNameEdited(false)
-      importMutation.reset()
-    },
+
   })
 
   function reset() {
     importMutation.reset()
     setDefinition(null)
     setName('')
-    setNameEdited(false)
     setFile(null)
     setFileError(null)
   }
 
   function handleOpenChange(next: boolean) {
-    if (next) reset()
+    if (next && !packageId) reset()
     onOpenChange(next)
   }
 
   async function handleFileSelected(file: File | null) {
     if (!file) return
+    setPackageId(undefined)
     importMutation.reset()
+    if (file.name.toLowerCase().endsWith('.tar.gz')) {
+      setDefinition(null)
+      setFile(file)
+      setFileError(null)
+      return
+    }
     setFileError(null)
     try {
       const parsed = parseDefinition(await file.text())
       setDefinition(parsed)
       setFile(file)
-      setNameEdited(false)
-      // If the names request has not completed yet, the effect above fills in
-      // the collision-safe name as soon as it does.
-      setName(nextAvailableExperimentName(parsed.sourceName, existingNames))
+      setName(parsed.sourceName)
     } catch (error) {
       setDefinition(null)
       setFile(null)
@@ -179,7 +158,8 @@ export function CreateExperimentFromFileDialog({
     }
   }
 
-  const collisionResolved = !!definition && name !== definition.sourceName
+  const packageActive = !!packageId && !['completed', 'failed', 'cancelled', 'expired'].includes(packageJob.data?.status ?? '')
+  const busy = importMutation.isPending || packageActive
   const mutationError = importMutation.error instanceof Error ? importMutation.error.message : null
 
   return (
@@ -188,7 +168,7 @@ export function CreateExperimentFromFileDialog({
         <DialogHeader>
           <DialogTitle>Create experiment from file</DialogTitle>
           <DialogDescription>
-            Import the canvas and experiment definition into a new, editable experiment. Run history and artifact files are not imported.
+            Create an unpublished editable draft from JSON, or restore the experiment and its input assets from a package. Results are excluded.
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-4">
@@ -196,10 +176,11 @@ export function CreateExperimentFromFileDialog({
             <Label htmlFor="experiment-definition-file">Experiment definition</Label>
             <FileDropInput
               id="experiment-definition-file"
-              accept="application/json,.json"
+              accept="application/json,.json,application/gzip,.gz,.tar.gz"
+              disabled={busy}
               file={file}
               onChange={(next) => void handleFileSelected(next)}
-              placeholder="Drop a JSON file or click to browse"
+              placeholder="Drop a JSON or .tar.gz file or click to browse"
             />
           </div>
           {definition && (
@@ -210,30 +191,35 @@ export function CreateExperimentFromFileDialog({
                 value={name}
                 onChange={(event) => {
                   setName(event.target.value)
-                  setNameEdited(true)
                   importMutation.reset()
                 }}
                 onKeyDown={(event) => {
                   if (event.key === 'Enter' && name.trim()) importMutation.mutate()
                 }}
               />
-              {collisionResolved && (
-                <p className="text-xs text-muted-foreground">
-                  An experiment named “{definition.sourceName}” already exists, so a new available name was suggested. You can edit it.
-                </p>
-              )}
+
             </div>
           )}
+          {packageId && <p role="status" className="text-sm">{packageJob.data?.status === 'failed'
+            ? packageJob.data.error : `Creating experiment… ${packageJob.data?.progress.phase ?? 'Uploading'}`}</p>}
+          {packageJob.error && <p role="alert">{packageJob.error.message}</p>}
+          {packageJob.data?.status === 'failed' && <Button variant="outline" onClick={() => {
+            void packageImportsApi.command(packageId!, 'retry').then(() => packageJob.refetch())
+          }}>Retry import</Button>}
           {fileError && <p className="text-sm text-destructive">{fileError}</p>}
           {importMutation.isError && <p className="text-sm text-destructive">{mutationError ?? 'Could not import this experiment.'}</p>}
         </div>
         <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={importMutation.isPending}>
+          <Button variant="outline" onClick={() => {
+            if (packageId) void packageImportsApi.command(packageId, 'cancel')
+            setPackageId(undefined)
+            onOpenChange(false)
+          }} disabled={importMutation.isPending}>
             Cancel
           </Button>
-          <Button onClick={() => importMutation.mutate()} disabled={!definition || !name.trim() || importMutation.isPending}>
+          <Button onClick={() => importMutation.mutate()} disabled={(!isPackage && (!definition || !name.trim())) || busy || !file}>
             <Upload className="size-4" />
-            {importMutation.isPending ? 'Creating…' : 'Create experiment'}
+            {busy ? 'Creating…' : 'Create experiment'}
           </Button>
         </DialogFooter>
       </DialogContent>

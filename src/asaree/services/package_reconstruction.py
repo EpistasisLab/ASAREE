@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
 import shutil
 import threading
 import uuid
@@ -14,7 +15,12 @@ from typing import Any
 from motoro.models.database import system_session
 from motoro.models.mcp_server import MCPServerConfig, MCPTransport
 from motoro.models.skill import Skill, SkillFile
-from motoro.services.skill_service import parse_skill_markdown
+from motoro.services.skill_service import (
+    parse_skill_markdown,
+    validate_bundle_path,
+    validate_skill_description,
+    validate_skill_name,
+)
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -28,7 +34,7 @@ from asaree.models.package_import import ImportedIdentity, PackageImport
 from asaree.models.protocol import Protocol
 from asaree.services import managed_storage
 from asaree.services.experiment_packages import node_variants, portable_definition
-from asaree.services.experiments import set_experiment_datasets
+from asaree.services.experiments import create_experiment_with_available_name, set_experiment_datasets
 from asaree.services.package_validation import (
     Limits,
     PackageError,
@@ -38,6 +44,9 @@ from asaree.services.package_validation import (
     payload_path,
     records,
 )
+from asaree.services.personas import create_persona, snapshot_identity
+from asaree.services.protocols import create_protocol, generated_protocol_name
+from asaree.services.resource_names import available_name
 
 
 def identity(job: PackageImport, kind: str, source: Any) -> uuid.UUID:
@@ -101,18 +110,31 @@ class Reconstruction:
         if key not in self.maps:
             self.db.add(ImportedIdentity(import_id=self.job.id, kind=kind, source_id=str(source_id),
                                          local_id=local, provenance=provenance))
-            if kind not in {'cell', 'replicate', 'historical_attempt', 'historical_row', 'historical_artifact',
-                            'skill_file', 'payload_member'}:
+            if kind not in {'cell', 'replicate', 'skill_file'}:
                 self.maps[key] = str(local)
         return local
 
     def read(self, path: str) -> Any:
         return document(payload_path(self.root, path), self.limits)
 
-    def name(self, kind: str, source: str, name: str, maximum: int = 255) -> str:
-        # Import UUID namespaces avoid name collisions without cross-owner lookup.
-        prefix = name[:maximum - 34].rstrip('-') if kind == 'skill' else name[:maximum - 34]
-        value = f'{prefix}-{identity(self.job, kind, source).hex}'
+    async def personas(self) -> None:
+        """Restore exact node snapshots as reusable destination personas."""
+        for path in (self.root / 'resources/personas').glob('*.json'):
+            source = self.read(path.relative_to(self.root).as_posix())
+            config = source['config']
+            local = self.map('persona', source['id'], source=source)
+            await create_persona(self.db, identifier=local, owner_id=self.job.owner_id,
+                name=source['name'], prompt=config.get('persona_text') or '',
+                description=config.get('persona_description'), source_filename=config.get('persona_file'))
+
+    async def name(self, kind: str, source: str, name: str, maximum: int = 255,
+                   resources: AsyncSession | None = None) -> str:
+        models: dict[str, type[RegisteredDataset] | type[Skill] | type[MCPServerConfig]] = {
+            'dataset': RegisteredDataset, 'skill': Skill, 'mcp': MCPServerConfig}
+        model = models[kind]
+        session = resources if resources is not None else self.db
+        existing = (await session.scalars(select(model.name).where(model.owner_id == self.job.owner_id))).all()
+        value = available_name(name, existing, maximum=maximum, skill=kind == 'skill')
         self.names[kind, source] = value
         return value
 
@@ -130,7 +152,7 @@ class Reconstruction:
             metadata_path = f'inputs/datasets/{source}.json'
             metadata = self.read(metadata_path) if payload_path(self.root, metadata_path).exists() else pin
             dataset = RegisteredDataset(id=local, owner_id=self.job.owner_id,
-                name=self.name('dataset', source, metadata.get('name') or pin['dataset_name']),
+                name=await self.name('dataset', source, metadata.get('name') or pin['dataset_name']),
                 description=pin.get('description', metadata.get('description')),
                 dictionary_json=pin.get('dictionary_json', metadata.get('dictionary_json')),
                 target_column=pin.get('target_column', metadata.get('target_column')),
@@ -212,16 +234,18 @@ class Reconstruction:
                 source = {'id': dep['id'], 'name': parsed.name, 'description': parsed.description,
                           'body': parsed.body, 'frontmatter': parsed.frontmatter}
             local = self.map('skill', source['id'], source=source)
-            name = self.name('skill', source['id'], source['name'], 64)
+            name = await self.name('skill', source['id'], source['name'], 64, motoro)
             existing = await motoro.get(Skill, local)
             if existing is not None:
                 if existing.owner_id != self.job.owner_id:
                     raise PackageError('Import resource ownership conflict')
+                self.names['skill', source['id']] = existing.name
                 continue
             # No upload service: those may validate by invoking external tools.
             motoro.add(Skill(id=local, owner_id=self.job.owner_id, is_system=False,
-                name=name,
-                description=source['description'], body=source['body'], frontmatter=source['frontmatter'],
+                name=validate_skill_name(name),
+                description=validate_skill_description(source['description']),
+                body=source['body'], frontmatter=source['frontmatter'],
                 source_filename=source.get('source_filename'), deleted_at=datetime.now(UTC)))
         await motoro.flush()
         for record in records(self.root / 'files.jsonl', self.limits):
@@ -253,7 +277,8 @@ class Reconstruction:
                 raise PackageError('Skill resource exceeds per-resource limit')
             raw = path.read_bytes()
             content = base64.b64encode(raw).decode() if file_dep['encoding'] == 'base64' else raw.decode('utf-8')
-            motoro.add(SkillFile(id=local, skill_id=uuid.UUID(skill_id), path=member_path(file_dep['relative_path']),
+            motoro.add(SkillFile(id=local, skill_id=uuid.UUID(skill_id),
+                                 path=validate_bundle_path(member_path(file_dep['relative_path'])),
                                  encoding=file_dep['encoding'], position=file_dep['position'], content=content))
             await motoro.flush()
 
@@ -269,12 +294,14 @@ class Reconstruction:
                 raise PackageError('MCP requirement filename and identity disagree')
             local = self.map('mcp', source['id'], source=source)
             command = None
-            name = self.name('mcp', source['id'], source['name'])
             knowledge = payload_path(self.root, f'resources/knowledge/{source_id}')
             included = next((
                 dep for dep in records(self.root / 'dependencies.jsonl', self.limits)
                 if dep.get('kind') == 'knowledge' and dep.get('id') == source_id and dep.get('status') == 'included'
             ), None)
+            if included is not None and included.get('directory') != f'resources/knowledge/{source_id}':
+                raise PackageError('Knowledge directory and identity disagree')
+            name = source['name']
             destination_server = None
             if included is None and source.get('service_identity'):
                 authorized = list((await motoro.scalars(select(MCPServerConfig).where(
@@ -290,8 +317,6 @@ class Reconstruction:
                 # The owned requirement identity remains separate from its runtime binding.
                 continue
             if included is not None:
-                if included.get('directory') != f'resources/knowledge/{source_id}':
-                    raise PackageError('Knowledge directory and identity disagree')
                 knowledge_kind = source.get('knowledge_kind')
                 if knowledge_kind not in {'bundle', 'document'}:
                     source_graph = self.read('publication/canvas.json')
@@ -315,10 +340,13 @@ class Reconstruction:
                 name = (okf_documents.server_name_for(self.job.owner_id, destination) if knowledge_kind == 'document'
                         else server_name_for(self.job.owner_id, destination))
             self.names['mcp', source['id']] = name
+            if included is None:
+                name = await self.name('mcp', source['id'], source['name'], resources=motoro)
             existing = await motoro.get(MCPServerConfig, local)
             if existing is not None:
                 if existing.owner_id != self.job.owner_id or existing.is_system:
                     raise PackageError('Import server ownership conflict')
+                self.names['mcp', source['id']] = existing.name
                 continue
             motoro.add(MCPServerConfig(id=local, owner_id=self.job.owner_id, is_system=False,
                 name=name, transport=MCPTransport(source['transport']), command=command,
@@ -328,6 +356,13 @@ class Reconstruction:
 
     def config(self, kind: str, config: dict[str, Any]) -> dict[str, Any]:
         result = deepcopy(config)
+        if kind == 'persona':
+            source = snapshot_identity(config)
+            local = self.maps.get(('persona', source))
+            if local:
+                result.update(mode='library', persona_id=local, persona_ids=[local],
+                    persona_sources=[{'id': local, 'revision': 1,
+                        'prompt_sha256': hashlib.sha256((config.get('persona_text') or '').encode()).hexdigest()}])
         fields = {'dataset': ('dataset_id', 'dataset'), 'skill': ('skill_id', 'skill'),
                   'okf_bundle': ('bundle_id', 'knowledge'), 'okf_document': ('document_id', 'knowledge'),
                   'mcp_tool': ('server_id', 'mcp'), 'mcp_client_tool': ('server_id', 'mcp'),
@@ -430,6 +465,7 @@ class Reconstruction:
         protocol_id = self.map('protocol', manifest['protocol_id'])
         self.map('source_publication', manifest['publication']['id'], source=manifest['publication'])
         datasets = await self.datasets()
+        await self.personas()
         await self.skills(motoro)
         await self.servers(motoro)
         # Capture knowledge and external requirements as owned, typed records.
@@ -438,15 +474,14 @@ class Reconstruction:
             if dep.get('kind') in {'knowledge', 'mcp'}:
                 self.map(dep['kind'], dep['id'], dependency=dep)
         graph, settings = self.definition()
-        experiment = ResearchExperiment(id=experiment_id, owner_id=self.job.owner_id,
-            name=self.name('experiment', manifest['experiment_id'], metadata.get('name') or 'Imported experiment'),
+        experiment = await create_experiment_with_available_name(self.db,
+            identifier=experiment_id, owner_id=self.job.owner_id,
+            name=metadata.get('name') or 'Imported experiment',
             description=metadata.get('description'), **{key: settings.get(key) for key in (
                 'hypothesis', 'design_spec', 'measurement_plan', 'task_brief')},
             design_type=settings.get('design_type') or 'factorial')
-        self.db.add(experiment)
-        await self.db.flush()
-        self.db.add(Protocol(id=protocol_id, owner_id=self.job.owner_id, experiment_id=experiment_id,
-                             name=f'Imported protocol {protocol_id}', graph=graph))
+        await create_protocol(self.db, identifier=protocol_id, owner_id=self.job.owner_id,
+            experiment_id=experiment_id, name=generated_protocol_name(experiment.name, experiment_id), graph=graph)
         await set_experiment_datasets(self.db, experiment_id, datasets)
         if manifest.get('design_revision_id'):
             design_id = self.map('design', manifest['design_revision_id'], source=self.read('design/revision.json'))
@@ -479,23 +514,6 @@ class Reconstruction:
                 self.db.add(FactorialReplicateResult(id=self.map('replicate', source['id'], source=source),
                     cell_id=cell, replicate_number=source['replicate_number'],
                     replicate_label=source['replicate_label']))
-                await self.db.flush()
-        for path in (self.root / 'results/attempts').glob('*/attempt.json'):
-            source = document(path, self.limits)
-            self.map('historical_attempt', source['id'], source=source,
-                     directory=path.parent.relative_to(self.root).as_posix())
-            await self.db.flush()
-        for path in (self.root / 'results/rows').glob('*.json'):
-            source = document(path, self.limits)
-            self.map('historical_row', source['id'], source=source)
-            await self.db.flush()
-        for scanned, record in enumerate(records(self.root / 'files.jsonl', self.limits)):
-            await self.report('recording_provenance', scanned)
-            if record['path'].startswith('results/artifacts/'):
-                self.map('historical_artifact', record['path'], source=record)
-                await self.db.flush()
-            else:
-                self.map('payload_member', record['path'], source=record)
                 await self.db.flush()
         await self.db.flush()
         return experiment_id

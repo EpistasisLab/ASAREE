@@ -19,7 +19,6 @@ from asaree.config import get_settings
 from asaree.deps import CurrentUser, DbSession
 from asaree.models.package_import import ImportedIdentity, PackageImport
 from asaree.services import package_imports as imports
-from asaree.services.package_reconstruction import validate_local_dependencies
 from asaree.services.package_validation import member_path, records
 
 router = APIRouter(prefix='/experiment-package-imports', tags=['experiment-packages'])
@@ -33,7 +32,7 @@ def payload(job: PackageImport) -> dict[str, Any]:
     result = {key: getattr(job, key) for key in (
         'id', 'status', 'sha256', 'preflight', 'progress', 'error', 'experiment_id',
         'expires_at', 'configured_at', 'created_at')}
-    if job.preflight and job.status in {'awaiting_confirmation', 'completed'}:
+    if job.preflight and job.status == 'completed':
         token = jwt.encode({'type': 'package_import_source', 'job': str(job.id), 'sub': str(job.owner_id),
                             'exp': datetime.now(UTC) + timedelta(minutes=5)},
                            get_settings().auth_secret_key, algorithm='HS256')
@@ -116,18 +115,6 @@ async def upload(identifier: uuid.UUID, request: Request, db: DbSession, user: C
         temporary.unlink(missing_ok=True)
 
 
-@router.post('/{identifier}/confirm', status_code=202)
-async def confirm(identifier: uuid.UUID, db: DbSession, user: CurrentUser) -> dict[str, Any]:
-    job = await owned(db, identifier, user.id, lock=True)
-    if job.status == 'awaiting_confirmation':
-        job.status = 'queued'
-        job.progress = {'phase': 'confirmed'}
-    elif job.status not in {'queued', 'activating', 'completed'}:
-        raise HTTPException(409, 'Inspect a valid preflight before confirmation')
-    await db.commit()
-    return payload(job)
-
-
 @router.post('/{identifier}/cancel')
 async def cancel(identifier: uuid.UUID, db: DbSession, user: CurrentUser) -> dict[str, Any]:
     job = await owned(db, identifier, user.id, lock=True)
@@ -144,8 +131,7 @@ async def retry(identifier: uuid.UUID, db: DbSession, user: CurrentUser) -> dict
         raise HTTPException(409, 'Only an unexpired failed import can be retried')
     if not (imports.directory(identifier) / 'archive.tar.gz').is_file():
         raise HTTPException(409, 'Upload archive bytes first')
-    # A confirmed failure returns to preflight: user sees the same requirements
-    # again. Durable deterministic IDs prevent duplicates after interruption.
+    # Durable deterministic identities prevent duplicates after interruption.
     job.status, job.error = 'validating', None
     job.generation += 1
     await db.commit()
@@ -206,11 +192,6 @@ async def download(identifier: uuid.UUID, token: str, db: DbSession, path: str |
     return source_response(await owned(db, identifier, owner_id), path)
 
 
-class Configuration(BaseModel):
-    connections_configured: bool
-    dependencies_resolved: bool
-
-
 @router.get('/{identifier}/readiness')
 async def readiness(identifier: uuid.UUID, db: DbSession, user: CurrentUser) -> dict[str, Any]:
     from asaree.services.package_setup import setup_options
@@ -241,19 +222,3 @@ async def select_destination(identifier: uuid.UUID, command: ConnectionSelection
         raise HTTPException(422, 'Choose an authorized compatible destination connection.') from exc
     await db.commit()
     return await setup_options(db, job)
-
-
-@router.post('/{identifier}/configuration')
-async def configuration(
-    identifier: uuid.UUID, command: Configuration, db: DbSession, user: CurrentUser,
-) -> dict[str, Any]:
-    job = await owned(db, identifier, user.id, lock=True)
-    if job.status != 'completed' or not command.connections_configured or not command.dependencies_resolved:
-        raise HTTPException(409, 'Configure the editable draft and resolve dependencies before acknowledging')
-    try:
-        await validate_local_dependencies(db, job)
-    except ValueError as exc:
-        raise HTTPException(422, str(exc)) from exc
-    job.configured_at = datetime.now(UTC)
-    await db.commit()
-    return payload(job)

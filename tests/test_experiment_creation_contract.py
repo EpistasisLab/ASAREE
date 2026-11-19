@@ -163,7 +163,7 @@ async def test_import_definition_localizes_mcp_server_ids_by_name(monkeypatch: p
         return experiment
 
     monkeypatch.setattr(experiments_api, "get_experiment_by_name", AsyncMock(return_value=None))
-    monkeypatch.setattr(experiments_api, "create_experiment", create_imported_experiment)
+    monkeypatch.setattr(experiments_api, "create_experiment_with_available_name", create_imported_experiment)
     monkeypatch.setattr(experiments_api, "create_protocol", AsyncMock(return_value=SimpleNamespace()))
     monkeypatch.setattr(experiments_api, "_require_valid_measurement_plan", require_local_server)
     monkeypatch.setattr(experiments_api, "get_experiment_dataset_ids", AsyncMock(return_value=[]))
@@ -177,6 +177,7 @@ async def test_import_definition_localizes_mcp_server_ids_by_name(monkeypatch: p
                     name="asaree-sklearn-model",
                     owner_id=None,
                     is_system=True,
+                    command="python -m asaree.mcp_servers.workspace_server",
                 )
             ]
         ),

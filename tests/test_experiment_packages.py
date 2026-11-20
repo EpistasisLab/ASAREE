@@ -454,6 +454,49 @@ async def test_package_download_expiry_and_owner_token(tmp_path, monkeypatch):
     assert owned.call_args.args[-1] == job.owner_id
 
 
+@pytest.mark.parametrize('metadata', [False, True])
+@pytest.mark.parametrize('name,stem', [
+    ('My Experiment', 'My-Experiment'),
+    ('  Study_2 - Revised  ', 'Study_2---Revised'),
+    ('../../Study / "review"\r\n', 'Study-review'),
+    ('???', 'experiment'),
+])
+async def test_package_download_uses_the_owned_experiments_display_name(
+    tmp_path, monkeypatch, metadata, name, stem,
+):
+    job = SimpleNamespace(id=uuid.uuid4(), owner_id=uuid.uuid4(), experiment_id=uuid.uuid4(), kind='export',
+        status='completed', created_at=datetime.now(UTC), protocol_revision_id=uuid.uuid4(),
+        params={'selection': {'format': 'experiment_package'}})
+    monkeypatch.setattr(result_exports, 'get_settings', lambda: SimpleNamespace(
+        result_export_dir=str(tmp_path), auth_secret_key='test-secret-key-at-least-32-characters'))
+    monkeypatch.setattr(api, 'owned_job', AsyncMock(return_value=job))
+    get_experiment = AsyncMock(return_value=SimpleNamespace(name=name, owner_id=job.owner_id))
+    monkeypatch.setattr(api, 'get_experiment', get_experiment)
+    path = result_exports.export_path(job.id, package=True, metadata=metadata)
+    path.write_bytes(b'prepared export')
+    db = SimpleNamespace()
+    response = await api.download(job.experiment_id, job.id, result_exports.download_token(job), db, metadata)
+    suffix = 'manifest.json' if metadata else 'tar.gz'
+    assert response.headers['content-disposition'] == f'attachment; filename="{stem}.{suffix}"'
+    assert response.headers['content-type'] == ('application/json' if metadata else 'application/gzip')
+    assert response.path == path
+    get_experiment.assert_awaited_once_with(db, job.experiment_id)
+
+
+async def test_package_download_cannot_use_another_owners_experiment(tmp_path, monkeypatch):
+    job = SimpleNamespace(id=uuid.uuid4(), owner_id=uuid.uuid4(), experiment_id=uuid.uuid4(), kind='export',
+        status='completed', created_at=datetime.now(UTC), params={'selection': {'format': 'experiment_package'}})
+    monkeypatch.setattr(result_exports, 'get_settings', lambda: SimpleNamespace(
+        result_export_dir=str(tmp_path), auth_secret_key='test-secret-key-at-least-32-characters'))
+    monkeypatch.setattr(api, 'owned_job', AsyncMock(return_value=job))
+    monkeypatch.setattr(api, 'get_experiment', AsyncMock(return_value=SimpleNamespace(
+        name='Foreign experiment', owner_id=uuid.uuid4())))
+    result_exports.export_path(job.id, package=True).write_bytes(b'prepared export')
+    with pytest.raises(HTTPException) as error:
+        await api.download(job.experiment_id, job.id, result_exports.download_token(job), SimpleNamespace())
+    assert error.value.status_code == 404
+
+
 async def test_expiry_removes_package_csv_and_partial_files(tmp_path, monkeypatch):
     identifier = uuid.uuid4()
     monkeypatch.setattr(result_exports, "get_settings", lambda: SimpleNamespace(result_export_dir=str(tmp_path)))

@@ -7,6 +7,7 @@ import csv
 import io
 import json
 import logging
+import re
 import shutil
 import time
 import uuid
@@ -33,6 +34,12 @@ from asaree.worker.enqueue import _get_pool
 
 logger = logging.getLogger(__name__)
 RETENTION = timedelta(hours=24)
+
+
+def package_filename(experiment_name: str, *, metadata: bool = False) -> str:
+    """Match the former canvas JSON download's display-name convention."""
+    stem = re.sub(r'[^a-zA-Z0-9_-]+', '-', experiment_name.strip()).strip('-') or 'experiment'
+    return f"{stem}.{'manifest.json' if metadata else 'tar.gz'}"
 
 
 def export_path(identifier: uuid.UUID, *, metadata: bool = False, package: bool = False) -> Path:

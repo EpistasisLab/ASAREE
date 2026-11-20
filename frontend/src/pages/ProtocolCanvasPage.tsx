@@ -354,6 +354,7 @@ export function ProtocolCanvasPage() {
                   protocolId={protocolQuery.data.id}
                   experimentId={protocolQuery.data.experiment_id}
                   initialGraph={protocolQuery.data.graph}
+                  draftBusy={draftBusy}
                   hasUnpublishedChanges={protocolQuery.data.has_unpublished_changes}
                   publishedRevision={protocolQuery.data.published_revision}
                   experimentLocked={!!experimentQuery.data?.locked_at}

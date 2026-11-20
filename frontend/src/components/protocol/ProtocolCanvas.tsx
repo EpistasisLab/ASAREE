@@ -413,9 +413,10 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
   experimentLocked?: boolean
   protocol?: Protocol
   regenerationRequired?: boolean
+  draftBusy?: boolean
   unboundFactors?: string[]
   bindingDiscrepancies?: FactorBindingDiscrepancy[]
-}>(function ProtocolCanvas({ protocolId, experimentId, initialGraph, hasUnpublishedChanges, publishedRevision, experimentLocked = false, protocol, regenerationRequired = false, unboundFactors = [], bindingDiscrepancies = [] }, canvasHandleRef) {
+}>(function ProtocolCanvas({ protocolId, experimentId, initialGraph, hasUnpublishedChanges, publishedRevision, experimentLocked = false, protocol, regenerationRequired = false, draftBusy = false, unboundFactors = [], bindingDiscrepancies = [] }, canvasHandleRef) {
   const [nodes, setNodes, onNodesChange] = useNodesState<Node>(migrateLegacyNodes(initialGraph))
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>(migrateLegacyHandles(initialGraph))
   const queryClient = useQueryClient()
@@ -2475,6 +2476,7 @@ export const ProtocolCanvas = forwardRef<ProtocolCanvasHandle, {
               <Plus className="size-4" />
             </Button>
             <ProtocolCanvasMenu
+              draftBusy={draftBusy}
               protocolId={protocolId}
               experimentId={experimentId}
               nodes={nodes}

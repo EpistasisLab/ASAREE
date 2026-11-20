@@ -11,7 +11,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { applyExperimentRenameToProtocolCache, protocolForExperimentQueryKey, toPersistedGraph } from '@/lib/protocolGraph'
-import { sanitizeFilename } from '@/lib/utils'
+import { ExperimentPackageDownload } from './ExperimentPackageDownload'
 
 // Every menu item that opens a follow-up surface renders it as a SEPARATE
 // controlled Dialog (open/onOpenChange state), not nested inside
@@ -143,7 +143,7 @@ function EditDescriptionDialog({
 // The canvas-level "⋮" menu, next to Run/+ -- acts on the EXPERIMENT for
 // identity/lifecycle (rename/description/archive, matching this app's own
 // "experiments instead of workflows" framing), and on the PROTOCOL's own
-// graph for Download. Importing always creates a separate experiment from the
+// published package for Download. Importing always creates a separate experiment from the
 // global Create menu, so a canvas can never be changed by accident here.
 // Deliberately no Delete here (or anywhere in the GUI) -- Archive is the
 // only lifecycle-destructive action end users get, so a misclick can't
@@ -155,11 +155,13 @@ export function ProtocolCanvasMenu({
   experimentId,
   nodes,
   edges,
+  draftBusy = false,
 }: {
   protocolId: string
   experimentId: string | null
   nodes: Node[]
   edges: Edge[]
+  draftBusy?: boolean
 }) {
   const [renameOpen, setRenameOpen] = useState(false)
   const [descriptionOpen, setDescriptionOpen] = useState(false)
@@ -210,44 +212,11 @@ export function ProtocolCanvasMenu({
     },
   })
 
-  async function handleDownload() {
-    const protocol = await protocolsApi.get(protocolId)
-    // Protocol.name is "Protocol: {experiment name} [{shortid}]" -- an
-    // internal, collision-proofed label (renames now keep it in sync, but the
-    // shape stays). What the user actually calls this thing is the
-    // experiment's own name, already loaded above for the Archive/Delete/etc.
-    // actions, so that's what the exported payload and the downloaded
-    // filename use.
-    const displayName = experiment?.name ?? protocol.name
-    // Serializes the canvas's own LIVE nodes/edges (props passed down from
-    // ProtocolCanvas.tsx), not protocolsApi.get's possibly-stale graph --
-    // reuses that file's own toPersistedGraph, the same helper its autosave uses.
-    // design_spec travels alongside the graph -- a factor is meaningless
-    // without both halves of its binding (design_spec.factors' declaration
-    // AND the node's own factor_bindings, already inside the graph), so an
-    // export/import round-trip that dropped one would silently orphan the
-    // other.
-    const payload = {
-      name: displayName,
-      description: protocol.description,
-      graph: toPersistedGraph(nodes, edges),
-      design_spec: experiment?.design_spec ?? null,
-      measurement_plan: experiment?.measurement_plan ?? null,
-    }
-    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `${sanitizeFilename(displayName, 'protocol')}.json`
-    a.click()
-    URL.revokeObjectURL(url)
-  }
-
   const isArchived = !!experiment?.archived_at
   const isLocked = !!experiment?.locked_at
 
-  return (
-    <>
+  // Keep the shared export controller mounted after the dropdown closes.
+  const renderMenu = (download: () => void, busy: boolean) => (
       <DropdownMenu>
         <DropdownMenuTrigger render={<Button variant="outline" size="icon-sm" aria-label="Experiment menu" />}>
           <MoreVertical className="size-4" />
@@ -274,12 +243,18 @@ export function ProtocolCanvasMenu({
             {isArchived ? 'Unarchive' : 'Archive'}
           </DropdownMenuItem>
           <DropdownMenuSeparator />
-          <DropdownMenuItem onClick={() => void handleDownload()}>
+          <DropdownMenuItem disabled={busy} onClick={download}>
             <Download className="size-4" />
             Download
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
+  )
+
+  return (
+    <>
+      {experimentId ? <ExperimentPackageDownload experimentId={experimentId} protocol={{ id: protocolId }}
+        draftBusy={draftBusy} renderTrigger={renderMenu} /> : renderMenu(() => {}, true)}
 
       {experimentId && experiment && (
         <>

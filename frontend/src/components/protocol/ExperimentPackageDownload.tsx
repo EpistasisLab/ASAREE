@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import type { Edge, Node } from '@xyflow/react'
 import { Download } from 'lucide-react'
@@ -10,8 +10,11 @@ import { newRequestKey } from '@/lib/requestKey'
 import { protocolGraphQueryKey, toPersistedGraph } from '@/lib/protocolGraph'
 import type { Protocol } from '@/types/protocols'
 
-export function ExperimentPackageDownload({ experimentId, protocol, selectedVersionId, draftBusy = false }: {
-  experimentId: string; protocol: Protocol; selectedVersionId?: string; draftBusy?: boolean
+export function ExperimentPackageDownload({ experimentId, protocol, selectedVersionId, draftBusy = false, renderTrigger }: {
+  experimentId: string
+  protocol: Pick<Protocol, 'id'> & Partial<Pick<Protocol, 'has_unpublished_changes' | 'published_revision_id'>>
+  selectedVersionId?: string; draftBusy?: boolean
+  renderTrigger?: (download: () => void, busy: boolean) => ReactNode
 }) {
   const [publicationWarning, setPublicationWarning] = useState(false)
   const client = useQueryClient()
@@ -51,14 +54,17 @@ export function ExperimentPackageDownload({ experimentId, protocol, selectedVers
   }, [job.data, revisionId, scope, requestScope])
   const busy = prepare.isPending || jobActive(job.data) || (!!jobId && !job.data && !job.error)
   const error = prepare.error?.message || job.error?.message || job.data?.error
+  function requestDownload() {
+    prepare.reset()
+    setJobId(undefined)
+    if (!selectedVersionId && (draftBusy || protocol.has_unpublished_changes || protocol.published_revision_id === null)) {
+      setPublicationWarning(true)
+    } else prepare.mutate()
+  }
   return <>
-    <Button size="xs" variant="outline" disabled={busy} onClick={() => {
-      prepare.reset()
-      setJobId(undefined)
-      if (!selectedVersionId && (draftBusy || protocol.has_unpublished_changes || !protocol.published_revision_id)) {
-        setPublicationWarning(true)
-      } else prepare.mutate()
-    }}><Download className="size-3.5" />{busy ? 'Preparing download…' : 'Download'}</Button>
+    {renderTrigger ? renderTrigger(requestDownload, busy)
+      : <Button size="xs" variant="outline" disabled={busy} onClick={requestDownload}>
+        <Download className="size-3.5" />{busy ? 'Preparing download…' : 'Download'}</Button>}
     {busy && <span role="status" className="text-xs text-muted-foreground">Preparing experiment and input assets…</span>}
     {error && <p role="alert" className="text-xs text-destructive">{error}</p>}
     <Dialog open={publicationWarning} onOpenChange={setPublicationWarning}>

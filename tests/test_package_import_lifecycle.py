@@ -18,6 +18,7 @@ from alembic.operations import Operations
 from alembic.script import ScriptDirectory
 from motoro.models.mcp_server import MCPServerConfig
 from motoro.models.skill import Skill, SkillFile
+from package_import_fixtures import TarImportFixtureWriter
 from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
@@ -28,7 +29,6 @@ from asaree.models.package_import import ImportedIdentity, PackageImport
 from asaree.models.user import User
 from asaree.services import import_visibility
 from asaree.services import package_imports as imports
-from asaree.services.experiment_packages import PackageWriter
 from asaree.services.experiments import get_experiment
 from asaree.services.package_reconstruction import Reconstruction, identity
 from asaree.services.package_validation import Limits, digest, inspect
@@ -74,7 +74,7 @@ def write_archive(job, root, *, version=2):
     stage = root / 'writer'
     stage.mkdir()
     skill_id = str(uuid.uuid4())
-    writer = PackageWriter(root / 'archive.tar.gz', stage)
+    writer = TarImportFixtureWriter(root / 'archive.tar.gz', stage)
     writer.json('publication/canvas.json', {'nodes': [
         {'id': 'skill', 'type': 'skill', 'data': {'config': {'skill_id': skill_id}}}], 'edges': []})
     writer.json('publication/settings.json', {'design_spec': {'factors': []}})

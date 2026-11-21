@@ -33,7 +33,7 @@ function show(draft = protocol, draftBusy = false) {
 it('downloads a package from the actual canvas menu instead of a JSON definition', async () => {
   const user = userEvent.setup()
   const job = { id: 'export', kind: 'export', status: 'completed', protocol_revision_id: 'published',
-    progress: {}, error: null, download_url: '/api/experiment-package.tar.gz' } as const
+    progress: {}, error: null, download_url: '/api/experiment-package.zip' } as const
   const create = vi.spyOn(experimentsApi, 'createResultJob').mockResolvedValue(job)
   vi.spyOn(experimentsApi, 'getResultJob').mockResolvedValue(job)
   const downloads: string[] = []
@@ -43,7 +43,7 @@ it('downloads a package from the actual canvas menu instead of a JSON definition
   show()
   await user.click(screen.getByRole('button', { name: 'Experiment menu' }))
   await user.click(await screen.findByRole('menuitem', { name: 'Download' }))
-  await waitFor(() => expect(downloads).toEqual(['/api/experiment-package.tar.gz']))
+  await waitFor(() => expect(downloads).toEqual(['/api/experiment-package.zip']))
   expect(create).toHaveBeenCalledWith('e', { protocol_id: 'p', protocol_revision_id: 'published' },
     expect.objectContaining({ kind: 'export', format: 'experiment_package' }))
 })

@@ -39,13 +39,13 @@ RETENTION = timedelta(hours=24)
 def package_filename(experiment_name: str, *, version: int, metadata: bool = False) -> str:
     """Identify the experiment and the published version contained in a package."""
     stem = re.sub(r'[^a-zA-Z0-9_-]+', '-', experiment_name.strip()).strip('-') or 'experiment'
-    return f"{stem}-v{version}.{'manifest.json' if metadata else 'tar.gz'}"
+    return f"{stem}-v{version}.{'manifest.json' if metadata else 'zip'}"
 
 
 def export_path(identifier: uuid.UUID, *, metadata: bool = False, package: bool = False) -> Path:
     root = Path(get_settings().result_export_dir)
     root.mkdir(parents=True, exist_ok=True, mode=0o700)
-    return root / f"{identifier}.{'schema.json' if metadata else 'tar.gz' if package else 'csv'}"
+    return root / f"{identifier}.{'schema.json' if metadata else 'zip' if package else 'csv'}"
 
 
 def download_token(job: ResultJob) -> str:

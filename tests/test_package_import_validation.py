@@ -1,4 +1,4 @@
-"""Real exporter archives through the untrusted upload parser."""
+"""Untrusted TAR upload parser; ZIP imports will be implemented separately."""
 import io
 import tarfile
 import threading
@@ -6,8 +6,8 @@ import uuid
 from dataclasses import replace
 
 import pytest
+from package_import_fixtures import TarImportFixtureWriter
 
-from asaree.services.experiment_packages import PackageWriter
 from asaree.services.package_validation import Limits, PackageError, inspect
 
 
@@ -15,7 +15,7 @@ def package(tmp_path, *, version=2, graph=None, modify=None):
     stage = tmp_path / 'writer'
     stage.mkdir()
     archive = tmp_path / 'package.tar.gz'
-    writer = PackageWriter(archive, stage)
+    writer = TarImportFixtureWriter(archive, stage)
     writer.json('publication/canvas.json', graph or {'nodes': [], 'edges': []})
     writer.json('publication/settings.json', {'design_spec': {'factors': []}})
     writer.json('experiment-metadata.json', {'name': 'Independent owner'})
@@ -28,7 +28,7 @@ def package(tmp_path, *, version=2, graph=None, modify=None):
 
 
 @pytest.mark.parametrize('version', [1, 2])
-def test_exporter_archive_preflight_preserves_exact_source_files(tmp_path, version):
+def test_import_archive_preflight_preserves_exact_source_files(tmp_path, version):
     archive = package(tmp_path, version=version)
     summary = inspect(archive, tmp_path / 'read', Limits(), threading.Event())
     assert summary['manifest']['publication']['version'] == 3

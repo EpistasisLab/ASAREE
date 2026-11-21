@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import json
 import uuid
+import zipfile
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -23,21 +24,19 @@ from asaree.services.result_reads import ResultScope
 def writer_at(tmp_path):
     staging = tmp_path / "stage"
     staging.mkdir()
-    return packages.PackageWriter(tmp_path / "package.tar.gz", staging)
+    return packages.PackageWriter(tmp_path / "package.zip", staging)
 
 
 def unpack(tmp_path):
-    import tarfile
+    with zipfile.ZipFile(tmp_path / "package.zip") as archive:
+        assert archive.testzip() is None
+        return {name: archive.read(name) for name in archive.namelist()}
 
-    with tarfile.open(tmp_path / "package.tar.gz") as archive:
-        return {member.name: archive.extractfile(member).read() for member in archive.getmembers()}
 
-
-def test_archive_hashes_inventory_and_tar_metadata_are_bounded(tmp_path):
+def test_zip_archive_preserves_inventory_hashes_and_file_metadata(tmp_path):
     writer = writer_at(tmp_path)
     for number in range(1250):
         writer.json(f"records/{number}.json", {"number": number}, identity=str(number))
-        assert not writer.tar.members
     writer.dependency("missing", "dataset", "publication_pinned", status="missing")
     result = writer.finish({"schema_version": 1})
     contents = unpack(tmp_path)
@@ -50,9 +49,16 @@ def test_archive_hashes_inventory_and_tar_metadata_are_bounded(tmp_path):
         assert record["sha256"] == hashlib.sha256(contents[record["path"]]).hexdigest()
         assert not Path(record["path"]).is_absolute()
     assert len(contents) == 1253
+    with zipfile.ZipFile(tmp_path / "package.zip") as archive:
+        for member in archive.infolist():
+            assert member.compress_type == zipfile.ZIP_DEFLATED
+            assert member.date_time == (1980, 1, 1, 0, 0, 0)
+            assert member.external_attr >> 16 == 0o600
 
 
-def test_exact_opaque_bytes_credentials_and_mismatched_source(tmp_path):
+@pytest.mark.parametrize("zip64_limit", [zipfile.ZIP64_LIMIT, 32])
+def test_exact_opaque_bytes_credentials_and_mismatched_source(tmp_path, monkeypatch, zip64_limit):
+    monkeypatch.setattr(zipfile, "ZIP64_LIMIT", zip64_limit)
     writer = writer_at(tmp_path)
     source = tmp_path / "dataset.csv"
     original = b'api_key,password,path\r\n"not a credential",exact,/app/data/original\r\n'
@@ -393,19 +399,15 @@ async def test_package_fails_when_historical_inputs_are_unavailable(tmp_path, mo
     monkeypatch.setattr(packages, "_import_sources", AsyncMock())
     monkeypatch.setattr(result_exports, "get_settings", lambda: SimpleNamespace(result_export_dir=str(tmp_path)))
     with pytest.raises(ValueError, match="Repair required assets"):
-        await packages.execute_package(db, job, tmp_path / "partial", tmp_path / "package.tar.gz")
+        await packages.execute_package(db, job, tmp_path / "partial", tmp_path / "package.zip")
     assert "JOIN protocols ON protocol_revisions.protocol_id = protocols.id" in str(queries[1])
     assert set(queries[1].params.values()) == {
         job.protocol_revision_id, job.protocol_id, job.experiment_id, job.owner_id,
     }
-    assert not (tmp_path / "package.tar.gz").exists()
+    assert not (tmp_path / "package.zip").exists()
 
 
 async def test_configuration_only_package_excludes_results_even_if_a_stale_job_requests_them(tmp_path, monkeypatch):
-    import threading
-
-    from asaree.services.package_validation import Limits, inspect
-
     publication = SimpleNamespace(id=uuid.uuid4(), graph={'nodes': [], 'edges': []},
         experiment_snapshot={'design_spec': {'factors': []}}, dataset_inputs={'schema_version': 1, 'inputs': []},
         design_revision_id=None, revision=1, published_at=datetime.now(UTC), name=None, note=None)
@@ -422,13 +424,17 @@ async def test_configuration_only_package_excludes_results_even_if_a_stale_job_r
     monkeypatch.setattr(packages, '_resources', AsyncMock())
     monkeypatch.setattr(packages, '_import_sources', AsyncMock())
     monkeypatch.setattr(result_exports, 'get_settings', lambda: SimpleNamespace(result_export_dir=str(tmp_path)))
-    await packages.execute_package(db, job, tmp_path / 'partial', tmp_path / 'package.tar.gz')
+    await packages.execute_package(db, job, tmp_path / 'partial', tmp_path / 'package.zip')
     contents = unpack(tmp_path)
     manifest = json.loads(contents['manifest.json'])
     assert manifest['results_included'] is False
     assert not any(name.startswith('results/') for name in contents)
-    summary = inspect(tmp_path / 'package.tar.gz', tmp_path / 'payload', Limits(), threading.Event())
-    assert summary['unresolved_count'] == 0
+    assert manifest['completeness']['unresolved_count'] == 0
+    assert (tmp_path / 'package.zip').stat().st_mode & 0o777 == 0o600
+    update_values = status_db.execute.call_args.args[0].compile().params
+    progress = update_values['progress']
+    assert progress['bytes'] == (tmp_path / 'package.zip').stat().st_size
+    assert progress['sha256'] == hashlib.sha256((tmp_path / 'package.zip').read_bytes()).hexdigest()
 
 
 def test_api_rejects_results_in_packages():
@@ -477,9 +483,9 @@ async def test_package_download_uses_the_experiment_name_and_exported_version(
     path.write_bytes(b'prepared export')
     db = SimpleNamespace(scalar=AsyncMock(return_value=version))
     response = await api.download(job.experiment_id, job.id, result_exports.download_token(job), db, metadata)
-    suffix = 'manifest.json' if metadata else 'tar.gz'
+    suffix = 'manifest.json' if metadata else 'zip'
     assert response.headers['content-disposition'] == f'attachment; filename="{stem}-v{version}.{suffix}"'
-    assert response.headers['content-type'] == ('application/json' if metadata else 'application/gzip')
+    assert response.headers['content-type'] == ('application/json' if metadata else 'application/zip')
     assert response.path == path
     get_experiment.assert_awaited_once_with(db, job.experiment_id)
     # Resolve the publication pinned to the job, even if a newer version exists.

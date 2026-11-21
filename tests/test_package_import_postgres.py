@@ -8,6 +8,7 @@ import json
 import os
 import threading
 import uuid
+import zipfile
 from contextlib import asynccontextmanager
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
@@ -19,6 +20,7 @@ import pytest_asyncio
 from fastapi import HTTPException
 from motoro.models.mcp_server import MCPServerConfig, MCPTransport
 from motoro.models.skill import Skill, SkillFile
+from package_import_fixtures import TarImportFixtureWriter
 from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from test_result_reads import results_db as _results_db
@@ -278,7 +280,7 @@ async def test_persona_snapshots_and_subagents_survive_repeated_independent_impo
         root = imports.directory(job.id)
         stage = root / 'writer'
         stage.mkdir(parents=True)
-        writer = packages.PackageWriter(root / 'archive.tar.gz', stage)
+        writer = TarImportFixtureWriter(root / 'archive.tar.gz', stage)
         writer.json('publication/canvas.json', graph)
         writer.json('publication/settings.json', {'design_spec': design})
         writer.json('experiment-metadata.json', {'name': 'Portable'})
@@ -358,7 +360,7 @@ async def test_destination_services_and_explicit_custom_mapping(
             'factor_bindings': {'config.server_id': 'Connection'}}}],
         'edges': [{'source': 'model', 'target': 'agent', 'targetHandle': 'model'}]}
     design_spec = {'factors': [{'name': 'Connection', 'levels': [str(source_custom.id)]}]}
-    writer = packages.PackageWriter(root / 'archive.tar.gz', stage)
+    writer = TarImportFixtureWriter(root / 'archive.tar.gz', stage)
     writer.json('publication/canvas.json', graph)
     writer.json('publication/settings.json', {'design_spec': design_spec})
     writer.json('experiment-metadata.json', {'name': 'Service portability'})
@@ -557,7 +559,7 @@ async def test_export_import_independent_owner_and_reexport(
     staging = root / 'writer'
     staging.mkdir()
     archive = root / 'archive.tar.gz'
-    writer = packages.PackageWriter(archive, staging)
+    writer = TarImportFixtureWriter(archive, staging)
     portable_graph, portable_settings = packages.portable_definition(graph, publication.experiment_snapshot)
     writer.json('publication/canvas.json', portable_graph)
     writer.json('publication/settings.json', portable_settings)
@@ -685,7 +687,7 @@ async def test_export_import_independent_owner_and_reexport(
     assert local_publication.graph['sampling_snapshot'] != graph['sampling_snapshot']
     local_stage = root / 'second-writer'
     local_stage.mkdir()
-    second = packages.PackageWriter(root / 'second.tar.gz', local_stage)
+    second = packages.PackageWriter(root / 'second.zip', local_stage)
     local_graph, local_settings = packages.portable_definition(local_publication.graph,
                                                                local_publication.experiment_snapshot)
     second.json('publication/canvas.json', local_graph)
@@ -699,20 +701,19 @@ async def test_export_import_independent_owner_and_reexport(
         'experiment_id': str(experiment_id), 'protocol_id': str(protocol.id),
         'publication': {'id': str(local_publication.id), 'version': local_publication.revision},
         'design_revision_id': str(local_publication.design_revision_id), 'results_included': False})
-    inspect(root / 'second.tar.gz', root / 'second-payload', Limits(), threading.Event())
-    import tarfile
-    with tarfile.open(root / 'second.tar.gz') as reexport:
-        reexport_dependencies = [json.loads(line) for line in reexport.extractfile('dependencies.jsonl')]
+    with zipfile.ZipFile(root / 'second.zip') as reexport:
+        assert reexport.testzip() is None
+        reexport_dependencies = [json.loads(line) for line in reexport.read('dependencies.jsonl').splitlines()]
         pin = local_publication.dataset_inputs['inputs'][0]
-        assert reexport.extractfile(f'inputs/files/{pin["raw_artifact"]["id"]}.csv').read() == source
-        assert reexport.extractfile(f'resources/skills/{local_skill.id}/assets/binary.bin').read() == binary
+        assert reexport.read(f'inputs/files/{pin["raw_artifact"]["id"]}.csv') == source
+        assert reexport.read(f'resources/skills/{local_skill.id}/assets/binary.bin') == binary
         for path, encoding, content, position in nested_resources:
             expected = base64.b64decode(content) if encoding == 'base64' else content.encode('utf-8')
-            assert reexport.extractfile(f'resources/skills/{local_skill.id}/{path}').read() == expected
+            assert reexport.read(f'resources/skills/{local_skill.id}/{path}') == expected
             dependency = next(entry for entry in reexport_dependencies if entry.get('kind') == 'skill_file'
                               and entry.get('file') == f'resources/skills/{local_skill.id}/{path}')
             assert (dependency['encoding'], dependency['position']) == (encoding, position)
-        assert not any(name.startswith('results/') or name.endswith('/source.tar.gz') for name in reexport.getnames())
+        assert not any(name.startswith('results/') or name.endswith('/source.tar.gz') for name in reexport.namelist())
     assert manifest['schema_version'] == 2
     # Later draft setup changes do not revoke an immutable local publication.
     broken = copy.deepcopy(protocol.graph)
@@ -779,7 +780,7 @@ async def test_missing_source_stays_unresolved_instead_of_using_an_existing_same
     root = imports.directory(job.id)
     stage = root / 'writer'
     stage.mkdir(parents=True)
-    writer = packages.PackageWriter(root / 'archive.tar.gz', stage)
+    writer = TarImportFixtureWriter(root / 'archive.tar.gz', stage)
     writer.json('publication/canvas.json', graph)
     writer.json('publication/settings.json', {'design_spec': {'factors': []}})
     writer.json('experiment-metadata.json', {'name': 'Missing original'})

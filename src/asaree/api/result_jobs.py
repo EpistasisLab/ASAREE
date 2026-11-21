@@ -201,7 +201,7 @@ async def download(
         filename = f"results-{job_id}.{'schema.json' if metadata else 'csv'}"
     return FileResponse(
         path,
-        media_type="application/json" if metadata else "application/gzip" if package else "text/csv",
+        media_type="application/json" if metadata else "application/zip" if package else "text/csv",
         filename=filename,
         headers={"Cache-Control": "private, no-store"},
     )

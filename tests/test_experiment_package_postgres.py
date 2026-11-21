@@ -1,6 +1,6 @@
 """Package assembly against the existing disposable, isolated PostgreSQL fixture."""
-import tarfile
 import uuid
+import zipfile
 
 from test_result_reads import results_db as _results_db
 
@@ -42,15 +42,15 @@ async def test_historical_package_pins_all_sources_and_splits_without_results(re
         assert str(dataset.current_split_id) != pin["split_id"]
     staging = tmp_path / "stage"
     staging.mkdir()
-    writer = packages.PackageWriter(tmp_path / "package.tar.gz", staging)
+    writer = packages.PackageWriter(tmp_path / "package.zip", staging)
     await packages._datasets(db, writer, publication, user.id)
     await packages._design(db, writer, publication)
     writer.finish({})
-    with tarfile.open(tmp_path / "package.tar.gz") as archive:
-        names = archive.getnames()
+    with zipfile.ZipFile(tmp_path / "package.zip") as archive:
+        names = archive.namelist()
         assert not any(name.startswith('results/') for name in names)
         for pin in publication.dataset_inputs["inputs"]:
-            assert archive.extractfile(f"inputs/files/{pin['raw_artifact']['id']}.csv").read() == originals[
+            assert archive.read(f"inputs/files/{pin['raw_artifact']['id']}.csv") == originals[
                 pin["dataset_id"]]
             assert f"inputs/splits/{pin['split_id']}.json" in names
         assert all(f"inputs/splits/{split}.json" in names for split in pinned_splits)

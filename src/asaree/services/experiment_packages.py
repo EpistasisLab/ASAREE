@@ -1,24 +1,24 @@
 """Portable logical publication exports, never workspace backups or resume images.
 
 Inventories live in JSONL files, not lists. Database evidence is sliced in SQL;
-tar member objects are discarded after writing. Only schema-owned locators are
-interpreted. Prompts, scripts, dataset values and result payloads remain opaque.
+file contents stream in chunks, while ZIP retains per-entry directory metadata.
+Only schema-owned locators are interpreted. Prompts, scripts, dataset values and
+result payloads remain opaque.
 """
 from __future__ import annotations
 
 import asyncio
 import base64
-import gzip
 import hashlib
 import importlib.metadata
 import json
 import os
 import stat
-import tarfile
 import tempfile
 import threading
 import time
 import uuid
+import zipfile
 from collections.abc import Iterator
 from contextlib import suppress
 from copy import deepcopy
@@ -199,18 +199,15 @@ def node_variants(node: dict[str, Any], design: dict[str, Any] | None) -> Iterat
 
 
 class PackageWriter:
-    """Disk-backed inventory and constant-buffer tar writer.
-
-    TarFile normally retains every TarInfo even in stream mode. Clearing its
-    members is deliberate: this writer never seeks, appends, or calls getmember.
-    """
+    """Disk-backed inventory and streamed ZIP entries, with directory metadata in memory."""
 
     def __init__(self, destination: Path, staging: Path):
         self.staging = staging
         self.output = destination.open("wb")
         destination.chmod(0o600)
-        self.compressor = gzip.GzipFile(filename="", mode="wb", fileobj=self.output, mtime=0)
-        self.tar = tarfile.open(fileobj=self.compressor, mode="w|", format=tarfile.PAX_FORMAT)  # noqa: SIM115
+        self.archive = zipfile.ZipFile(  # noqa: SIM115
+            self.output, mode="w", compression=zipfile.ZIP_DEFLATED, compresslevel=9,
+        )
         self.inventory = (staging / "files.jsonl").open("wb")
         self.dependencies = (staging / "dependencies.jsonl").open("wb")
         self.missing = 0
@@ -260,17 +257,12 @@ class PackageWriter:
                 digest.update(block)
             size = stream.tell()
             stream.seek(0)
-            info = tarfile.TarInfo(name)
-            info.size, info.mode, info.mtime = size, 0o600, 0
-            check = self.check
-
-            class Reader:
-                def read(self, size: int = -1, /) -> bytes:
-                    check()
-                    return stream.read(size)
-
-            self.tar.addfile(info, Reader())
-            self.tar.members.clear()  # type: ignore[attr-defined]  # Runtime cache omitted by typeshed.
+            # Passing a name uses ZIP's fixed 1980 timestamp and private file
+            # permissions, and inherits the archive's compression level.
+            with self.archive.open(name, "w", force_zip64=size * 1.05 > zipfile.ZIP64_LIMIT) as target:
+                for block in iter(lambda: stream.read(BLOCK), b""):
+                    self.check()
+                    target.write(block)
         record = {"path": name, "sha256": digest.hexdigest(), "bytes": size,
                   "source_id": identity, "provenance": provenance}
         if inventory:
@@ -329,8 +321,7 @@ class PackageWriter:
     def close(self) -> None:
         self.inventory.close()
         self.dependencies.close()
-        self.tar.close()
-        self.compressor.close()
+        self.archive.close()
         if not self.output.closed:
             self.output.flush()
             os.fsync(self.output.fileno())

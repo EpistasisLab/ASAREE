@@ -677,6 +677,7 @@ async def test_export_import_independent_owner_and_reexport(
     await resource_db.refresh(local_server)
     assert local_server.owner_id == destination_owner.id
     assert local_server.error_message is None
+    assert not (local_server.capabilities or {}).get('tools')
     assert okf_documents.is_document_server(local_server) == document
     restored_knowledge = Path(okf_bundles.bundle_path_from_command(local_server.command))
     concept = okf_documents.concept_file_for(local_server) if document else restored_knowledge / 'concept.md'
@@ -730,6 +731,13 @@ async def test_export_import_independent_owner_and_reexport(
         'provider': 'openai', 'credential_revision': 'local-fixture', 'discovered_at': None}))
     monkeypatch.setattr(package_reconstruction, 'system_session', resource_session)
     await select_test_provider(db, job)
+    # Native deferred registration does not trust source discovery. Publication
+    # stays blocked until the destination discovers the configured tool. Stub
+    # that connection boundary here, just like provider discovery above.
+    with pytest.raises(ValueError, match='Local server lacks required tools: tool'):
+        await require_configured(db, experiment_id)
+    local_server.capabilities = {'tools': [{'name': 'read_concept'}]}
+    await resource_db.flush()
     async def read_local_server(identifier):
         return await resource_db.get(MCPServerConfig, identifier)
     monkeypatch.setattr('asaree.services.reported_metrics.mcp_service.get_server', read_local_server)

@@ -20,6 +20,7 @@ import pytest_asyncio
 from fastapi import HTTPException
 from motoro.models.mcp_server import MCPServerConfig, MCPTransport
 from motoro.models.skill import Skill, SkillFile
+from package_import_helpers import storage_settings
 from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from test_result_reads import results_db as _results_db
@@ -109,13 +110,6 @@ async def test_imported_dataset_name_conflict_fails_without_renaming(results_db,
     assert await db.scalar(select(func.count()).select_from(RegisteredDataset).where(
         RegisteredDataset.owner_id == owner.id, RegisteredDataset.name == 'Existing dataset')) == 1
     assert Path(existing.raw_path).read_bytes() == raw
-
-
-def storage_settings(root):
-    from asaree_workspace_core.storage import NAMESPACES
-
-    return AsareeSettings(_env_file=None, data_root=str(root),
-                          **{field: '' for field, _ in NAMESPACES.values()})
 
 
 async def select_test_provider(db, job):

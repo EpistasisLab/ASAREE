@@ -14,10 +14,10 @@ import pytest
 from motoro.models.mcp_server import MCPServerConfig
 from motoro.models.skill import Skill
 from motoro.services import mcp_service, skill_service
+from package_import_helpers import storage_settings
 from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session
 
-from asaree.config import AsareeSettings
 from asaree.models.dataset import RegisteredDataset
 from asaree.services import datasets, okf_bundles, okf_documents
 from asaree.services.package_reconstruction import Reconstruction, RegistrationBatchError
@@ -59,7 +59,7 @@ class RecordingSession:
 
 @pytest.fixture
 def registration(tmp_path, monkeypatch):
-    settings = AsareeSettings(_env_file=None, data_root=str(tmp_path / 'normal-storage'))
+    settings = storage_settings(tmp_path / 'normal-storage')
     for module in ('asaree.config', 'asaree.services.datasets', 'asaree.services.okf_bundles',
                    'asaree.services.okf_documents'):
         monkeypatch.setattr(f'{module}.get_settings', lambda: settings)

@@ -18,11 +18,11 @@ from alembic.operations import Operations
 from alembic.script import ScriptDirectory
 from motoro.models.mcp_server import MCPServerConfig
 from motoro.models.skill import Skill, SkillFile
+from package_import_helpers import storage_settings
 from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from asaree.api import package_imports as api
-from asaree.config import AsareeSettings
 from asaree.models.dataset import RegisteredDataset
 from asaree.models.experiment import ResearchExperiment
 from asaree.models.package_import import ImportedIdentity, PackageImport
@@ -102,8 +102,9 @@ def write_archive(job, root, *, version=2, skill_name='retained-skill'):
 
 async def test_durable_crash_retry_cancel_cleanup_and_ownership(import_databases, tmp_path, monkeypatch):
     product, resources = import_databases
-    settings = AsareeSettings(_env_file=None, data_root=str(tmp_path / 'storage'))
+    settings = storage_settings(tmp_path / 'storage')
     monkeypatch.setattr('asaree.config.get_settings', lambda: settings)
+    monkeypatch.setattr('asaree.services.managed_storage.get_settings', lambda: settings)
 
     @asynccontextmanager
     async def product_session():
@@ -294,7 +295,15 @@ async def test_all_registration_failures_are_reported_and_successful_resources_a
     import_databases, tmp_path, monkeypatch,
 ):
     product, resources = import_databases
-    settings = AsareeSettings(_env_file=None, data_root=str(tmp_path / 'storage'))
+    preserved = []
+    for field in ('dataset_storage_dir', 'okf_document_dir'):
+        existing = tmp_path / 'existing' / field
+        existing.mkdir(parents=True)
+        marker = existing / 'keep.txt'
+        marker.write_text('Existing resource')
+        preserved.append(marker)
+        monkeypatch.setenv(f'ASAREE_{field.upper()}', str(existing))
+    settings = storage_settings(tmp_path / 'storage')
     for module in ('asaree.config', 'asaree.services.datasets', 'asaree.services.managed_storage',
                    'asaree.services.okf_bundles', 'asaree.services.okf_documents'):
         monkeypatch.setattr(f'{module}.get_settings', lambda: settings)
@@ -342,15 +351,18 @@ async def test_all_registration_failures_are_reported_and_successful_resources_a
         assert await db.scalar(select(func.count()).select_from(Skill)) == len(names)
         assert await db.scalar(select(func.count()).select_from(MCPServerConfig)) == 0
     for root in (settings.dataset_storage_dir, settings.okf_document_dir):
-        assert not any(path.is_file() for path in Path(root).rglob('*'))
+        remaining = [str(path) for path in Path(root).rglob('*') if path.is_file()]
+        assert not remaining, remaining
+    assert all(marker.read_text() == 'Existing resource' for marker in preserved)
 
 
 async def test_expiry_isolates_malformed_upload_and_compensation_failure_from_pending_import(
     import_databases, tmp_path, monkeypatch,
 ):
     product, resources = import_databases
-    settings = AsareeSettings(_env_file=None, data_root=str(tmp_path / 'storage'))
+    settings = storage_settings(tmp_path / 'storage')
     monkeypatch.setattr('asaree.config.get_settings', lambda: settings)
+    monkeypatch.setattr('asaree.services.managed_storage.get_settings', lambda: settings)
 
     @asynccontextmanager
     async def product_session():

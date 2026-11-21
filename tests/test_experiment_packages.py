@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import json
 import uuid
+import zipfile
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -23,21 +24,19 @@ from asaree.services.result_reads import ResultScope
 def writer_at(tmp_path):
     staging = tmp_path / "stage"
     staging.mkdir()
-    return packages.PackageWriter(tmp_path / "package.tar.gz", staging)
+    return packages.PackageWriter(tmp_path / "package.zip", staging)
 
 
 def unpack(tmp_path):
-    import tarfile
+    with zipfile.ZipFile(tmp_path / "package.zip") as archive:
+        assert archive.testzip() is None
+        return {name: archive.read(name) for name in archive.namelist()}
 
-    with tarfile.open(tmp_path / "package.tar.gz") as archive:
-        return {member.name: archive.extractfile(member).read() for member in archive.getmembers()}
 
-
-def test_archive_hashes_inventory_and_tar_metadata_are_bounded(tmp_path):
+def test_zip_archive_preserves_inventory_hashes_and_file_metadata(tmp_path):
     writer = writer_at(tmp_path)
     for number in range(1250):
         writer.json(f"records/{number}.json", {"number": number}, identity=str(number))
-        assert not writer.tar.members
     writer.dependency("missing", "dataset", "publication_pinned", status="missing")
     result = writer.finish({"schema_version": 1})
     contents = unpack(tmp_path)
@@ -50,9 +49,16 @@ def test_archive_hashes_inventory_and_tar_metadata_are_bounded(tmp_path):
         assert record["sha256"] == hashlib.sha256(contents[record["path"]]).hexdigest()
         assert not Path(record["path"]).is_absolute()
     assert len(contents) == 1253
+    with zipfile.ZipFile(tmp_path / "package.zip") as archive:
+        for member in archive.infolist():
+            assert member.compress_type == zipfile.ZIP_DEFLATED
+            assert member.date_time == (1980, 1, 1, 0, 0, 0)
+            assert member.external_attr >> 16 == 0o600
 
 
-def test_exact_opaque_bytes_credentials_and_mismatched_source(tmp_path):
+@pytest.mark.parametrize("zip64_limit", [zipfile.ZIP64_LIMIT, 32])
+def test_exact_opaque_bytes_credentials_and_mismatched_source(tmp_path, monkeypatch, zip64_limit):
+    monkeypatch.setattr(zipfile, "ZIP64_LIMIT", zip64_limit)
     writer = writer_at(tmp_path)
     source = tmp_path / "dataset.csv"
     original = b'api_key,password,path\r\n"not a credential",exact,/app/data/original\r\n'
@@ -248,25 +254,6 @@ async def test_missing_and_foreign_datasets_never_substitute_current_bytes(tmp_p
     assert all(not name.startswith("inputs/files/") for name in unpack(tmp_path))
 
 
-async def test_results_evidence_is_sliced_in_sql_without_loading_whole_document(tmp_path):
-    text = json.dumps({"large": "é" * (packages.SQL_BLOCK * 3)})
-    offsets = []
-
-    async def scalar(statement):
-        compiled = statement.compile(dialect=postgresql.dialect())
-        offset, size = compiled.params["substr_2"], compiled.params["substr_3"]
-        offsets.append((offset, size))
-        return text[offset - 1:offset - 1 + size]
-
-    from sqlalchemy import Text, cast, select
-
-    from asaree.models.protocol_run import ProtocolRun
-
-    path = tmp_path / "result.json"
-    await packages.stream_document(SimpleNamespace(scalar=scalar), select(cast(ProtocolRun.attempt_result, Text)), path)
-    assert path.read_text() == text
-    assert len(offsets) >= 3
-    assert all(size == packages.SQL_BLOCK for _, size in offsets)
 
 
 async def test_skill_capture_has_binary_resources_and_owner_predicate(tmp_path):
@@ -359,42 +346,6 @@ async def test_knowledge_capture_is_not_suppressed_by_tool_alias_or_node_order(t
     assert sum(path.startswith("requirements/mcp/") for path in contents) == 1
 
 
-async def test_actual_row_script_and_compatibility_outputs_and_agent_slots_are_retained(tmp_path, monkeypatch):
-    from asaree.mcp_servers import script_server
-    from asaree.services import protocol_execution
-
-    run, experiment = uuid.uuid4(), uuid.uuid4()
-    root = tmp_path / "workspaces"
-    monkeypatch.setattr(protocol_execution, "_workspace_storage_root", lambda: root)
-    monkeypatch.setattr(packages.managed_storage, "roots", lambda: {"workspaces": root})
-    source = "from pathlib import Path\nPath('predictions.csv').write_text('exact prediction')\nprint('done')\n"
-    script = protocol_execution._materialize_script(f"_protocol_runs/{run}", "script-node", source)
-    extra = {"motoro.ambient.script_path": script}
-    ctx = SimpleNamespace(request_context=SimpleNamespace(meta=SimpleNamespace(model_extra=extra)))
-    result = json.loads(script_server.run_wired_script(ctx=ctx))
-    assert result["exit_code"] == 0
-    legacy = source.replace("print('done')", "assert Path('state.json').exists()")
-    script = protocol_execution._materialize_script(f"_protocol_runs/{run}", "legacy-script", legacy)
-    extra.update({"motoro.ambient.script_path": script, "motoro.ambient.dataset_mode": "per_row",
-                  "motoro.ambient.data_path": str(tmp_path / "row.csv")})
-    result = json.loads(script_server.run_wired_script(ctx=ctx))
-    assert result["exit_code"] == 0
-    agent_slot = root / str(experiment) / str(run) / "agent=worker" / "v1_dc"
-    agent_slot.mkdir(parents=True)
-    (agent_slot / "manifest.json").write_text('{"learned": "exact"}')
-    row_output = root / f"_protocol_runs/{run}/agents/hash/outputs"
-    row_output.mkdir(parents=True)
-    (row_output / "state.json").write_text("opaque user output with a familiar filename")
-    writer = writer_at(tmp_path)
-    graph = {"nodes": [{"id": "script-node", "type": "script"}, {"id": "legacy-script", "type": "script"}]}
-    await packages._attempt_files(writer, SimpleNamespace(experiment_id=experiment), run, graph)
-    writer.finish({})
-    contents = unpack(tmp_path)
-    assert any(path.endswith("scripts/predictions.csv") for path in contents)
-    assert any("-unsplit-" in path and path.endswith("predictions.csv") for path in contents)
-    assert any(path.endswith("agent=worker/v1_dc/manifest.json") for path in contents)
-    assert any(path.endswith("agents/hash/outputs/state.json") for path in contents)
-    assert all(not path.endswith(("script-node.py", "legacy-script.py")) for path in contents)
 
 
 def selected_scope():
@@ -421,14 +372,13 @@ async def test_api_requires_explicit_publication_and_allows_legacy_without_curre
     assert create.call_args.kwargs["params"]["include_results"] is False
 
 
-@pytest.mark.parametrize("include_results", [False, True])
-async def test_legacy_package_reports_missing_history_and_optional_results(tmp_path, monkeypatch, include_results):
+async def test_package_fails_when_historical_inputs_are_unavailable(tmp_path, monkeypatch):
     publication = SimpleNamespace(id=uuid.uuid4(), graph={"nodes": [], "edges": []}, experiment_snapshot=None,
                                   dataset_inputs=None, design_revision_id=None, revision=1,
                                   published_at=datetime.now(UTC), name=None, note=None)
     job = SimpleNamespace(id=uuid.uuid4(), owner_id=uuid.uuid4(), experiment_id=uuid.uuid4(), protocol_id=uuid.uuid4(),
                           protocol_revision_id=publication.id, design_revision_id=None,
-                          params={"selection": {"include_results": include_results}})
+                          params={"selection": {}})
     records = iter([SimpleNamespace(), publication])
     queries = []
 
@@ -447,19 +397,57 @@ async def test_legacy_package_reports_missing_history_and_optional_results(tmp_p
     monkeypatch.setattr(packages, "get_session", session)
     monkeypatch.setattr(packages, "_resources", AsyncMock())
     monkeypatch.setattr(packages, "_import_sources", AsyncMock())
-    results = AsyncMock()
-    monkeypatch.setattr(packages, "_results", results)
     monkeypatch.setattr(result_exports, "get_settings", lambda: SimpleNamespace(result_export_dir=str(tmp_path)))
-    await packages.execute_package(db, job, tmp_path / "partial", tmp_path / "package.tar.gz")
+    with pytest.raises(ValueError, match="Repair required assets"):
+        await packages.execute_package(db, job, tmp_path / "partial", tmp_path / "package.zip")
     assert "JOIN protocols ON protocol_revisions.protocol_id = protocols.id" in str(queries[1])
     assert set(queries[1].params.values()) == {
         job.protocol_revision_id, job.protocol_id, job.experiment_id, job.owner_id,
     }
-    manifest = json.loads(unpack(tmp_path)["manifest.json"])
-    assert manifest["completeness"]["status"] == "incomplete"
-    assert json.loads(unpack(tmp_path)["publication/settings.json"]) == {}
-    assert results.await_count == int(include_results)
-    assert not (tmp_path / "partial").exists()
+    assert not (tmp_path / "package.zip").exists()
+
+
+async def test_configuration_only_package_excludes_results_even_if_a_stale_job_requests_them(tmp_path, monkeypatch):
+    import threading
+
+    from asaree.services.package_validation import Limits, inspect
+
+    publication = SimpleNamespace(id=uuid.uuid4(), graph={'nodes': [], 'edges': []},
+        experiment_snapshot={'design_spec': {'factors': []}}, dataset_inputs={'schema_version': 1, 'inputs': []},
+        design_revision_id=None, revision=1, published_at=datetime.now(UTC), name=None, note=None)
+    job = SimpleNamespace(id=uuid.uuid4(), owner_id=uuid.uuid4(), experiment_id=uuid.uuid4(), protocol_id=uuid.uuid4(),
+        protocol_revision_id=publication.id, design_revision_id=None, params={'selection': {'include_results': True}})
+    db = SimpleNamespace(scalar=AsyncMock(side_effect=[SimpleNamespace(), publication]))
+    status_db = SimpleNamespace(scalar=AsyncMock(return_value='running'), execute=AsyncMock())
+
+    @asynccontextmanager
+    async def session():
+        yield status_db
+
+    monkeypatch.setattr(packages, 'get_session', session)
+    monkeypatch.setattr(packages, '_resources', AsyncMock())
+    monkeypatch.setattr(packages, '_import_sources', AsyncMock())
+    monkeypatch.setattr(result_exports, 'get_settings', lambda: SimpleNamespace(result_export_dir=str(tmp_path)))
+    await packages.execute_package(db, job, tmp_path / 'partial', tmp_path / 'package.zip')
+    contents = unpack(tmp_path)
+    manifest = json.loads(contents['manifest.json'])
+    assert manifest['results_included'] is False
+    assert not any(name.startswith('results/') for name in contents)
+    assert manifest['completeness']['unresolved_count'] == 0
+    summary = inspect(tmp_path / 'package.zip', tmp_path / 'payload', Limits(), threading.Event())
+    assert summary['unresolved_count'] == 0
+    assert (tmp_path / 'package.zip').stat().st_mode & 0o777 == 0o600
+    update_values = status_db.execute.call_args.args[0].compile().params
+    progress = update_values['progress']
+    assert progress['bytes'] == (tmp_path / 'package.zip').stat().st_size
+    assert progress['sha256'] == hashlib.sha256((tmp_path / 'package.zip').read_bytes()).hexdigest()
+
+
+def test_api_rejects_results_in_packages():
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        api.Command(kind='export', request_key='results', format='experiment_package', include_results=True)
 
 
 async def test_package_download_expiry_and_owner_token(tmp_path, monkeypatch):
@@ -476,6 +464,56 @@ async def test_package_download_expiry_and_owner_token(tmp_path, monkeypatch):
         await api.download(job.experiment_id, job.id, token, SimpleNamespace())
     assert error.value.status_code == 410
     assert owned.call_args.args[-1] == job.owner_id
+
+
+@pytest.mark.parametrize('metadata', [False, True])
+@pytest.mark.parametrize('version', [1, 7])
+@pytest.mark.parametrize('name,stem', [
+    ('My Experiment', 'My-Experiment'),
+    ('  Study_2 - Revised  ', 'Study_2---Revised'),
+    ('../../Study / "review"\r\n', 'Study-review'),
+    ('???', 'experiment'),
+])
+async def test_package_download_uses_the_experiment_name_and_exported_version(
+    tmp_path, monkeypatch, metadata, version, name, stem,
+):
+    job = SimpleNamespace(id=uuid.uuid4(), owner_id=uuid.uuid4(), experiment_id=uuid.uuid4(), kind='export',
+        status='completed', created_at=datetime.now(UTC), protocol_revision_id=uuid.uuid4(), protocol_id=uuid.uuid4(),
+        params={'selection': {'format': 'experiment_package'}})
+    monkeypatch.setattr(result_exports, 'get_settings', lambda: SimpleNamespace(
+        result_export_dir=str(tmp_path), auth_secret_key='test-secret-key-at-least-32-characters'))
+    monkeypatch.setattr(api, 'owned_job', AsyncMock(return_value=job))
+    get_experiment = AsyncMock(return_value=SimpleNamespace(name=name, owner_id=job.owner_id))
+    monkeypatch.setattr(api, 'get_experiment', get_experiment)
+    path = result_exports.export_path(job.id, package=True, metadata=metadata)
+    path.write_bytes(b'prepared export')
+    db = SimpleNamespace(scalar=AsyncMock(return_value=version))
+    response = await api.download(job.experiment_id, job.id, result_exports.download_token(job), db, metadata)
+    suffix = 'manifest.json' if metadata else 'zip'
+    assert response.headers['content-disposition'] == f'attachment; filename="{stem}-v{version}.{suffix}"'
+    assert response.headers['content-type'] == ('application/json' if metadata else 'application/zip')
+    assert response.path == path
+    get_experiment.assert_awaited_once_with(db, job.experiment_id)
+    # Resolve the publication pinned to the job, even if a newer version exists.
+    parameters = db.scalar.call_args.args[0].compile().params.values()
+    assert job.protocol_revision_id in parameters
+    assert job.protocol_id in parameters
+    assert job.experiment_id in parameters
+    assert job.owner_id in parameters
+
+
+async def test_package_download_cannot_use_another_owners_experiment(tmp_path, monkeypatch):
+    job = SimpleNamespace(id=uuid.uuid4(), owner_id=uuid.uuid4(), experiment_id=uuid.uuid4(), kind='export',
+        status='completed', created_at=datetime.now(UTC), params={'selection': {'format': 'experiment_package'}})
+    monkeypatch.setattr(result_exports, 'get_settings', lambda: SimpleNamespace(
+        result_export_dir=str(tmp_path), auth_secret_key='test-secret-key-at-least-32-characters'))
+    monkeypatch.setattr(api, 'owned_job', AsyncMock(return_value=job))
+    monkeypatch.setattr(api, 'get_experiment', AsyncMock(return_value=SimpleNamespace(
+        name='Foreign experiment', owner_id=uuid.uuid4())))
+    result_exports.export_path(job.id, package=True).write_bytes(b'prepared export')
+    with pytest.raises(HTTPException) as error:
+        await api.download(job.experiment_id, job.id, result_exports.download_token(job), SimpleNamespace())
+    assert error.value.status_code == 404
 
 
 async def test_expiry_removes_package_csv_and_partial_files(tmp_path, monkeypatch):

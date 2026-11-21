@@ -8,9 +8,11 @@ from pathlib import Path
 from typing import Any
 
 from asaree_client._multipart import multipart_directory
+from asaree_client.exceptions import AsareeConflictError
 from asaree_client.models import Skill, SkillPage, SkillUrlPreview
 
 ResourceId = uuid.UUID | str
+_IMMUTABLE_MESSAGE = "Registered skills are immutable in ASAREE. Register a new skill with a different name instead."
 
 
 class Skills:
@@ -35,7 +37,8 @@ class Skills:
         return self._folder_request("POST", "/skills/upload-folder", directory)
 
     def replace_folder(self, skill_id: ResourceId, directory: str) -> Skill:
-        return self._folder_request("PUT", f"/skills/{skill_id}/folder", directory)
+        """Retained for compatibility; register a new skill instead."""
+        raise AsareeConflictError(_IMMUTABLE_MESSAGE)
 
     def _folder_request(self, method: str, path: str, directory: str) -> Skill:
         with multipart_directory(directory) as files:
@@ -72,13 +75,12 @@ class Skills:
         description: str | None = None,
         body: str | None = None,
     ) -> Skill:
-        payload = {k: v for k, v in {"name": name, "description": description, "body": body}.items() if v is not None}
-        return Skill(**self._client._patch(f"/skills/{skill_id}", json=payload))
+        """Retained for compatibility; register a new skill instead."""
+        raise AsareeConflictError(_IMMUTABLE_MESSAGE)
 
     def replace_markdown(self, skill_id: ResourceId, file_path: str) -> Skill:
-        with open(file_path, "rb") as file:
-            data = self._client._put(f"/skills/{skill_id}/markdown", files={"file": (Path(file_path).name, file)})
-        return Skill(**data)
+        """Retained for compatibility; register a new skill instead."""
+        raise AsareeConflictError(_IMMUTABLE_MESSAGE)
 
     def delete(self, skill_id: ResourceId) -> None:
         self._client._delete(f"/skills/{skill_id}")

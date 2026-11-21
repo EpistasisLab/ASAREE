@@ -17,27 +17,30 @@ from asaree.models.user_llm_setting import UserLLMSetting
 from asaree.services.package_connections import compatible
 
 
+async def source_requirements(db: AsyncSession, job: PackageImport) -> list[dict[str, Any]]:
+    records = (await db.scalars(select(ImportedIdentity).where(
+        ImportedIdentity.import_id == job.id, ImportedIdentity.kind == 'mcp'))).all()
+    return [record.provenance['source'] for record in records if 'source' in record.provenance]
+
+
 async def runtime_requirement_issues(db: AsyncSession, job: PackageImport, graph: dict[str, Any],
                                      design: dict[str, Any] | None) -> list[dict[str, Any]]:
-    from asaree.services import package_imports
     from asaree.services.experiment_packages import node_variants
     from asaree.services.package_reconstruction import identity
-    from asaree.services.package_validation import document
 
     implicit = {'asaree.system:asaree.mcp_servers.workspace_server': 'dataset',
                 'asaree.system:scikit_learn_mcp': 'dataset',
                 'asaree.system:asaree.mcp_servers.script_server': 'script'}
     issues: list[dict[str, Any]] = []
     async with system_session(reason='validate imported runtime requirements without connecting') as resources:
-        for path in (package_imports.directory(job.id) / 'payload/requirements/mcp').glob('*.json'):
-            requirement = document(path, package_imports.limits())
+        for requirement in await source_requirements(db, job):
             if requirement.get('knowledge_kind'):
                 continue
             binding = await db.get(ImportedIdentity, (job.id, 'runtime_mcp', requirement['id']))
             local = binding.local_id if binding else identity(job, 'mcp', requirement['id'])
             affected = []
             for node in graph.get('nodes', []):
-                if (node.get('type') == implicit.get(requirement.get('service_identity'))
+                if (node.get('type') == implicit.get(requirement.get('service_identity') or '')
                     or any(((variant.get('data') or {}).get('config') or {}).get('server_id') == str(local)
                            for variant in node_variants(node, design))):
                     affected.append(node['id'])
@@ -57,26 +60,20 @@ async def validate_model_connection(db: AsyncSession, job: PackageImport, config
     provider = config.get('provider') or kind.removeprefix('model_').removeprefix('llm_')
     setting = await db.scalar(select(UserLLMSetting).where(
         UserLLMSetting.user_id == job.owner_id, UserLLMSetting.provider == provider))
-    selection = await db.get(ImportedIdentity, (job.id, 'runtime_provider', provider))
-    if setting is None or selection is None or selection.local_id != setting.id:
-        raise ValueError(f'Select the saved destination {provider} connection for Model node {node_id}.')
+    if setting is None:
+        raise ValueError(f'Configure your saved {provider} connection for Model node {node_id}.')
     for fallback in config.get('fallback_models') or []:
         await validate_model_connection(db, job, fallback, kind, node_id)
 
 
 async def setup_options(db: AsyncSession, job: PackageImport) -> dict[str, Any]:
-    from asaree.models.experiment import ResearchExperiment
-    from asaree.services import package_imports
-    from asaree.services.experiment_packages import node_variants
     from asaree.services.package_reconstruction import readiness_issues
-    from asaree.services.package_validation import document
 
     requirements = []
     async with system_session(reason='list authorized import destination connections without connecting') as resources:
         servers = list((await resources.scalars(select(MCPServerConfig).where(
             (MCPServerConfig.owner_id == job.owner_id) | MCPServerConfig.is_system.is_(True)))).all())
-        for path in (package_imports.directory(job.id) / 'payload/requirements/mcp').glob('*.json'):
-            source = document(path, package_imports.limits())
+        for source in await source_requirements(db, job):
             if source.get('knowledge_kind'):
                 continue
             binding = await db.get(ImportedIdentity, (job.id, 'runtime_mcp', source['id']))
@@ -85,28 +82,8 @@ async def setup_options(db: AsyncSession, job: PackageImport) -> dict[str, Any]:
                 'selected_id': str(binding.local_id) if binding else None,
                 'candidates': [{'id': str(server.id), 'name': server.name} for server in servers
                                if compatible(source, server)]})
-    protocol = await db.scalar(select(Protocol).where(Protocol.experiment_id == job.experiment_id))
-    experiment = await db.get(ResearchExperiment, job.experiment_id)
-    required_providers: set[str] = set()
-
-    def require_provider(config: dict[str, Any], kind: str) -> None:
-        required_providers.add(config.get('provider') or kind.removeprefix('model_').removeprefix('llm_'))
-        for fallback in config.get('fallback_models') or []:
-            require_provider(fallback, kind)
-
-    for node in (protocol.graph if protocol else {}).get('nodes', []):
-        if str(node.get('type', '')).startswith(('model_', 'llm_')):
-            for variant in node_variants(node, experiment.design_spec if experiment else None):
-                require_provider((variant.get('data') or {}).get('config') or {}, node['type'])
-    settings = (await db.scalars(select(UserLLMSetting).where(UserLLMSetting.user_id == job.owner_id,
-        UserLLMSetting.provider.in_(required_providers)))).all()
-    providers = []
-    for setting in settings:
-        binding = await db.get(ImportedIdentity, (job.id, 'runtime_provider', setting.provider))
-        providers.append({'provider': setting.provider, 'id': str(setting.id),
-                          'selected': binding is not None and binding.local_id == setting.id})
     issues = await readiness_issues(db, job)
-    return {'ready': not issues, 'issues': issues, 'mcp': requirements, 'providers': providers}
+    return {'ready': not issues, 'issues': issues, 'mcp': requirements}
 
 
 def rebind_definition(graph: dict[str, Any], design: dict[str, Any] | None,
@@ -161,20 +138,15 @@ def rebind_definition(graph: dict[str, Any], design: dict[str, Any] | None,
 async def select_connection(db: AsyncSession, job: PackageImport, kind: str,
                             source: str, destination: uuid.UUID) -> None:
     from asaree.models.experiment import ResearchExperiment
-    from asaree.services import package_imports
     from asaree.services.package_reconstruction import identity
-    from asaree.services.package_validation import canonical_identity, document
+    from asaree.services.package_validation import canonical_identity
 
-    if kind == 'provider':
-        setting = await db.scalar(select(UserLLMSetting).where(UserLLMSetting.id == destination,
-            UserLLMSetting.user_id == job.owner_id, UserLLMSetting.provider == source))
-        if setting is None:
-            raise ValueError('Choose an authorized saved connection for this provider.')
-        mapping_kind = 'runtime_provider'
-    elif kind == 'mcp':
+    if kind == 'mcp':
         source = canonical_identity(source)
-        path = package_imports.directory(job.id) / f'payload/requirements/mcp/{source}.json'
-        requirement = document(path, package_imports.limits())
+        recorded = await db.get(ImportedIdentity, (job.id, 'mcp', source))
+        if recorded is None or 'source' not in recorded.provenance:
+            raise ValueError('Source connection requirement is unavailable.')
+        requirement = recorded.provenance['source']
         async with system_session(reason='select authorized destination connection without execution') as resources:
             server = await resources.scalar(select(MCPServerConfig).where(MCPServerConfig.id == destination,
                 (MCPServerConfig.owner_id == job.owner_id) | MCPServerConfig.is_system.is_(True)))
@@ -191,13 +163,15 @@ async def select_connection(db: AsyncSession, job: PackageImport, kind: str,
             if protocol is None or experiment is None or experiment.locked_at is not None:
                 raise ValueError('Unlock the editable experiment before changing connections.')
             old_design = deepcopy(experiment.design_spec)
-            source_root = package_imports.directory(job.id) / 'payload/publication'
-            source_graph = document(source_root / 'canvas.json', package_imports.limits())
-            source_settings = document(source_root / 'settings.json', package_imports.limits())
+            publication = await db.scalar(select(ImportedIdentity).where(
+                ImportedIdentity.import_id == job.id, ImportedIdentity.kind == 'source_publication'))
+            if publication is None:
+                raise ValueError('Source publication metadata is unavailable.')
+            source_graph = publication.provenance['graph']
+            source_settings = publication.provenance['settings']
             source_design = source_settings.get('design_spec')
-            legacy_design = source_root.parent / 'design/revision.json'
-            if source_design is None and legacy_design.exists():
-                source_design = document(legacy_design, package_imports.limits()).get('design_spec')
+            if source_design is None:
+                source_design = (publication.provenance.get('design') or {}).get('design_spec')
             protocol.graph, experiment.design_spec = rebind_definition(protocol.graph, old_design, old, server,
                 source_graph=source_graph, source_design=source_design,
                 source_id=source, source_name=requirement['name'])

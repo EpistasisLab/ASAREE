@@ -39,6 +39,7 @@ from asaree.services.experiment_measurements import (
 from asaree.services.experiment_run_results import RunResultsProjectionError, summarize_experiment_run_results
 from asaree.services.experiments import (
     create_experiment,
+    create_experiment_with_available_name,
     create_untitled_experiment,
     delete_experiment,
     get_dataset_ids_by_experiment,
@@ -68,7 +69,7 @@ from asaree.services.metrics import (
     validate_metric_values,
 )
 from asaree.services.protocol_graph_schema import normalize_protocol_graph
-from asaree.services.protocol_revisions import get_published_revision, is_draft_published, publish_protocol
+from asaree.services.protocol_revisions import get_published_revision, is_draft_published
 from asaree.services.protocol_runs import list_experiment_trials
 from asaree.services.protocols import (
     create_protocol,
@@ -516,8 +517,6 @@ async def import_experiment_definition_endpoint(
     name = body.name.strip()
     if not name:
         raise HTTPException(status_code=422, detail="Experiment name cannot be empty")
-    if await get_experiment_by_name(db, name, owner_id=user.id) is not None:
-        raise HTTPException(status_code=409, detail="An experiment with this name already exists")
     if not isinstance(body.graph.get("nodes"), list) or not isinstance(body.graph.get("edges"), list):
         raise HTTPException(status_code=422, detail="The imported definition must contain a graph with nodes and edges")
     if body.published_graph is not None and (
@@ -527,69 +526,30 @@ async def import_experiment_definition_endpoint(
         raise HTTPException(status_code=422, detail="The imported published canvas must contain nodes and edges")
 
     graph = normalize_protocol_graph(body.graph)
-    published_graph = normalize_protocol_graph(body.published_graph) if body.published_graph is not None else None
     servers = await mcp_service.list_servers(owner_id=user.id)
-    server_ids_by_name = {str(server.name): str(server.id) for server in servers}
-    if published_graph is None:
-        graph, measurement_plan = _localize_imported_mcp_references(graph, body.measurement_plan, server_ids_by_name)
-    else:
-        graph, _ = _localize_imported_mcp_references(graph, None, server_ids_by_name)
-        published_graph, measurement_plan = _localize_imported_mcp_references(
-            published_graph, body.measurement_plan, server_ids_by_name
-        )
+    from asaree.services.package_connections import service_identity
+
+    server_ids_by_name = {str(server.name): str(server.id) for server in servers if service_identity(server)}
+    graph, measurement_plan = _localize_imported_mcp_references(graph, body.measurement_plan, server_ids_by_name)
 
     try:
         design_spec = normalize_design_spec(body.design_spec, validate_metrics=True)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
-    # Do not attach source dataset IDs here. They refer to source-workspace
-    # artifacts and may not exist for this owner. MCP references are different:
-    # server names are portable, so matching visible registrations above replace
-    # source-install UUIDs before measurement-plan validation.
+    # JSON has no asset bytes. Preserve its definition as an editable draft;
+    # only trusted built-ins can be matched automatically in the destination.
     try:
-        # The lookup above gives the dialog its friendly suggested name. This
-        # savepoint covers the unavoidable race where another tab takes it
-        # between that lookup and the insert, turning it back into a 409 for
-        # the client rather than an integrity-error 500.
         async with db.begin_nested():
-            experiment = await create_experiment(
-                db,
-                name=name,
-                owner_id=user.id,
-                description=body.description,
-                design_type=body.design_type,
-                task_brief=body.task_brief,
-                design_spec=design_spec,
-                measurement_plan=measurement_plan,
+            experiment = await create_experiment_with_available_name(
+                db, name=name, owner_id=user.id, description=body.description,
+                hypothesis=body.hypothesis,
+                design_type=body.design_type, task_brief=body.task_brief,
+                design_spec=design_spec, measurement_plan=measurement_plan,
             )
-            # `publish_protocol` can only freeze the protocol's current draft.
-            # Start from the source published snapshot when one exists, freeze
-            # it as the imported protocol's revision 1, then restore the
-            # source draft if it had unpublished edits.
-            protocol = await create_protocol(
-                db,
-                name=generated_protocol_name(experiment.name, experiment.id),
-                owner_id=user.id,
-                description=body.protocol_description,
-                experiment_id=experiment.id,
-                graph=published_graph or graph,
-            )
-            if body.measurement_plan is not None:
-                await _require_valid_measurement_plan(
-                    db,
-                    document=experiment.measurement_plan,
-                    metrics=(experiment.design_spec or {}).get("metrics"),
-                    graph=published_graph or graph,
-                    experiment_id=experiment.id,
-                    owner_id=experiment.owner_id,
-                    allow_preserved_bindings=False,
-                )
-            if published_graph is not None:
-                await publish_protocol(db, protocol, owner_id=user.id)
-                if graph != published_graph:
-                    protocol.graph = graph
-                    await db.flush()
+            await create_protocol(db, name=generated_protocol_name(experiment.name, experiment.id),
+                owner_id=user.id, description=body.protocol_description,
+                experiment_id=experiment.id, graph=graph)
     except IntegrityError as exc:
         if "uq_research_experiments_owner_name" in str(exc.orig):
             raise HTTPException(status_code=409, detail="An experiment with this name already exists") from exc

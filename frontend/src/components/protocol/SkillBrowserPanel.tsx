@@ -5,10 +5,11 @@ import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ArrowLeft, Plus, ScrollText, Trash2, X } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
+import { Alert, AlertAction, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
-import { skillsApi } from '@/api/client'
+import { ApiError, skillsApi } from '@/api/client'
 import { RegisterSkillDialog } from './RegisterSkillDialog'
 import type { Skill } from '@/types/skills'
 
@@ -19,10 +20,8 @@ import type { Skill } from '@/types/skills'
 // choosing the skill is how you add the node.
 //
 // It doubles as the library's own management surface (register, delete),
-// since a skill isn't otherwise reachable from anywhere in the app. Editing
-// a skill's TEXT deliberately isn't here: that's a document-editing job, not
-// something to do in a 320px canvas rail, and PUT /skills/{id}/markdown
-// already exists for whenever it gets a real home.
+// since a skill isn't otherwise reachable from anywhere in the app.
+// Registrations are immutable; changed content requires a new skill.
 export function SkillBrowserPanel({
   onPick,
   onBack,
@@ -48,6 +47,7 @@ export function SkillBrowserPanel({
       queryClient.invalidateQueries({ queryKey: ['skills'] })
       setConfirmingDeleteId(null)
     },
+    onError: () => setConfirmingDeleteId(null),
   })
 
   const skills = skillsQuery.data ?? []
@@ -102,8 +102,8 @@ export function SkillBrowserPanel({
               {confirmingDeleteId === skill.id ? (
                 <div className="space-y-2">
                   <p className="text-xs text-muted-foreground">
-                    Delete <span className="font-mono">{skill.name}</span>? Any node already naming it keeps the id and
-                    will report the skill as missing.
+                    Delete <span className="font-mono">{skill.name}</span>? Skills used by a canvas,
+                    published experiment version, design, or retained run cannot be deleted.
                   </p>
                   <div className="flex items-center gap-1.5">
                     <Button
@@ -158,7 +158,7 @@ export function SkillBrowserPanel({
                       size="icon-sm"
                       className="shrink-0"
                       aria-label={`Delete ${skill.name}`}
-                      onClick={() => setConfirmingDeleteId(skill.id)}
+                      onClick={() => { deleteMutation.reset(); setConfirmingDeleteId(skill.id) }}
                     >
                       <Trash2 className="size-3.5" />
                     </Button>
@@ -170,7 +170,20 @@ export function SkillBrowserPanel({
         </div>
       )}
 
-      {deleteMutation.isError && <p className="text-sm text-destructive">Could not delete that skill.</p>}
+      {deleteMutation.isError && <Alert variant="destructive" className="shrink-0">
+        <AlertTitle>Couldn’t delete this skill</AlertTitle>
+        <AlertDescription className="max-h-48 overflow-y-auto whitespace-pre-line break-words">
+          {deleteMutation.error instanceof ApiError
+            ? deleteMutation.error.message
+            : 'Something went wrong. Please try again.'}
+        </AlertDescription>
+        <AlertAction>
+          <Button variant="ghost" size="icon-sm" aria-label="Dismiss deletion error"
+            onClick={() => deleteMutation.reset()}>
+            <X className="size-3.5" />
+          </Button>
+        </AlertAction>
+      </Alert>}
 
       {/* Registering just refreshes the list rather than immediately creating
           a node: uploading and placing are separate decisions, and you may

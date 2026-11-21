@@ -11,7 +11,7 @@ readme = "README.md"
 requires-python = ">=3.12"
 
 dependencies = [
-    # Pin a tested Motoro release tag; update the lockfile with uv on each bump.
+    # Use a tested Motoro release tag before production; see the temporary integration source below.
     # Exact develop commits are temporary integration inputs, never release pins.
     "motoro",
     # The on-disk versioned dataset workspace (see [tool.uv.sources] below) —
@@ -93,7 +93,8 @@ dev = [
 ]
 
 [tool.uv.sources]
-motoro = { git = "https://github.com/EpistasisLab/motoro.git", tag = "v0.15.1" }
+# Transaction-aware native registration (Motoro PR #26); replace with a tested release tag before production.
+motoro = { git = "https://github.com/EpistasisLab/motoro.git", rev = "1d75d9c036ebc35217901d8945b69b4841d17798" }
 asaree-workspace-core = { path = "workspace-core", editable = true }
 # Every mcp-servers/ package is declared here, including asaree-sklearn-core
 # (which the six servers each depend on): uv resolves `tool.uv.sources` from

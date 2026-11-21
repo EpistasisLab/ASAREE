@@ -2,3 +2,4 @@
 
 from asaree.models.dataset_row_index import DatasetIndexedRow, DatasetRowIndex  # noqa: F401
 from asaree.models.factorial_row_result import FactorialRowResult  # noqa: F401
+from asaree.models.skill_reference import SkillReference  # noqa: F401

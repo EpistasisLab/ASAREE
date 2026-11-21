@@ -46,9 +46,10 @@ from motoro.services.skill_service import SkillFormatError
 from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError
 
-from asaree.deps import CurrentUser
+from asaree.deps import CurrentUser, DbSession
 from asaree.services import skill_sources
 from asaree.services.import_visibility import active_resources, resource_active
+from asaree.services.skill_references import IMMUTABLE_MESSAGE, SkillInUseError, delete_registered_skill
 from asaree.services.skill_sources import SkillSourceError
 
 router = APIRouter(prefix="/skills", tags=["skills"])
@@ -183,22 +184,11 @@ async def replace_skill_folder_endpoint(
     user: CurrentUser,
     files: Annotated[list[UploadFile], File()],
 ) -> SkillResponse:
-    """Replace a skill's whole directory from a re-uploaded folder.
-
-    A replacement, not a merge — a re-upload that drops ``FORMS.md`` drops it,
-    because the alternative leaves the skill holding a document its own
-    ``SKILL.md`` no longer mentions.
-    """
+    """Compatibility route: registered skills cannot be replaced in ASAREE."""
     existing = await skill_service.get_skill(skill_id)
     if existing is None or existing.owner_id != user.id or not await resource_active(skill_id):
         raise HTTPException(status_code=404, detail="No such skill")
-    payload = await _folder_payload(files)
-    try:
-        skill = await skill_service.update_skill_from_bundle(skill_id, payload)
-    except (SkillFormatError, IntegrityError) as exc:
-        _raise_skill_write_http_error(exc)
-    assert skill is not None
-    return SkillResponse.model_validate(skill)
+    raise HTTPException(status_code=409, detail=IMMUTABLE_MESSAGE)
 
 
 class SkillUrlRequest(BaseModel):
@@ -301,9 +291,8 @@ async def get_skill_endpoint(skill_id: uuid.UUID, user: CurrentUser) -> SkillRes
 async def get_skill_markdown_endpoint(skill_id: uuid.UUID, user: CurrentUser) -> dict[str, str]:
     """The skill rendered back out as a ``SKILL.md`` document.
 
-    So the file a user uploaded is also the thing they can read, edit, and
-    re-upload — the stored row is a parse of that document, not a replacement
-    for it.
+    The result can be downloaded or used to register a new skill. Existing
+    registrations cannot be edited or replaced through ASAREE.
     """
     skill = await skill_service.get_skill(skill_id)
     if skill is None or not _readable(skill, user) or not await resource_active(skill_id):
@@ -313,15 +302,11 @@ async def get_skill_markdown_endpoint(skill_id: uuid.UUID, user: CurrentUser) ->
 
 @router.patch("/{skill_id}", response_model=SkillResponse)
 async def update_skill_endpoint(skill_id: uuid.UUID, body: SkillUpdate, user: CurrentUser) -> SkillResponse:
+    """Compatibility route: register a new skill instead of updating content."""
     existing = await skill_service.get_skill(skill_id)
     if existing is None or existing.owner_id != user.id or not await resource_active(skill_id):
         raise HTTPException(status_code=404, detail="No such skill")
-    try:
-        skill = await skill_service.update_skill(skill_id, name=body.name, description=body.description, body=body.body)
-    except (SkillFormatError, IntegrityError) as exc:
-        _raise_skill_write_http_error(exc)
-    assert skill is not None  # existence already checked above
-    return SkillResponse.model_validate(skill)
+    raise HTTPException(status_code=409, detail=IMMUTABLE_MESSAGE)
 
 
 @router.put("/{skill_id}/markdown", response_model=SkillResponse)
@@ -330,21 +315,21 @@ async def replace_skill_markdown_endpoint(
     user: CurrentUser,
     file: Annotated[UploadFile, File()],
 ) -> SkillResponse:
-    """Replace a skill's contents from a re-uploaded ``SKILL.md``."""
+    """Compatibility route: registered skills cannot be replaced in ASAREE."""
+    existing = await skill_service.get_skill(skill_id)
+    if existing is None or existing.owner_id != user.id or not await resource_active(skill_id):
+        raise HTTPException(status_code=404, detail="No such skill")
+    raise HTTPException(status_code=409, detail=IMMUTABLE_MESSAGE)
+
+
+@router.delete("/{skill_id}", status_code=204)
+async def delete_skill_endpoint(skill_id: uuid.UUID, user: CurrentUser, db: DbSession) -> None:
     existing = await skill_service.get_skill(skill_id)
     if existing is None or existing.owner_id != user.id or not await resource_active(skill_id):
         raise HTTPException(status_code=404, detail="No such skill")
     try:
-        skill = await skill_service.update_skill_from_markdown(skill_id, _decode(await file.read()))
-    except (SkillFormatError, IntegrityError) as exc:
-        _raise_skill_write_http_error(exc)
-    assert skill is not None
-    return SkillResponse.model_validate(skill)
-
-
-@router.delete("/{skill_id}", status_code=204)
-async def delete_skill_endpoint(skill_id: uuid.UUID, user: CurrentUser) -> None:
-    existing = await skill_service.get_skill(skill_id)
-    if existing is None or existing.owner_id != user.id or not await resource_active(skill_id):
+        deleted = await delete_registered_skill(db, skill_id, user.id)
+    except SkillInUseError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if not deleted:
         raise HTTPException(status_code=404, detail="No such skill")
-    await skill_service.delete_skill(skill_id)

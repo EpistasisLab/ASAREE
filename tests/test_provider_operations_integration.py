@@ -28,8 +28,8 @@ from asaree.services.llm_model_discovery import discover_models
 from asaree.services.provider_config import make_provider_config, provider_config
 from asaree.services.user_llm_settings import encrypt
 
-MOTORO_RELEASE = "v0.15.1"
-MOTORO_RELEASE_COMMIT = "805fa51455642b01c1fb9aff52fabd28ebfbb6b8"
+MOTORO_VERSION = "0.15.2.dev2+g1d75d9c03"
+MOTORO_COMMIT = "1d75d9c036ebc35217901d8945b69b4841d17798"
 PROVIDERS = ["anthropic", "openai", "azure_foundry", "openrouter", "local"]
 OWNER = uuid.UUID("11111111-1111-1111-1111-111111111111")
 SECRET = "provider-secret-for-tests"
@@ -623,12 +623,12 @@ async def test_anthropic_outage_preserves_cached_live_metadata_and_error(endpoin
     assert len(requests) == 1
 
 
-def test_exact_installed_release_and_standalone_consumer(tmp_path):
+def test_exact_installed_revision_and_standalone_consumer(tmp_path):
     distribution = importlib.metadata.distribution("motoro")
     origin = json.loads(distribution.read_text("direct_url.json"))
-    assert distribution.version == MOTORO_RELEASE.removeprefix("v")
-    assert origin["vcs_info"]["commit_id"] == MOTORO_RELEASE_COMMIT
-    assert origin["vcs_info"]["requested_revision"] == MOTORO_RELEASE
+    assert distribution.version == MOTORO_VERSION
+    assert origin["vcs_info"]["commit_id"] == MOTORO_COMMIT
+    assert origin["vcs_info"]["requested_revision"] == MOTORO_COMMIT
     assert "dir_info" not in origin
     assert Path(distribution.locate_file("motoro/services/providers.py")).is_file()
     consumer = """

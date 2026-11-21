@@ -1,4 +1,5 @@
 """ZIP upload, retry and retained source downloads without external services."""
+import shutil
 import threading
 import uuid
 from datetime import UTC, datetime, timedelta
@@ -11,6 +12,7 @@ from test_package_import_validation import package
 from asaree.api import package_imports as api
 from asaree.models.package_import import PackageImport
 from asaree.services import package_imports as imports
+from asaree.services import package_source
 from asaree.services.package_validation import Limits, digest, inspect
 
 
@@ -19,8 +21,10 @@ def upload_job(tmp_path, monkeypatch):
     job = PackageImport(id=uuid.uuid4(), owner_id=uuid.uuid4(), request_key='zip-upload', status='uploading',
         preflight={}, progress={}, expires_at=datetime.now(UTC) + timedelta(hours=1))
     db = SimpleNamespace(scalar=AsyncMock(return_value=True), commit=AsyncMock())
-    root = tmp_path / 'upload'
+    root = tmp_path / 'scratch'
+    retained = tmp_path / 'backups' / 'experiment-package.zip'
     monkeypatch.setattr(imports, 'directory', lambda identifier: root)
+    monkeypatch.setattr(package_source, 'archive_path', lambda identifier: retained)
     monkeypatch.setattr(imports, 'limits', Limits)
     monkeypatch.setattr(api, 'owned', AsyncMock(return_value=job))
     return job, db, root
@@ -38,13 +42,16 @@ async def test_uploaded_zip_can_be_inspected_retried_and_downloaded(tmp_path, up
         yield data[17:]
 
     response = await api.upload(job.id, SimpleNamespace(stream=chunks), db, SimpleNamespace(id=job.owner_id))
-    stored = root / 'archive.zip'
+    stored = imports.archive_path(job.id)
     assert stored.read_bytes() == data
     assert stored.stat().st_mode & 0o777 == 0o600
     assert response['status'] == 'validating'
     assert response['sha256'] == digest(archive)
-    assert not (root / 'archive.part').exists()
+    assert not stored.with_suffix('.part').exists()
+    root.mkdir()
     job.preflight = inspect(stored, root / 'payload', Limits(), threading.Event())
+    expected_member = (root / 'payload/publication/canvas.json').read_bytes()
+    shutil.rmtree(root)  # Source evidence survives removal of the temporary extraction.
     job.status, job.generation = 'failed', 0
     retried = await api.retry(job.id, db, SimpleNamespace(id=job.owner_id))
     assert retried['status'] == 'validating'
@@ -53,7 +60,8 @@ async def test_uploaded_zip_can_be_inspected_retried_and_downloaded(tmp_path, up
     source_response = api.source_response(job, None)
     assert source_response.path == stored
     assert source_response.headers['content-type'] == 'application/zip'
-    assert source_response.headers['content-disposition'] == 'attachment; filename="archive.zip"'
+    assert source_response.headers['content-disposition'] == 'attachment; filename="experiment-package.zip"'
     member_response = api.source_response(job, 'publication/canvas.json')
-    assert member_response.path == root / 'payload/publication/canvas.json'
+    content = b''.join([chunk async for chunk in member_response.body_iterator])
+    assert content == expected_member
     assert member_response.headers['content-type'] == 'application/octet-stream'

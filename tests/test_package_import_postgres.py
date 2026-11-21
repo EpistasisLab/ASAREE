@@ -42,9 +42,73 @@ from asaree.services.datasets import create_dataset, quick_split_dataset
 from asaree.services.design_generation import generate_design_cells
 from asaree.services.experiment_packages import PackageWriter
 from asaree.services.package_reconstruction import Reconstruction, require_configured
-from asaree.services.package_validation import Limits, inspect
+from asaree.services.package_validation import Limits, PackageError, inspect
 
 results_db = _results_db
+
+
+@pytest.mark.parametrize('same_owner', [True, False])
+async def test_imported_skills_follow_normal_owner_name_uniqueness(
+    results_db, resource_db, tmp_path, monkeypatch, same_owner,
+):
+    from test_package_import_lifecycle import write_archive
+
+    db, _, _, owner = results_db
+    settings = AsareeSettings(_env_file=None, data_root=str(tmp_path / 'storage'))
+    monkeypatch.setattr('asaree.config.get_settings', lambda: settings)
+    existing = Skill(id=uuid.uuid4(), owner_id=owner.id if same_owner else uuid.uuid4(),
+        name='retained-skill', description='Existing registration', body='Keep existing content', is_system=False)
+    resource_db.add(existing)
+    await resource_db.flush()
+    job = PackageImport(id=uuid.uuid4(), owner_id=owner.id, request_key='skill-conflict', status='queued',
+        preflight={}, progress={}, expires_at=datetime.now(UTC) + timedelta(days=1))
+    db.add(job)
+    await db.flush()
+    root = imports.directory(job.id)
+    write_archive(job, root)
+    inspect(imports.archive_path(job.id), root / 'payload', Limits(), threading.Event())
+    importer = Reconstruction(db, job, root / 'payload', Limits())
+    if same_owner:
+        with pytest.raises(PackageError, match='Could not register skill "retained-skill".*already registered'):
+            async with db.begin_nested(), resource_db.begin_nested():
+                await importer.skills(resource_db)
+        count = await resource_db.scalar(select(func.count()).select_from(Skill))
+        assert count == 1
+        assert existing.name == 'retained-skill' and existing.body == 'Keep existing content'
+    else:
+        await importer.skills(resource_db)
+        source = next((root / 'payload/resources/skills').iterdir()).name
+        restored = await resource_db.get(Skill, uuid.UUID(importer.maps['skill', source]))
+        assert restored.owner_id == owner.id and restored.name == 'retained-skill'
+        assert restored.id != existing.id
+
+
+async def test_imported_dataset_name_conflict_fails_without_renaming(results_db, tmp_path, monkeypatch):
+    db, _, _, owner = results_db
+    settings = AsareeSettings(_env_file=None, data_root=str(tmp_path / 'storage'))
+    monkeypatch.setattr('asaree.config.get_settings', lambda: settings)
+    monkeypatch.setattr('asaree.services.datasets.get_settings', lambda: settings)
+    raw = b'x,y\n1,0\n2,1\n'
+    existing = await create_dataset(db, owner_id=owner.id, name='Existing dataset', csv_bytes=raw)
+    job = PackageImport(id=uuid.uuid4(), owner_id=owner.id, request_key='dataset-conflict', status='queued',
+        preflight={}, progress={}, expires_at=datetime.now(UTC) + timedelta(days=1))
+    db.add(job)
+    await db.flush()
+    root = imports.directory(job.id) / 'payload'
+    (root / 'inputs').mkdir(parents=True)
+    source, artifact = str(uuid.uuid4()), str(uuid.uuid4())
+    (root / f'inputs/{artifact}.csv').write_bytes(raw)
+    (root / 'inputs/bindings.json').write_text(json.dumps({'inputs': [
+        {'dataset_id': source, 'dataset_name': 'Existing dataset'}]}))
+    (root / 'dependencies.jsonl').write_text(json.dumps({'id': artifact, 'kind': 'dataset_file',
+        'status': 'included', 'role': 'raw_artifact', 'dataset_id': source, 'file': f'inputs/{artifact}.csv'}) + '\n')
+    importer = Reconstruction(db, job, root, Limits())
+    with pytest.raises(PackageError, match='Could not register dataset "Existing dataset".*already in use'):
+        async with db.begin_nested():
+            await importer.datasets()
+    assert await db.scalar(select(func.count()).select_from(RegisteredDataset).where(
+        RegisteredDataset.owner_id == owner.id, RegisteredDataset.name == 'Existing dataset')) == 1
+    assert Path(existing.raw_path).read_bytes() == raw
 
 
 def storage_settings(root):
@@ -280,7 +344,7 @@ async def test_persona_snapshots_and_subagents_survive_repeated_independent_impo
         root = imports.directory(job.id)
         stage = root / 'writer'
         stage.mkdir(parents=True)
-        writer = PackageWriter(root / 'archive.zip', stage)
+        writer = PackageWriter(imports.archive_path(job.id), stage)
         writer.json('publication/canvas.json', graph)
         writer.json('publication/settings.json', {'design_spec': design})
         writer.json('experiment-metadata.json', {'name': 'Portable'})
@@ -289,7 +353,7 @@ async def test_persona_snapshots_and_subagents_survive_repeated_independent_impo
         writer.finish({'format': 'asaree.experiment-package', 'schema_version': 2,
             'experiment_id': str(uuid.uuid4()), 'protocol_id': str(uuid.uuid4()),
             'publication': {'id': str(uuid.uuid4()), 'version': 1}, 'results_included': False})
-        job.preflight = inspect(root / 'archive.zip', root / 'payload', Limits(), threading.Event())
+        job.preflight = inspect(imports.archive_path(job.id), root / 'payload', Limits(), threading.Event())
         importer = Reconstruction(db, job, root / 'payload', Limits())
         job.experiment_id = await importer.activate(resource_db)
         await db.flush()
@@ -360,7 +424,7 @@ async def test_destination_services_and_explicit_custom_mapping(
             'factor_bindings': {'config.server_id': 'Connection'}}}],
         'edges': [{'source': 'model', 'target': 'agent', 'targetHandle': 'model'}]}
     design_spec = {'factors': [{'name': 'Connection', 'levels': [str(source_custom.id)]}]}
-    writer = PackageWriter(root / 'archive.zip', stage)
+    writer = PackageWriter(imports.archive_path(job.id), stage)
     writer.json('publication/canvas.json', graph)
     writer.json('publication/settings.json', {'design_spec': design_spec})
     writer.json('experiment-metadata.json', {'name': 'Service portability'})
@@ -369,7 +433,7 @@ async def test_destination_services_and_explicit_custom_mapping(
     writer.finish({'format': 'asaree.experiment-package', 'schema_version': 2,
         'experiment_id': str(scope.experiment_id), 'protocol_id': str(scope.protocol_id),
         'publication': {'id': str(scope.protocol_revision_id), 'version': 1}, 'results_included': False})
-    job.preflight = inspect(root / 'archive.zip', root / 'payload', Limits(), threading.Event())
+    job.preflight = inspect(imports.archive_path(job.id), root / 'payload', Limits(), threading.Event())
     requirements = ''.join(path.read_text() for path in (root / 'payload/requirements/mcp').glob('*.json'))
     assert 'SOURCE_SECRET' not in requirements
     destination_builtin = MCPServerConfig(id=uuid.uuid4(), name='Renamed built-in', is_system=True,
@@ -505,7 +569,7 @@ async def test_export_import_independent_owner_and_reexport(
     knowledge_root = settings.okf_document_dir if document else settings.okf_bundle_upload_dir
     knowledge = Path(knowledge_root) / str(owner.id) / 'source'
     knowledge.mkdir(parents=True)
-    knowledge_bytes = b'# Exact knowledge\r\n\xc3\xa9\n'
+    knowledge_bytes = b'---\r\ntitle: Exact knowledge\r\n---\r\n\xc3\xa9\n'
     (knowledge / 'concept.md').write_bytes(knowledge_bytes)
     server = MCPServerConfig(id=uuid.uuid4(), owner_id=owner.id, transport=MCPTransport.STDIO,
         name=(okf_documents.server_name_for(owner.id, knowledge) if document else
@@ -558,7 +622,7 @@ async def test_export_import_independent_owner_and_reexport(
     root.mkdir(parents=True)
     staging = root / 'writer'
     staging.mkdir()
-    archive = root / 'archive.zip'
+    archive = imports.archive_path(job.id)
     writer = PackageWriter(archive, staging)
     portable_graph, portable_settings = packages.portable_definition(graph, publication.experiment_snapshot)
     writer.json('publication/canvas.json', portable_graph)
@@ -583,7 +647,7 @@ async def test_export_import_independent_owner_and_reexport(
     root = imports.directory(job.id)
     assert root != source_root
     root.mkdir(parents=True)
-    archive = root / 'archive.zip'
+    archive = imports.archive_path(job.id)
     archive.write_bytes(archive_bytes)
     db, resource_db = destination_db, destination_resource_db
     assert await db.get(RegisteredDataset, dataset.id) is None
@@ -613,7 +677,11 @@ async def test_export_import_independent_owner_and_reexport(
     assert local_server.owner_id == destination_owner.id
     assert okf_documents.is_document_server(local_server) == document
     restored_knowledge = Path(okf_bundles.bundle_path_from_command(local_server.command))
-    assert (restored_knowledge / 'concept.md').read_bytes() == knowledge_bytes
+    concept = okf_documents.concept_file_for(local_server) if document else restored_knowledge / 'concept.md'
+    assert concept.read_bytes() == knowledge_bytes
+    assert restored_knowledge.parent == (okf_documents.owner_root(destination_owner.id) if document else
+                                         okf_bundles.owner_upload_root(destination_owner.id))
+    assert local_dataset.raw_artifact.storage_key == f'{local_dataset.id}/raw.csv'
     local_skill = await resource_db.get(Skill, uuid.UUID(importer.maps['skill', str(skill.id)]))
     assert local_skill.owner_id == destination_owner.id and not local_skill.is_system
     assert local_skill.body == skill.body and local_skill.frontmatter == skill.frontmatter
@@ -621,8 +689,8 @@ async def test_export_import_independent_owner_and_reexport(
         select(SkillFile).where(SkillFile.skill_id == local_skill.id))).all()}
     assert set(local_files) == {'assets/binary.bin', *(entry[0] for entry in nested_resources)}
     local_file = local_files['assets/binary.bin']
-    assert base64.b64decode(local_file.content) == binary and local_file.position == 7
-    for path, encoding, content, position in nested_resources:
+    assert base64.b64decode(local_file.content) == binary and local_file.position == 0
+    for position, (path, encoding, content, _) in enumerate(nested_resources, start=1):
         restored = local_files[path]
         assert (restored.encoding, restored.content, restored.position) == (encoding, content, position)
     monkeypatch.setattr('asaree.services.package_reconstruction.system_session', resource_session)
@@ -708,7 +776,7 @@ async def test_export_import_independent_owner_and_reexport(
         pin = local_publication.dataset_inputs['inputs'][0]
         assert reexport.read(f'inputs/files/{pin["raw_artifact"]["id"]}.csv') == source
         assert reexport.read(f'resources/skills/{local_skill.id}/assets/binary.bin') == binary
-        for path, encoding, content, position in nested_resources:
+        for position, (path, encoding, content, _) in enumerate(nested_resources, start=1):
             expected = base64.b64decode(content) if encoding == 'base64' else content.encode('utf-8')
             assert reexport.read(f'resources/skills/{local_skill.id}/{path}') == expected
             dependency = next(entry for entry in reexport_dependencies if entry.get('kind') == 'skill_file'
@@ -742,7 +810,7 @@ async def test_v1_skill_binary_content_is_restored_with_explicit_unknown_source_
     await db.flush()
     root = imports.directory(job.id)
     write_archive(job, root, version=1)
-    summary = inspect(root / 'archive.zip', root / 'payload', Limits(), threading.Event())
+    summary = inspect(imports.archive_path(job.id), root / 'payload', Limits(), threading.Event())
     assert any('v1 omits' in warning for warning in summary['warnings'])
     importer = Reconstruction(db, job, root / 'payload', Limits())
     experiment = await importer.activate(resource_db)
@@ -757,7 +825,7 @@ async def test_v1_skill_binary_content_is_restored_with_explicit_unknown_source_
     assert protocol.published_revision_id is None
 
 
-async def test_missing_source_stays_unresolved_instead_of_using_an_existing_same_name_dataset(
+async def test_missing_dataset_source_fails_registration_instead_of_reusing_same_name(
     results_db, resource_db, tmp_path, monkeypatch,
 ):
     db, scope, cell, owner = results_db
@@ -781,7 +849,7 @@ async def test_missing_source_stays_unresolved_instead_of_using_an_existing_same
     root = imports.directory(job.id)
     stage = root / 'writer'
     stage.mkdir(parents=True)
-    writer = PackageWriter(root / 'archive.zip', stage)
+    writer = PackageWriter(imports.archive_path(job.id), stage)
     writer.json('publication/canvas.json', graph)
     writer.json('publication/settings.json', {'design_spec': {'factors': []}})
     writer.json('experiment-metadata.json', {'name': 'Missing original'})
@@ -791,19 +859,9 @@ async def test_missing_source_stays_unresolved_instead_of_using_an_existing_same
     writer.finish({'format': 'asaree.experiment-package', 'schema_version': 2,
         'experiment_id': str(scope.experiment_id), 'protocol_id': str(scope.protocol_id),
         'publication': {'id': str(scope.protocol_revision_id), 'version': 1}, 'results_included': False})
-    job.preflight = inspect(root / 'archive.zip', root / 'payload', Limits(), threading.Event())
+    job.preflight = inspect(imports.archive_path(job.id), root / 'payload', Limits(), threading.Event())
     assert job.preflight['unresolved_count'] == 1
     importer = Reconstruction(db, job, root / 'payload', Limits())
-    job.experiment_id = await importer.activate(resource_db)
-    job.status = 'completed'
-    await db.flush()
-    local = await db.get(RegisteredDataset, uuid.UUID(importer.maps['dataset', source_id]))
-    assert local.id != existing.id and local.raw_artifact_id is None
-    assert local.raw_sha256 == pin['raw_sha256'] and local.name != existing.name
-    @asynccontextmanager
-    async def resources(**kwargs):
-        yield resource_db
-    monkeypatch.setattr('asaree.services.package_reconstruction.system_session', resources)
-    readiness = await api.readiness(job.id, db, owner)
-    assert not readiness['ready']
-    assert any('unresolved' in issue['message'] for issue in readiness['issues'])
+    with pytest.raises(ValueError, match='Could not register dataset.*original dataset file'):
+        await importer.activate(resource_db)
+    assert existing.raw_artifact_id is not None

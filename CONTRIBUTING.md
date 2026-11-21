@@ -143,8 +143,13 @@ The provider-operations integration was first tested against Motoro commit
 subsequently released those changes in `v0.14.0`. The current provider-driven
 sampling integration pins Motoro release tag `v0.15.1`
 (`805fa51455642b01c1fb9aff52fabd28ebfbb6b8`), which also fixes native
-effort fields for Azure-hosted Claude. For future
-integrations, **release Motoro first** and complete this sequence before ASAREE's
+effort fields for Azure-hosted Claude. Native resource registration currently
+uses temporary integration commit `1d75d9c036ebc35217901d8945b69b4841d17798`
+([Motoro PR #26](https://github.com/EpistasisLab/motoro/pull/26)) so manual
+creation and experiment imports share registration implementations while imports
+can own their transactions and defer connections. Replace this pin with a tested
+release tag before production. For future integrations, **release Motoro first**
+and complete this sequence before ASAREE's
 production release:
 
 1. Replace the integration pin with the tested Motoro release tag. Update the

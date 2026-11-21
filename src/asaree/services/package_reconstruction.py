@@ -2,9 +2,7 @@
 from __future__ import annotations
 
 import asyncio
-import base64
 import hashlib
-import shutil
 import threading
 import uuid
 from copy import deepcopy
@@ -13,26 +11,22 @@ from pathlib import Path
 from typing import Any
 
 from motoro.models.database import system_session
-from motoro.models.mcp_server import MCPServerConfig, MCPTransport
-from motoro.models.skill import Skill, SkillFile
-from motoro.services.skill_service import (
-    parse_skill_markdown,
-    validate_bundle_path,
-    validate_skill_description,
-    validate_skill_name,
-)
+from motoro.models.mcp_server import MCPServerConfig
+from motoro.models.skill import Skill
+from motoro.services import mcp_service, skill_service
+from motoro.services.skill_service import MAX_BUNDLE_BYTES, MAX_BUNDLE_FILES, SkillFormatError
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from asaree.models.dataset import RegisteredDataset
-from asaree.models.dataset_split import DatasetArtifact, DatasetSplit
 from asaree.models.experiment import ResearchExperiment
 from asaree.models.experiment_design_revision import ExperimentDesignRevision
 from asaree.models.factorial_cell import FactorialCell
 from asaree.models.factorial_replicate_result import FactorialReplicateResult
 from asaree.models.package_import import ImportedIdentity, PackageImport
 from asaree.models.protocol import Protocol
-from asaree.services import managed_storage
+from asaree.services.datasets import create_dataset, discard_registration_files, register_dataset_split
 from asaree.services.experiment_packages import node_variants, portable_definition
 from asaree.services.experiments import create_experiment_with_available_name, set_experiment_datasets
 from asaree.services.package_validation import (
@@ -40,53 +34,38 @@ from asaree.services.package_validation import (
     PackageError,
     canonical_identity,
     document,
-    member_path,
     payload_path,
     records,
 )
 from asaree.services.personas import create_persona, snapshot_identity
 from asaree.services.protocols import create_protocol, generated_protocol_name
-from asaree.services.resource_names import available_name
 
 
 def identity(job: PackageImport, kind: str, source: Any) -> uuid.UUID:
     return uuid.uuid5(job.id, f'{kind}:{source}')
 
 
-def copy_knowledge(source: Path, destination: Path, stopping: threading.Event) -> None:
-    """Copy exact bytes with cooperative cancellation and atomic publication."""
-    from asaree.services.package_validation import digest
+def registration_error(kind: str, name: str, exc: Exception) -> PackageError:
+    if isinstance(exc, IntegrityError):
+        reason = f'A {kind} with this name is already registered to your account.'
+    elif isinstance(exc, SQLAlchemyError):
+        reason = 'The registration could not be saved. Check the resource’s registration fields.'
+    elif isinstance(exc, UnicodeError):
+        reason = 'Packaged files must contain UTF-8 text.'
+    else:
+        reason = str(exc)
+    return PackageError(f'Could not register {kind} "{name}": {reason}')
 
-    temporary = destination.with_suffix('.preparing')
-    shutil.rmtree(temporary, ignore_errors=True)
-    temporary.mkdir(parents=True, mode=0o700)
-    try:
-        for file in source.rglob('*'):
-            if stopping.is_set():
-                raise PackageError('Import cancelled')
-            if not file.is_file():
-                continue
-            relative = file.relative_to(source)
-            file = payload_path(source, relative.as_posix())
-            target = temporary / relative
-            target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-            with file.open('rb') as input_file, target.open('xb') as output:
-                target.chmod(0o600)
-                while block := input_file.read(1024 * 1024):
-                    if stopping.is_set():
-                        raise PackageError('Import cancelled')
-                    output.write(block)
-            if destination.exists() and (not (destination / relative).is_file()
-                                        or digest(destination / relative) != digest(file)):
-                raise PackageError('Staged knowledge bytes changed; refusing replacement')
-        if destination.exists():
-            for file in destination.rglob('*'):
-                if file.is_file() and not (temporary / file.relative_to(destination)).is_file():
-                    raise PackageError('Staged knowledge has unexpected files')
-        else:
-            temporary.replace(destination)
-    finally:
-        shutil.rmtree(temporary, ignore_errors=True)
+
+def knowledge_files(root: Path) -> list[tuple[str, str]]:
+    from asaree.services import okf_bundles
+
+    paths = [payload_path(root, path.relative_to(root).as_posix()) for path in root.rglob('*') if path.is_file()]
+    if len(paths) > okf_bundles.MAX_UPLOAD_FILES or sum(path.stat().st_size for path in paths) > (
+        okf_bundles.MAX_UPLOAD_BYTES
+    ):
+        raise ValueError('Knowledge files exceed the normal upload count or size limit.')
+    return [(path.relative_to(root).as_posix(), path.read_bytes().decode('utf-8')) for path in paths]
 
 
 class Reconstruction:
@@ -98,15 +77,16 @@ class Reconstruction:
         self.maps: dict[tuple[str, str], str] = {}
         self.names: dict[tuple[str, str], str] = {}
         self.knowledge_namespaces: dict[str, str] = {}
+        self.knowledge_paths: dict[str, str] = {}
         self.runtime_bindings: dict[str, str] = {}
 
     async def report(self, phase: str, scanned: int) -> None:
         if self.progress is not None and scanned % 25 == 0:
             await self.progress(phase, scanned=scanned)
 
-    def map(self, kind: str, source_id: Any, **provenance: Any) -> uuid.UUID:
+    def map(self, kind: str, source_id: Any, *, local_id: uuid.UUID | None = None, **provenance: Any) -> uuid.UUID:
         key = kind, str(source_id)
-        local = identity(self.job, 'mcp' if kind == 'knowledge' else kind, str(source_id))
+        local = local_id or identity(self.job, 'mcp' if kind == 'knowledge' else kind, str(source_id))
         if key not in self.maps:
             self.db.add(ImportedIdentity(import_id=self.job.id, kind=kind, source_id=str(source_id),
                                          local_id=local, provenance=provenance))
@@ -123,20 +103,12 @@ class Reconstruction:
             source = self.read(path.relative_to(self.root).as_posix())
             config = source['config']
             local = self.map('persona', source['id'], source=source)
-            await create_persona(self.db, identifier=local, owner_id=self.job.owner_id,
-                name=source['name'], prompt=config.get('persona_text') or '',
-                description=config.get('persona_description'), source_filename=config.get('persona_file'))
-
-    async def name(self, kind: str, source: str, name: str, maximum: int = 255,
-                   resources: AsyncSession | None = None) -> str:
-        models: dict[str, type[RegisteredDataset] | type[Skill] | type[MCPServerConfig]] = {
-            'dataset': RegisteredDataset, 'skill': Skill, 'mcp': MCPServerConfig}
-        model = models[kind]
-        session = resources if resources is not None else self.db
-        existing = (await session.scalars(select(model.name).where(model.owner_id == self.job.owner_id))).all()
-        value = available_name(name, existing, maximum=maximum, skill=kind == 'skill')
-        self.names[kind, source] = value
-        return value
+            try:
+                await create_persona(self.db, identifier=local, owner_id=self.job.owner_id,
+                    name=source['name'], prompt=config.get('persona_text') or '',
+                    description=config.get('persona_description'), source_filename=config.get('persona_file'))
+            except (ValueError, SQLAlchemyError) as exc:
+                raise registration_error('persona', source['name'], exc) from exc
 
     async def datasets(self) -> list[uuid.UUID]:
         path = self.root / 'inputs/bindings.json'
@@ -151,37 +123,31 @@ class Reconstruction:
             local = self.map('dataset', source, pin=pin)
             metadata_path = f'inputs/datasets/{source}.json'
             metadata = self.read(metadata_path) if payload_path(self.root, metadata_path).exists() else pin
-            dataset = RegisteredDataset(id=local, owner_id=self.job.owner_id,
-                name=await self.name('dataset', source, metadata.get('name') or pin['dataset_name']),
-                description=pin.get('description', metadata.get('description')),
-                dictionary_json=pin.get('dictionary_json', metadata.get('dictionary_json')),
-                target_column=pin.get('target_column', metadata.get('target_column')),
-                raw_sha256=pin.get('raw_sha256'))
-            self.db.add(dataset)
+            name = metadata.get('name') or pin.get('dataset_name') or 'Imported dataset'
+            try:
+                raw = next((dep for dep in records(self.root / 'dependencies.jsonl', self.limits)
+                    if dep.get('kind') == 'dataset_file' and dep.get('dataset_id') == source
+                    and dep.get('role') == 'raw_artifact' and dep.get('status') == 'included'), None)
+                if raw is None:
+                    raise ValueError('The package does not contain the original dataset file.')
+                raw_path = payload_path(self.root, raw['file'])
+                if await self.db.get(RegisteredDataset, local) is not None:
+                    raise ValueError('This import already has a dataset registration; retry activation instead.')
+                # Reclaim files left by a worker that died before committing
+                # its product transaction, using only this request's unused ID.
+                await self.io(discard_registration_files, local)
+                dataset = await create_dataset(self.db, identifier=local, owner_id=self.job.owner_id,
+                    name=name, csv_bytes=await self.io(raw_path.read_bytes),
+                    description=pin.get('description', metadata.get('description')),
+                    dictionary_json=pin.get('dictionary_json', metadata.get('dictionary_json')),
+                    target_column=pin.get('target_column', metadata.get('target_column')))
+                if dataset.raw_artifact is None:
+                    raise ValueError('Dataset registration did not create an original source artifact.')
+                self.map('artifact', raw['id'], local_id=dataset.raw_artifact.id, dependency=raw)
+            except (ValueError, SQLAlchemyError, OSError) as exc:
+                raise registration_error('dataset', name, exc) from exc
+            self.names['dataset', source] = dataset.name
             dataset_ids.append(local)
-        await self.db.flush()
-        for dep in records(self.root / 'dependencies.jsonl', self.limits):
-            if dep.get('kind') != 'dataset_file' or dep.get('status') != 'included':
-                continue
-            source = dep['id']
-            dataset_id = self.maps.get(('dataset', dep['dataset_id']))
-            if dataset_id is None:
-                raise PackageError('Dataset file has no pinned registration')
-            # Dataset namespace stores stable relative keys to retained verified bytes.
-            file = payload_path(self.root, dep['file'])
-            relative = file.relative_to(managed_storage.roots()['datasets'])
-            from asaree.services.package_validation import digest
-
-            artifact_id = self.map('artifact', source, dependency=dep)
-            self.db.add(DatasetArtifact(id=artifact_id, dataset_id=uuid.UUID(dataset_id), namespace='datasets',
-                storage_key=relative.as_posix(), sha256=await asyncio.to_thread(digest, file),
-                byte_size=file.stat().st_size,
-                format=file.suffix.lstrip('.'), status='ready'))
-            if dep['role'] == 'raw_artifact':
-                loaded = await self.db.get(RegisteredDataset, uuid.UUID(dataset_id))
-                if loaded is None:
-                    raise PackageError('Dataset registration disappeared')
-                loaded.raw_artifact_id = artifact_id
         await self.db.flush()
         for file in (self.root / 'inputs/splits').glob('*.json'):
             source = document(file, self.limits)
@@ -190,13 +156,32 @@ class Reconstruction:
             if not dataset_id:
                 raise PackageError('Split has no pinned registration')
             fields = {key: source.get(key) for key in (
-                'source_sha256', 'target_column', 'method', 'strategy', 'group_column', 'stratify_column',
+                'target_column', 'method', 'strategy', 'group_column', 'stratify_column',
                 'test_size', 'seed', 'legacy')}
-            for key in ('train_artifact_id', 'test_artifact_id'):
-                mapped = self.maps.get(('artifact', source.get(key)))
-                fields[key] = uuid.UUID(mapped) if mapped else None
             fields['created_at'] = datetime.fromisoformat(source['created_at'])
-            self.db.add(DatasetSplit(id=local, dataset_id=uuid.UUID(dataset_id), **fields))
+            registered_dataset = await self.db.get(RegisteredDataset, uuid.UUID(dataset_id))
+            if registered_dataset is None:
+                raise PackageError('Dataset registration disappeared')
+            try:
+                partitions = []
+                for key in ('train_artifact_id', 'test_artifact_id'):
+                    dep = next((dep for dep in records(self.root / 'dependencies.jsonl', self.limits)
+                        if dep.get('kind') == 'dataset_file' and dep.get('id') == source.get(key)
+                        and dep.get('status') == 'included'), None)
+                    if dep is None:
+                        role = key.removesuffix('_artifact_id')
+                        raise ValueError(f'The package does not contain the {role} partition.')
+                    partitions.append(dep)
+                await register_dataset_split(self.db, registered_dataset,
+                    payload_path(self.root, partitions[0]['file']), payload_path(self.root, partitions[1]['file']),
+                    identifier=local, **fields)
+                split = registered_dataset.current_split
+                if split is None or split.train_artifact is None or split.test_artifact is None:
+                    raise ValueError('Dataset split registration did not create its partition artifacts.')
+                for dep, artifact in zip(partitions, (split.train_artifact, split.test_artifact), strict=True):
+                    self.map('artifact', dep['id'], local_id=artifact.id, dependency=dep)
+            except (ValueError, SQLAlchemyError) as exc:
+                raise registration_error('dataset split', source['id'], exc) from exc
         await self.db.flush()
         # Only pinned whole-dataset selections become local defaults. Original
         # selections remain unsplit even if another source default now exists.
@@ -204,9 +189,9 @@ class Reconstruction:
             loaded = await self.db.get(RegisteredDataset, uuid.UUID(self.maps['dataset', pin['dataset_id']]))
             if loaded is None:
                 raise PackageError('Dataset registration disappeared')
-            split = self.maps.get(('split', pin.get('split_id')))
-            if split:
-                loaded.current_split_id = uuid.UUID(split)
+            selected_split = self.maps.get(('split', pin.get('split_id')))
+            if selected_split:
+                loaded.current_split_id = uuid.UUID(selected_split)
             elif pin.get('split_id'):
                 # A missing source split is a requirement, never an explicit
                 # original-only selection. Keep it across worker restarts.
@@ -215,76 +200,73 @@ class Reconstruction:
         return dataset_ids
 
     async def skills(self, motoro: AsyncSession) -> None:
+        registered = []
         for dep in records(self.root / 'dependencies.jsonl', self.limits):
-            if dep.get('kind') != 'skill' or dep.get('status') != 'included':
+            if dep.get('kind') != 'skill':
                 continue
+            if dep.get('status') != 'included':
+                raise registration_error('skill', dep['id'], ValueError(
+                    'The package does not contain the required skill files.'))
             source_id = canonical_identity(dep['id'])
             if dep['directory'] != f'resources/skills/{source_id}':
                 raise PackageError('Skill directory and identity disagree')
             metadata = payload_path(self.root, f'resources/skill-metadata/{source_id}.json')
-            if metadata.exists():
-                source = document(metadata, self.limits)
-            else:
-                # v1's rendered frontmatter contains explicit discovery facts.
-                # Parse those facts, preserving unavailable filename/order as unknown.
-                entrypoint = payload_path(self.root, f'{dep["directory"]}/SKILL.md')
-                if entrypoint.stat().st_size > self.limits.document:
-                    raise PackageError('Skill entrypoint exceeds resource limit')
-                parsed = parse_skill_markdown(entrypoint.read_text(encoding='utf-8'))
-                source = {'id': dep['id'], 'name': parsed.name, 'description': parsed.description,
-                          'body': parsed.body, 'frontmatter': parsed.frontmatter}
-            local = self.map('skill', source['id'], source=source)
-            name = await self.name('skill', source['id'], source['name'], 64, motoro)
-            existing = await motoro.get(Skill, local)
-            if existing is not None:
-                if existing.owner_id != self.job.owner_id:
-                    raise PackageError('Import resource ownership conflict')
-                self.names['skill', source['id']] = existing.name
-                continue
-            # No upload service: those may validate by invoking external tools.
-            motoro.add(Skill(id=local, owner_id=self.job.owner_id, is_system=False,
-                name=validate_skill_name(name),
-                description=validate_skill_description(source['description']),
-                body=source['body'], frontmatter=source['frontmatter'],
-                source_filename=source.get('source_filename'), deleted_at=datetime.now(UTC)))
+            source = document(metadata, self.limits) if metadata.exists() else {'id': source_id}
+            name = source.get('name', source_id)
+            try:
+                local = self.map('skill', source_id, source=source)
+                bundle, file_dependencies = self.skill_bundle(dep)
+                skill = await motoro.get(Skill, local)
+                if skill is not None:
+                    if skill.owner_id != self.job.owner_id or skill.is_system:
+                        raise ValueError('The staged skill does not belong to this import request.')
+                    skill_service.parse_skill_bundle(bundle)
+                else:
+                    skill = await skill_service.create_skill_from_bundle(bundle, db=motoro, identifier=local,
+                        owner_id=self.job.owner_id, source_filename=source.get('source_filename'))
+                for resource in skill.files:
+                    file_dep = file_dependencies[resource.path]
+                    self.map('skill_file', file_dep['id'], local_id=resource.id, dependency=file_dep)
+                self.names['skill', source_id] = skill.name
+                registered.append(skill)
+            except (ValueError, SQLAlchemyError, OSError) as exc:
+                raise registration_error('skill', name, exc) from exc
+        # Keep the whole batch live until every registration has passed the
+        # normal uniqueness check, then hide it before the Motoro commit.
+        for skill in registered:
+            skill.deleted_at = datetime.now(UTC)
         await motoro.flush()
+
+    def skill_bundle(self, dep: dict[str, Any]) -> tuple[list[tuple[str, bytes]], dict[str, dict[str, Any]]]:
+        directory = dep['directory']
+        entrypoint = payload_path(self.root, f'{directory}/SKILL.md')
+        if entrypoint.stat().st_size > self.limits.document:
+            raise SkillFormatError('Skill entrypoint exceeds resource limit')
+        files = [('SKILL.md', entrypoint.read_bytes())]
+        identifiers = {}
+        total = 0
         for record in records(self.root / 'files.jsonl', self.limits):
-            if not record['path'].startswith('resources/skills/'):
+            if not record['path'].startswith(directory + '/') or record['path'] == f'{directory}/SKILL.md':
                 continue
-            parts = record['path'].split('/')
-            source_skill = parts[2]
-            relative = '/'.join(parts[3:])
-            canonical_identity(source_skill)
-            if relative == 'SKILL.md':
-                continue
-            file_dep: dict[str, Any] | None = next((entry for entry in records(
-                self.root / 'dependencies.jsonl', self.limits) if entry.get('kind') == 'skill_file'
-                and entry.get('file') == record['path'] and entry.get('status') == 'included'), None)
+            relative = record['path'][len(directory) + 1:]
+            path = payload_path(self.root, record['path'])
+            total += path.stat().st_size
+            if len(files) > MAX_BUNDLE_FILES or total > MAX_BUNDLE_BYTES:
+                raise SkillFormatError('Skill bundle exceeds the normal file count or size registration limit.')
+            file_dep = next((entry for entry in records(self.root / 'dependencies.jsonl', self.limits)
+                if entry.get('kind') == 'skill_file' and entry.get('file') == record['path']
+                and entry.get('status') == 'included'), None)
             if file_dep is None:
                 if self.read('manifest.json')['schema_version'] >= 2:
                     raise PackageError('Missing structured Skill file metadata')
-                file_dep = {'id': record['source_id'], 'skill_id': source_skill, 'file': record['path'],
-                       'relative_path': relative, 'encoding': 'base64', 'position': 0,
-                       'source_encoding': 'legacy.unknown', 'source_position': 'legacy.unknown'}
-            skill_id = self.maps.get(('skill', file_dep['skill_id']))
-            if not skill_id:
-                raise PackageError('Skill file has no structured Skill record')
-            local = self.map('skill_file', file_dep['id'], dependency=file_dep)
-            if await motoro.get(SkillFile, local) is not None:
-                continue
-            path = payload_path(self.root, file_dep['file'])
-            if path.stat().st_size > self.limits.document:
-                raise PackageError('Skill resource exceeds per-resource limit')
-            raw = path.read_bytes()
-            content = base64.b64encode(raw).decode() if file_dep['encoding'] == 'base64' else raw.decode('utf-8')
-            motoro.add(SkillFile(id=local, skill_id=uuid.UUID(skill_id),
-                                 path=validate_bundle_path(member_path(file_dep['relative_path'])),
-                                 encoding=file_dep['encoding'], position=file_dep['position'], content=content))
-            await motoro.flush()
+                file_dep = {'id': record['source_id'], 'skill_id': dep['id'], 'file': record['path'],
+                    'relative_path': relative, 'source_encoding': 'legacy.unknown', 'source_position': 'legacy.unknown'}
+            identifiers[relative] = file_dep
+            files.append((relative, path.read_bytes()))
+        return files, identifiers
 
     async def servers(self, motoro: AsyncSession) -> None:
-        from asaree.services import okf_documents
-        from asaree.services.okf_bundles import command_for_bundle, server_name_for
+        from asaree.services import okf_bundles, okf_documents
         from asaree.services.package_connections import automatic_match
 
         for file in (self.root / 'requirements/mcp').glob('*.json'):
@@ -293,7 +275,6 @@ class Reconstruction:
             if file.name != f'{source_id}.json':
                 raise PackageError('MCP requirement filename and identity disagree')
             local = self.map('mcp', source['id'], source=source)
-            command = None
             knowledge = payload_path(self.root, f'resources/knowledge/{source_id}')
             included = next((
                 dep for dep in records(self.root / 'dependencies.jsonl', self.limits)
@@ -329,29 +310,42 @@ class Reconstruction:
                                              ((variant.get('data') or {}).get('config') or {}).get('document_id')}
                     ), None)
                 if knowledge_kind is None:
-                    raise PackageError('Knowledge registration type is unknown; source files remain inspectable')
+                    raise registration_error('knowledge', source['name'], ValueError(
+                        'The package does not identify this knowledge source as a bundle or document.'))
                 namespace = 'documents' if knowledge_kind == 'document' else 'bundles'
                 self.knowledge_namespaces[source['id']] = namespace
                 self.map('knowledge', source['id'], directory=knowledge.relative_to(self.root).as_posix())
-                destination = managed_storage.roots()[namespace] / str(self.job.owner_id) / 'imports' / str(local)
-                destination.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-                await self.io(copy_knowledge, knowledge, destination, self.stopping)
-                command = command_for_bundle(destination, managed=True)
-                name = (okf_documents.server_name_for(self.job.owner_id, destination) if knowledge_kind == 'document'
-                        else server_name_for(self.job.owner_id, destination))
-            self.names['mcp', source['id']] = name
-            if included is None:
-                name = await self.name('mcp', source['id'], source['name'], resources=motoro)
             existing = await motoro.get(MCPServerConfig, local)
-            if existing is not None:
-                if existing.owner_id != self.job.owner_id or existing.is_system:
-                    raise PackageError('Import server ownership conflict')
-                self.names['mcp', source['id']] = existing.name
-                continue
-            motoro.add(MCPServerConfig(id=local, owner_id=self.job.owner_id, is_system=False,
-                name=name, transport=MCPTransport(source['transport']), command=command,
-                capabilities={'tools': [{'name': value} for value in source.get('tool_names', [])]},
-                error_message='Import staging: configure locally after activation.'))
+            if existing is not None and (existing.owner_id != self.job.owner_id or existing.is_system):
+                raise PackageError('Import server ownership conflict')
+            try:
+                if existing is not None:
+                    server = existing
+                elif included is not None:
+                    files = await self.io(knowledge_files, knowledge)
+                    if knowledge_kind == 'document':
+                        concepts = [(path, text) for path, text in files
+                            if '/' not in path and Path(path).stem not in {'index', 'log'}]
+                        if len(concepts) != 1:
+                            raise ValueError('An OKF document must contain exactly one concept Markdown file.')
+                        server = await okf_documents.register_document(owner_id=self.job.owner_id,
+                            text=concepts[0][1], filename=concepts[0][0], db=motoro, identifier=local, connect=False)
+                    else:
+                        folder = included.get('name') or 'knowledge'
+                        server = await okf_bundles.register_uploaded_bundle(owner_id=self.job.owner_id,
+                            files=[(f'{folder}/{path}', text) for path, text in files],
+                            db=motoro, identifier=local, connect=False)
+                else:
+                    server = await mcp_service.register_server(db=motoro, identifier=local, connect=False,
+                        owner_id=self.job.owner_id, name=name, transport=source['transport'])
+                self.names['mcp', source_id] = server.name
+                if included is not None:
+                    stored = okf_bundles.bundle_path_from_command(server.command)
+                    if stored is None:
+                        raise ValueError('Knowledge registration did not provide its managed storage location.')
+                    self.knowledge_paths[source_id] = stored
+            except (ValueError, SQLAlchemyError, OSError) as exc:
+                raise registration_error('knowledge' if included else 'MCP server', source['name'], exc) from exc
         await motoro.flush()
 
     def config(self, kind: str, config: dict[str, Any]) -> dict[str, Any]:
@@ -391,9 +385,7 @@ class Reconstruction:
                 result['server_name'] = self.names.get(('mcp', source), f'unconfigured-import-{result[field]}')
             if category == 'knowledge':
                 key = 'document_path' if kind == 'okf_document' else 'bundle_path'
-                namespace = self.knowledge_namespaces.get(source, 'documents' if kind == 'okf_document' else 'bundles')
-                result[key] = str(managed_storage.roots()[namespace] / str(self.job.owner_id)
-                                  / 'imports' / str(identity(self.job, 'mcp', source)))
+                result[key] = self.knowledge_paths.get(source, '')
         return result
 
     def definition(self) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -476,7 +468,9 @@ class Reconstruction:
         metadata = self.read('experiment-metadata.json')
         experiment_id = self.map('experiment', manifest['experiment_id'], source=metadata)
         protocol_id = self.map('protocol', manifest['protocol_id'])
-        self.map('source_publication', manifest['publication']['id'], source=manifest['publication'])
+        self.map('source_publication', manifest['publication']['id'], source=manifest['publication'],
+            graph=self.read('publication/canvas.json'), settings=self.read('publication/settings.json'),
+            design=self.read('design/revision.json') if (self.root / 'design/revision.json').is_file() else None)
         datasets = await self.datasets()
         await self.personas()
         await self.skills(motoro)

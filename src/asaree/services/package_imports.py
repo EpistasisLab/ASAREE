@@ -15,6 +15,7 @@ from motoro.models.database import system_session
 from motoro.models.mcp_server import MCPServerConfig
 from motoro.models.skill import Skill
 from sqlalchemy import delete, func, or_, select, update
+from sqlalchemy.exc import IntegrityError
 
 from asaree.config import get_settings
 from asaree.models.database import get_session
@@ -23,9 +24,10 @@ from asaree.models.experiment import ResearchExperiment
 from asaree.models.package_import import ImportedIdentity, PackageImport
 from asaree.models.persona import Persona
 from asaree.models.protocol import Protocol
-from asaree.services import managed_storage
-from asaree.services.package_reconstruction import Reconstruction, identity
-from asaree.services.package_validation import Limits, PackageError, digest, inspect, records
+from asaree.services import managed_storage, package_source
+from asaree.services.datasets import discard_registration_files
+from asaree.services.package_reconstruction import Reconstruction, identity, registration_error
+from asaree.services.package_validation import Limits, PackageError, digest, inspect
 
 logger = logging.getLogger(__name__)
 
@@ -37,9 +39,11 @@ def limits() -> Limits:
 
 
 def directory(identifier: uuid.UUID) -> Path:
-    # Deliberately under datasets: restored dataset artifacts can point to stable
-    # relative keys without another storage namespace or absolute path column.
-    return managed_storage.roots()['datasets'] / 'package-imports' / str(identifier)
+    return package_source.scratch_path(identifier)
+
+
+def archive_path(identifier: uuid.UUID) -> Path:
+    return package_source.archive_path(identifier)
 
 
 async def joined(operation: Any, *args: Any, stopping: threading.Event, identifier: uuid.UUID) -> Any:
@@ -65,24 +69,35 @@ async def compensate(job: PackageImport) -> None:
     # and archive hash. Failed/partial extraction is untrusted cleanup input.
     if not job.sha256 or not job.preflight.get('manifest'):
         return
-    root = directory(job.id) / 'payload'
-    if not root.exists():
-        return
-    if not (root / 'dependencies.jsonl').is_file():
+    if not archive_path(job.id).is_file():
         return
     async with system_session(reason='compensate incomplete owned package import') as db:
-        for dep in records(root / 'dependencies.jsonl', limits()):
+        for dep in package_source.records(job.id, 'dependencies.jsonl', limits()):
             if dep.get('kind') == 'skill':
                 await db.execute(delete(Skill).where(Skill.id == identity(job, 'skill', dep['id']),
                                                     Skill.owner_id == job.owner_id, Skill.is_system.is_(False)))
             if dep.get('kind') == 'mcp':
                 local = identity(job, 'mcp', dep['id'])
+                server = await db.scalar(select(MCPServerConfig).where(MCPServerConfig.id == local,
+                    MCPServerConfig.owner_id == job.owner_id, MCPServerConfig.is_system.is_(False)))
+                if server is not None and server.command:
+                    from asaree.services.okf_bundles import bundle_path_from_command
+
+                    raw = bundle_path_from_command(server.command)
+                    if raw:
+                        destination = Path(raw).resolve()
+                        roots = managed_storage.roots()
+                        if any(destination.is_relative_to(roots[namespace] / str(job.owner_id))
+                               for namespace in ('bundles', 'documents')):
+                            await asyncio.to_thread(shutil.rmtree, destination, ignore_errors=True)
                 await db.execute(delete(MCPServerConfig).where(MCPServerConfig.id == local,
                     MCPServerConfig.owner_id == job.owner_id, MCPServerConfig.is_system.is_(False)))
-                for namespace in ('bundles', 'documents'):
-                    destination = managed_storage.roots()[namespace] / str(job.owner_id) / 'imports' / str(local)
-                    await asyncio.to_thread(shutil.rmtree, destination, ignore_errors=True)
-                    await asyncio.to_thread(shutil.rmtree, destination.with_suffix('.preparing'), ignore_errors=True)
+    # Dataset files use the ordinary registration layout, even when a worker
+    # died before its product transaction (and identity ledger) could commit.
+    if 'inputs/bindings.json' in package_source.members(job.id, 'inputs/'):
+        bindings = package_source.document(job.id, 'inputs/bindings.json', limits())
+        for pin in bindings.get('inputs', []):
+            await asyncio.to_thread(discard_registration_files, identity(job, 'dataset', pin['dataset_id']))
 
 
 async def checkpoint(identifier: uuid.UUID, phase: str, **progress: Any) -> None:
@@ -95,17 +110,16 @@ async def checkpoint(identifier: uuid.UUID, phase: str, **progress: Any) -> None
 
 async def activate_resources(job: PackageImport) -> None:
     """Retryable visibility flip; no server registration or connection calls."""
-    root = directory(job.id) / 'payload'
     async with system_session(reason='activate staged package resources without execution') as db:
-        for dep in records(root / 'dependencies.jsonl', limits()):
+        for dep in package_source.records(job.id, 'dependencies.jsonl', limits()):
             if dep.get('kind') == 'skill':
-                await db.execute(update(Skill).where(Skill.id == identity(job, 'skill', dep['id']),
-                    Skill.owner_id == job.owner_id).values(deleted_at=None))
-            elif dep.get('kind') == 'mcp':
-                await db.execute(update(MCPServerConfig).where(
-                    MCPServerConfig.id == identity(job, 'mcp', dep['id']),
-                    MCPServerConfig.owner_id == job.owner_id,
-                ).values(error_message='Imported requirement: configure locally before connection.'))
+                local = identity(job, 'skill', dep['id'])
+                name = await db.scalar(select(Skill.name).where(Skill.id == local, Skill.owner_id == job.owner_id))
+                try:
+                    await db.execute(update(Skill).where(Skill.id == local,
+                        Skill.owner_id == job.owner_id).values(deleted_at=None))
+                except IntegrityError as exc:
+                    raise registration_error('skill', name or dep['id'], exc) from exc
 
 
 async def remove_staged_product(db: Any, job: PackageImport) -> None:
@@ -140,7 +154,8 @@ async def execute_package_import(_ctx: dict[str, Any], job_id: str) -> None:
             if job is None or job.status not in {'validating', 'queued', 'activating'}:
                 return
             root = directory(identifier)
-            archive, payload = root / 'archive.zip', root / 'payload'
+            root.mkdir(parents=True, exist_ok=True, mode=0o700)
+            archive, payload = archive_path(identifier), root / 'payload'
             if job.status == 'validating':
                 for path in (payload, root / 'payload-verified'):
                     await asyncio.to_thread(shutil.rmtree, path, ignore_errors=True)
@@ -168,6 +183,7 @@ async def execute_package_import(_ctx: dict[str, Any], job_id: str) -> None:
                     raise PackageError('Import cancelled')
                 current.status, current.error = 'completed', None
                 current.progress = {'phase': 'completed'}
+                await asyncio.to_thread(shutil.rmtree, root, ignore_errors=True)
                 return
             # Re-inspect verified bytes for every activation/retry, including
             # partial extraction left by a terminated worker.
@@ -208,6 +224,7 @@ async def execute_package_import(_ctx: dict[str, Any], job_id: str) -> None:
                 raise PackageError('Import cancelled')
             current.status = 'completed'
             current.progress = {'phase': 'completed'}
+            await asyncio.to_thread(shutil.rmtree, root, ignore_errors=True)
     except (Exception, asyncio.CancelledError) as exc:
         logger.exception('package_import_failed', extra={'import_id': job_id})
         async with get_session() as db:
@@ -255,6 +272,7 @@ async def relay_imports(ctx: dict[Any, Any], *args: Any, **kwargs: Any) -> None:
                 await compensate(job)
                 await remove_staged_product(db, job)
                 await asyncio.to_thread(shutil.rmtree, directory(job.id), ignore_errors=True)
+                await asyncio.to_thread(archive_path(job.id).unlink, missing_ok=True)
                 job.status = 'expired'
         except Exception:
             logger.exception('package_import_cleanup_failed', extra={'import_id': str(identifier)})

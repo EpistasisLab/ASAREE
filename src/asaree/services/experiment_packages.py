@@ -592,7 +592,7 @@ async def _server(db: AsyncSession, writer: PackageWriter, config: dict[str, Any
             await authorize_knowledge_export(db, root, owner, external=owner_storage is None)
             file_count = await archive_io(writer, capture_tree, writer, root, directory, server_id)
             writer.dependency(server_id, "knowledge", "captured_at_download", directory=directory,
-                              file_count=file_count,
+                              file_count=file_count, name=root.name,
                               note="Mutable content captured now; no historical snapshot or cross-file transaction.")
         except (OSError, ValueError, SQLAlchemyError):
             writer.dependency(server_id, "knowledge", "captured_at_download", status="unresolved",
@@ -914,18 +914,20 @@ async def execute_package(db: AsyncSession, job: ResultJob, temporary: Path, des
 async def _import_sources(db: AsyncSession, writer: PackageWriter, experiment_id: uuid.UUID) -> None:
     """Local exports keep imported provenance separate from local attempt history."""
     from asaree.models.package_import import ImportedIdentity, PackageImport
-    from asaree.services.package_imports import directory
+    from asaree.services import package_source
 
     imports = await db.stream_scalars(select(PackageImport).where(
         PackageImport.experiment_id == experiment_id, PackageImport.status == 'completed',
     ).execution_options(yield_per=1))
     async for imported in imports:
         prefix = f'sources/{imported.id}'
-        root = directory(imported.id)
         # Source manifest and publication always remain immutable attribution.
         for name in ('manifest.json', 'publication/canvas.json', 'publication/settings.json',
                      'experiment-metadata.json'):
-            source = root / 'payload' / name
+            if not package_source.archive_path(imported.id).is_file():
+                break  # Native resources and the identity ledger do not depend on retained ZIP evidence.
+            source = writer.staging / 'source-document'
+            await archive_io(writer, package_source.copy_member, imported.id, name, source)
             await archive_io(writer, writer.file, source, f'{prefix}/{name}',
                              identity=str(imported.id), provenance='imported_source')
         path = writer.staging / 'source-identities.jsonl'

@@ -43,7 +43,7 @@ import shutil
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import yaml
 from motoro.services import mcp_service
@@ -56,6 +56,9 @@ from asaree.services.okf_bundles import (
     ensure_command_safe,
 )
 from asaree.services.okf_bundles import slugify as _base_slugify
+
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
 
 # Distinct from BUNDLE_SERVER_NAME_PREFIX so the two registries stay separable
 # with a string check: ``/okf/bundles`` must not list (or delete, or refresh) a
@@ -247,7 +250,18 @@ async def list_documents(owner_id: uuid.UUID) -> list[Any]:
     return [s for s in servers if is_document_server(s) and s.owner_id == owner_id]
 
 
-async def register_document(*, owner_id: uuid.UUID, text: str, filename: str | None = None) -> Any:
+def validate_document_upload(text: str) -> dict[str, Any]:
+    """Shared concept registration validation for uploads and packaged documents."""
+    if len(text.encode('utf-8')) > MAX_DOCUMENT_BYTES:
+        raise OkfDocumentError(f"That file is larger than the {MAX_DOCUMENT_BYTES // 1000}kB limit for one concept.")
+    frontmatter, _body = parse_document(text)
+    return frontmatter
+
+
+async def register_document(
+    *, owner_id: uuid.UUID, text: str, filename: str | None = None,
+    db: AsyncSession | None = None, identifier: uuid.UUID | None = None, connect: bool = True,
+) -> Any:
     """Store an uploaded concept and spawn an OKF server over it.
 
     Spawns during registration (via ``mcp_service.register_server``) so a
@@ -257,9 +271,7 @@ async def register_document(*, owner_id: uuid.UUID, text: str, filename: str | N
     documents, because the second upload's content may differ from what the
     first one has since become.
     """
-    if len(text.encode("utf-8")) > MAX_DOCUMENT_BYTES:
-        raise OkfDocumentError(f"That file is larger than the {MAX_DOCUMENT_BYTES // 1000}kB limit for one concept.")
-    frontmatter, _body = parse_document(text)
+    frontmatter = validate_document_upload(text)
     # The title, not the upload's filename: the filename is often "Untitled
     # 3.md" or a temp name, while the title is what the user actually called
     # the concept and what every OKF listing shows. The filename is only the
@@ -276,8 +288,9 @@ async def register_document(*, owner_id: uuid.UUID, text: str, filename: str | N
             transport="stdio",
             command=command_for_bundle(directory, managed=True),
             owner_id=owner_id,
+            db=db, identifier=identifier, connect=connect,
         )
-    except Exception:
+    except BaseException:
         # The directory only exists because this call created it, so an
         # upload that fails anywhere after mkdir leaves nothing behind --
         # otherwise a rejected registration would silently burn the slug and

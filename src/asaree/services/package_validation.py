@@ -71,11 +71,17 @@ def unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
 def document(path: Path, limits: Limits) -> Any:
     if path.stat().st_size > limits.document:
         raise PackageError(f'JSON document exceeds limit: {path.name}')
+    return document_bytes(path.read_bytes(), path.name, limits)
+
+
+def document_bytes(raw: bytes, name: str, limits: Limits) -> Any:
+    if len(raw) > limits.document:
+        raise PackageError(f'JSON document exceeds limit: {name}')
     try:
-        return json.loads(path.read_bytes(), object_pairs_hook=unique_object,
+        return json.loads(raw, object_pairs_hook=unique_object,
                           parse_constant=lambda value: invalid(f'Non-finite JSON: {value}'))
     except (ValueError, UnicodeError, RecursionError) as exc:
-        raise PackageError(f'Invalid JSON: {path.name}: {exc}') from exc
+        raise PackageError(f'Invalid JSON: {name}: {exc}') from exc
 
 
 def records(path: Path, limits: Limits) -> Iterator[dict[str, Any]]:

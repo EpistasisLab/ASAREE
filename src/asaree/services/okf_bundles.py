@@ -47,11 +47,14 @@ import shutil
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from motoro.services import mcp_service
 
 from asaree.config import get_settings
+
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
 from asaree.services.system_mcp_servers import command_for
 
 # Every bundle server's name starts with this. Names are globally unique in
@@ -269,7 +272,18 @@ def normalise_upload_paths(names: list[str]) -> tuple[str, list[str]]:
     return folder, relatives
 
 
-async def register_uploaded_bundle(*, owner_id: uuid.UUID, files: list[tuple[str, str]]) -> Any:
+def validate_uploaded_bundle(files: list[tuple[str, str]]) -> tuple[str, list[str]]:
+    """Apply the upload rules to a directory before registration or import."""
+    total = sum(len(text.encode('utf-8')) for _name, text in files)
+    if total > MAX_UPLOAD_BYTES:
+        raise OkfBundleError(f"That folder is larger than the {MAX_UPLOAD_BYTES // 1_000_000}MB upload limit.")
+    return normalise_upload_paths([name for name, _text in files])
+
+
+async def register_uploaded_bundle(
+    *, owner_id: uuid.UUID, files: list[tuple[str, str]], db: AsyncSession | None = None,
+    identifier: uuid.UUID | None = None, connect: bool = True,
+) -> Any:
     """Store an uploaded folder of concepts and spawn an OKF server over it.
 
     *files* is ``(webkitRelativePath, text)`` pairs. Not idempotent, unlike
@@ -277,10 +291,7 @@ async def register_uploaded_bundle(*, owner_id: uuid.UUID, files: list[tuple[str
     because whatever the first copy has since become is not what's being
     uploaded now.
     """
-    total = sum(len(text.encode("utf-8")) for _name, text in files)
-    if total > MAX_UPLOAD_BYTES:
-        raise OkfBundleError(f"That folder is larger than the {MAX_UPLOAD_BYTES // 1_000_000}MB upload limit.")
-    folder, relatives = normalise_upload_paths([name for name, _text in files])
+    folder, relatives = validate_uploaded_bundle(files)
 
     directory = allocate_storage_dir(owner_upload_root(owner_id), slugify(folder))
     try:
@@ -294,8 +305,9 @@ async def register_uploaded_bundle(*, owner_id: uuid.UUID, files: list[tuple[str
             transport="stdio",
             command=command_for_bundle(directory, managed=True),
             owner_id=owner_id,
+            db=db, identifier=identifier, connect=connect,
         )
-    except Exception:
+    except BaseException:
         # The directory only exists because this call created it, so a failure
         # anywhere after mkdir leaves nothing behind -- otherwise a rejected
         # upload would burn the folder name and push the next try to "-2".

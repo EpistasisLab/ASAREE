@@ -68,22 +68,22 @@ async def import_databases():
             await engine.dispose()
 
 
-def write_archive(job, root, *, version=2):
+def write_archive(job, root, *, version=2, skill_name='retained-skill'):
     root.mkdir(parents=True)
     stage = root / 'writer'
     stage.mkdir()
     skill_id = str(uuid.uuid4())
-    writer = PackageWriter(root / 'archive.zip', stage)
+    writer = PackageWriter(imports.archive_path(job.id), stage)
     writer.json('publication/canvas.json', {'nodes': [
         {'id': 'skill', 'type': 'skill', 'data': {'config': {'skill_id': skill_id}}}], 'edges': []})
     writer.json('publication/settings.json', {'design_spec': {'factors': []}})
     writer.json('experiment-metadata.json', {'name': 'Interrupted import'})
     if version >= 2:
         writer.json(f'resources/skill-metadata/{skill_id}.json', {
-            'id': skill_id, 'name': 'retained-skill', 'description': 'Source discovery', 'body': 'Never execute',
+            'id': skill_id, 'name': skill_name, 'description': 'Source discovery', 'body': 'Never execute',
             'frontmatter': {}, 'source_filename': None})
     raw = stage / 'skill.md'
-    raw.write_text('---\nname: retained-skill\ndescription: Source discovery\n---\nNever execute')
+    raw.write_text(f'---\nname: {skill_name}\ndescription: Source discovery\n---\nNever execute')
     writer.add(raw, f'resources/skills/{skill_id}/SKILL.md', identity=skill_id, provenance='captured_at_download')
     resource_id = str(uuid.uuid4())
     raw.write_bytes(b'\x00\xffnot JSON\r\n')
@@ -165,17 +165,32 @@ async def test_durable_crash_retry_cancel_cleanup_and_ownership(import_databases
         assert await db.scalar(select(func.count()).select_from(ResearchExperiment)) == 1
         assert await db.scalar(select(func.count()).select_from(ImportedIdentity).where(
             ImportedIdentity.kind == 'skill')) == 1
+    assert not imports.directory(job.id).exists()
+    assert imports.archive_path(job.id).is_file()
     async with resources.begin() as db:
         assert await db.scalar(select(func.count()).select_from(Skill)) == 1
-    # A second independent import of the exact same bytes has fresh identities.
-    # Simulate death after the visibility flip but before marking ASAREE complete.
+    # Importing the same skill again fails, just like a normal registration.
     async with product.begin() as db:
-        repeated = PackageImport(id=uuid.uuid4(), owner_id=owner.id, request_key='same-bytes-new-request',
+        collision = PackageImport(id=uuid.uuid4(), owner_id=owner.id, request_key='same-bytes-new-request',
+            status='validating', preflight={}, progress={}, expires_at=datetime.now(UTC) + timedelta(days=1))
+        db.add(collision)
+    imports.directory(collision.id).mkdir(parents=True)
+    shutil.copyfile(imports.archive_path(job.id), imports.archive_path(collision.id))
+    await imports.execute_package_import({}, str(collision.id))
+    await imports.execute_package_import({}, str(collision.id))
+    async with product.begin() as db:
+        rejected = await db.get(PackageImport, collision.id)
+        assert rejected.status == 'failed'
+        assert 'Could not register skill "retained-skill"' in rejected.error
+        assert 'already registered' in rejected.error
+        assert rejected.experiment_id is None
+        assert await db.scalar(select(func.count()).select_from(ResearchExperiment)) == 1
+    # A different skill can be imported, including recovery after visibility activation.
+    async with product.begin() as db:
+        repeated = PackageImport(id=uuid.uuid4(), owner_id=owner.id, request_key='different-skill',
             status='validating', preflight={}, progress={}, expires_at=datetime.now(UTC) + timedelta(days=1))
         db.add(repeated)
-    imports.directory(repeated.id).mkdir(parents=True)
-    shutil.copyfile(imports.directory(job.id) / 'archive.zip',
-                    imports.directory(repeated.id) / 'archive.zip')
+    write_archive(repeated, imports.directory(repeated.id), skill_name='another-skill')
     await imports.execute_package_import({}, str(repeated.id))
     kill_after_resource_commit = resource_commits + 2
     with pytest.raises(WorkerKilled):
@@ -196,12 +211,12 @@ async def test_durable_crash_retry_cancel_cleanup_and_ownership(import_databases
         original_done = await db.get(PackageImport, job.id)
         assert repeated_done.status == 'completed'
         assert repeated_done.experiment_id != original_done.experiment_id
-        assert repeated_done.sha256 == original_done.sha256
+        assert repeated_done.sha256 != original_done.sha256
     async with product.begin() as db:
         cancelled = PackageImport(id=uuid.uuid4(), owner_id=owner.id, request_key='request-two',
             status='validating', preflight={}, progress={}, expires_at=datetime.now(UTC) + timedelta(days=1))
         db.add(cancelled)
-    write_archive(cancelled, imports.directory(cancelled.id))
+    write_archive(cancelled, imports.directory(cancelled.id), skill_name='cancelled-skill')
     await imports.execute_package_import({}, str(cancelled.id))
     original_checkpoint = imports.checkpoint
 
@@ -254,7 +269,7 @@ async def test_expiry_isolates_malformed_upload_and_compensation_failure_from_pe
     bad, failing, staged, pending = jobs
     root = imports.directory(bad.id)
     root.mkdir(parents=True)
-    with zipfile.ZipFile(root / 'archive.zip', 'w') as output:
+    with zipfile.ZipFile(imports.archive_path(bad.id), 'w') as output:
         for name, data in [('manifest.json', b'{}'), ('dependencies.jsonl', b'{not-json\n')]:
             output.writestr(name, data)
     await imports.execute_package_import({}, str(bad.id))
@@ -264,14 +279,14 @@ async def test_expiry_isolates_malformed_upload_and_compensation_failure_from_pe
     for job in (failing, staged):
         job_root = imports.directory(job.id)
         write_archive(job, job_root)
-        preflight = inspect(job_root / 'archive.zip', job_root / 'payload', Limits(), threading.Event())
+        preflight = inspect(imports.archive_path(job.id), job_root / 'payload', Limits(), threading.Event())
         source_skill = next((job_root / 'payload/resources/skills').iterdir()).name
         local_id = identity(job, 'skill', source_skill)
         staged_ids.append(local_id)
         async with product.begin() as db:
             current = await db.get(PackageImport, job.id)
             current.preflight = preflight
-            current.sha256 = digest(job_root / 'archive.zip')
+            current.sha256 = digest(imports.archive_path(job.id))
             async with resources.begin() as motoro:
                 reconstruction = Reconstruction(db, current, job_root / 'payload', Limits())
                 current.experiment_id = await reconstruction.activate(motoro)

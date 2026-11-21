@@ -12,6 +12,7 @@ from sqlalchemy import select, text
 
 from asaree.api.result_reads import Scope
 from asaree.deps import CurrentUser, DbSession
+from asaree.models.protocol import Protocol
 from asaree.models.protocol_revision import ProtocolRevision
 from asaree.models.result_job import ResultJob
 from asaree.services import result_exports, result_jobs
@@ -187,7 +188,15 @@ async def download(
         experiment = await get_experiment(db, job.experiment_id)
         if experiment is None or experiment.owner_id != owner:
             raise HTTPException(status_code=404, detail="Experiment not found")
-        filename = result_exports.package_filename(experiment.name, metadata=metadata)
+        version = await db.scalar(select(ProtocolRevision.revision).join(
+            Protocol, ProtocolRevision.protocol_id == Protocol.id,
+        ).where(
+            ProtocolRevision.id == job.protocol_revision_id, Protocol.id == job.protocol_id,
+            Protocol.experiment_id == experiment_id, Protocol.owner_id == owner,
+        ))
+        if version is None:
+            raise HTTPException(status_code=404, detail="Published experiment version not found")
+        filename = result_exports.package_filename(experiment.name, version=version, metadata=metadata)
     else:
         filename = f"results-{job_id}.{'schema.json' if metadata else 'csv'}"
     return FileResponse(

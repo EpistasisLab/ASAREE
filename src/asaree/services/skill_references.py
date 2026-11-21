@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -39,11 +40,22 @@ class SkillUnavailableError(ValueError):
 class SkillInUseError(ValueError):
     def __init__(self, uses: list[dict[str, Any]]):
         self.uses = uses
-        labels = "; ".join(f"{item['kind']}: {item['name']} ({item['id']})" for item in uses[:5])
-        suffix = f"; and {len(uses) - 5} more" if len(uses) > 5 else ""
-        super().__init__(f"This skill is used by {len(uses)} retained records: {labels}{suffix}. "
-                         "Remove those references before deleting the skill. "
-                         "Published versions and retained runs count.")
+        kinds = {"draft canvas": "Canvas", "published version": "Published experiment version",
+                 "run": "Saved run", "experiment factors": "Experiment factors",
+                 "design revision": "Design history", "agent": "Saved agent", "agent run": "Saved agent run"}
+        labels = []
+        for item in uses[:5]:
+            kind = kinds.get(item["kind"], item["kind"])
+            name = str(item["name"])
+            if item["kind"] in {"agent", "agent run"} and re.match(r"^protocol-[0-9a-fA-F-]{36}-", name):
+                labels.append(f"• {kind} from an experiment canvas")
+            else:
+                labels.append(f"• {kind}: {name}")
+        if len(uses) > 5:
+            labels.append(f"• And {len(uses) - 5} more")
+        super().__init__("This skill can’t be deleted while it’s in use.\n\nUsed by:\n" + "\n".join(labels)
+                         + "\n\nRemove it from editable canvases or factor choices first. "
+                         "Published versions, design history, saved agents, and runs also keep it in use.")
 
 
 def skill_projection(graph: dict[str, Any]) -> list[Any]:

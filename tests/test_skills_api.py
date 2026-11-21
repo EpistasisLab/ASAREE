@@ -82,16 +82,31 @@ async def test_delete_reports_retained_usages_as_conflict(monkeypatch):
     from asaree.services.skill_references import SkillInUseError
 
     owner_id, skill_id = uuid.uuid4(), uuid.uuid4()
+    publication_id = uuid.uuid4()
     monkeypatch.setattr(skills.skill_service, "get_skill", AsyncMock(
         return_value=SimpleNamespace(id=skill_id, owner_id=owner_id)))
     monkeypatch.setattr(skills, "resource_active", AsyncMock(return_value=True))
     monkeypatch.setattr(skills, "delete_registered_skill", AsyncMock(side_effect=SkillInUseError([
-        {"kind": "published version", "name": "Experiment A", "id": uuid.uuid4()},
+        {"kind": "published version", "name": "Experiment A", "id": publication_id},
     ])))
     with pytest.raises(HTTPException) as error:
         await skills.delete_skill_endpoint(skill_id, SimpleNamespace(id=owner_id), AsyncMock())
     assert error.value.status_code == 409
-    assert "Experiment A" in error.value.detail
+    assert "Published experiment version: Experiment A" in error.value.detail
+    assert str(publication_id) not in error.value.detail
+
+
+def test_skill_usage_message_hides_internal_canvas_agent_names():
+    from asaree.services.skill_references import SkillInUseError
+
+    protocol_id, node_id = uuid.uuid4(), uuid.uuid4()
+    internal_name = f"protocol-{protocol_id}-{node_id}"
+    message = str(SkillInUseError([
+        {"kind": "agent run", "name": internal_name, "id": uuid.uuid4()},
+    ]))
+    assert "Saved agent run from an experiment canvas" in message
+    assert "can’t be deleted while it’s in use" in message
+    assert internal_name not in message
 
 
 async def test_uploading_duplicate_skill_folder_returns_conflict(monkeypatch: pytest.MonkeyPatch) -> None:

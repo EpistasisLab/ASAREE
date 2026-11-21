@@ -5,6 +5,7 @@ import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ArrowLeft, Plus, ScrollText, Trash2, X } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
+import { Alert, AlertAction, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -46,6 +47,7 @@ export function SkillBrowserPanel({
       queryClient.invalidateQueries({ queryKey: ['skills'] })
       setConfirmingDeleteId(null)
     },
+    onError: () => setConfirmingDeleteId(null),
   })
 
   const skills = skillsQuery.data ?? []
@@ -168,9 +170,20 @@ export function SkillBrowserPanel({
         </div>
       )}
 
-      {deleteMutation.isError && <p role="alert" className="text-sm text-destructive">
-        {deleteMutation.error instanceof ApiError ? deleteMutation.error.message : 'Could not delete that skill.'}
-      </p>}
+      {deleteMutation.isError && <Alert variant="destructive" className="shrink-0">
+        <AlertTitle>Couldn’t delete this skill</AlertTitle>
+        <AlertDescription className="max-h-48 overflow-y-auto whitespace-pre-line break-words">
+          {deleteMutation.error instanceof ApiError
+            ? deleteMutation.error.message
+            : 'Something went wrong. Please try again.'}
+        </AlertDescription>
+        <AlertAction>
+          <Button variant="ghost" size="icon-sm" aria-label="Dismiss deletion error"
+            onClick={() => deleteMutation.reset()}>
+            <X className="size-3.5" />
+          </Button>
+        </AlertAction>
+      </Alert>}
 
       {/* Registering just refreshes the list rather than immediately creating
           a node: uploading and placing are separate decisions, and you may

@@ -36,10 +36,10 @@ logger = logging.getLogger(__name__)
 RETENTION = timedelta(hours=24)
 
 
-def package_filename(experiment_name: str, *, metadata: bool = False) -> str:
-    """Match the former canvas JSON download's display-name convention."""
+def package_filename(experiment_name: str, *, version: int, metadata: bool = False) -> str:
+    """Identify the experiment and the published version contained in a package."""
     stem = re.sub(r'[^a-zA-Z0-9_-]+', '-', experiment_name.strip()).strip('-') or 'experiment'
-    return f"{stem}.{'manifest.json' if metadata else 'tar.gz'}"
+    return f"{stem}-v{version}.{'manifest.json' if metadata else 'tar.gz'}"
 
 
 def export_path(identifier: uuid.UUID, *, metadata: bool = False, package: bool = False) -> Path:

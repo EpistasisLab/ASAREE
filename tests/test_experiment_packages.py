@@ -455,17 +455,18 @@ async def test_package_download_expiry_and_owner_token(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize('metadata', [False, True])
+@pytest.mark.parametrize('version', [1, 7])
 @pytest.mark.parametrize('name,stem', [
     ('My Experiment', 'My-Experiment'),
     ('  Study_2 - Revised  ', 'Study_2---Revised'),
     ('../../Study / "review"\r\n', 'Study-review'),
     ('???', 'experiment'),
 ])
-async def test_package_download_uses_the_owned_experiments_display_name(
-    tmp_path, monkeypatch, metadata, name, stem,
+async def test_package_download_uses_the_experiment_name_and_exported_version(
+    tmp_path, monkeypatch, metadata, version, name, stem,
 ):
     job = SimpleNamespace(id=uuid.uuid4(), owner_id=uuid.uuid4(), experiment_id=uuid.uuid4(), kind='export',
-        status='completed', created_at=datetime.now(UTC), protocol_revision_id=uuid.uuid4(),
+        status='completed', created_at=datetime.now(UTC), protocol_revision_id=uuid.uuid4(), protocol_id=uuid.uuid4(),
         params={'selection': {'format': 'experiment_package'}})
     monkeypatch.setattr(result_exports, 'get_settings', lambda: SimpleNamespace(
         result_export_dir=str(tmp_path), auth_secret_key='test-secret-key-at-least-32-characters'))
@@ -474,13 +475,19 @@ async def test_package_download_uses_the_owned_experiments_display_name(
     monkeypatch.setattr(api, 'get_experiment', get_experiment)
     path = result_exports.export_path(job.id, package=True, metadata=metadata)
     path.write_bytes(b'prepared export')
-    db = SimpleNamespace()
+    db = SimpleNamespace(scalar=AsyncMock(return_value=version))
     response = await api.download(job.experiment_id, job.id, result_exports.download_token(job), db, metadata)
     suffix = 'manifest.json' if metadata else 'tar.gz'
-    assert response.headers['content-disposition'] == f'attachment; filename="{stem}.{suffix}"'
+    assert response.headers['content-disposition'] == f'attachment; filename="{stem}-v{version}.{suffix}"'
     assert response.headers['content-type'] == ('application/json' if metadata else 'application/gzip')
     assert response.path == path
     get_experiment.assert_awaited_once_with(db, job.experiment_id)
+    # Resolve the publication pinned to the job, even if a newer version exists.
+    parameters = db.scalar.call_args.args[0].compile().params.values()
+    assert job.protocol_revision_id in parameters
+    assert job.protocol_id in parameters
+    assert job.experiment_id in parameters
+    assert job.owner_id in parameters
 
 
 async def test_package_download_cannot_use_another_owners_experiment(tmp_path, monkeypatch):

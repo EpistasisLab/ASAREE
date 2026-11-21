@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from asaree.models.protocol import Protocol
 from asaree.services.protocol_graph_schema import normalize_protocol_graph
+from asaree.services.skill_references import skill_projection, validate_references
 
 _DEFAULT_GRAPH: dict[str, Any] = {"nodes": [], "edges": []}
 _SETTABLE_FIELDS = frozenset({"name", "description", "experiment_id", "graph"})
@@ -94,16 +95,21 @@ async def create_protocol(
     )
     db.add(protocol)
     await db.flush()
+    if skill_projection(protocol.graph):
+        await validate_references(db, owner_id, protocol_id=protocol.id)
     await db.refresh(protocol)
     return protocol
 
 
-async def get_protocol(db: AsyncSession, protocol_id: uuid.UUID) -> Protocol | None:
+async def get_protocol(db: AsyncSession, protocol_id: uuid.UUID, *, lock: bool = False) -> Protocol | None:
     from asaree.models.package_import import PackageImport
 
-    return (await db.execute(select(Protocol).where(Protocol.id == protocol_id,
+    query = select(Protocol).where(Protocol.id == protocol_id,
         ~select(PackageImport.id).where(PackageImport.experiment_id == Protocol.experiment_id,
-                                        PackageImport.status != 'completed').exists()))).scalar_one_or_none()
+                                        PackageImport.status != 'completed').exists())
+    if lock:
+        query = query.with_for_update().execution_options(populate_existing=True)
+    return (await db.execute(query)).scalar_one_or_none()
 
 
 async def get_protocol_by_name(db: AsyncSession, name: str, *, owner_id: uuid.UUID) -> Protocol | None:
@@ -148,14 +154,20 @@ async def update_protocol(
     if unknown:
         raise ValueError(f"not settable on a protocol: {sorted(unknown)}")
 
-    protocol = await get_protocol(db, protocol_id)
+    protocol = await get_protocol(db, protocol_id, lock=True)
     if protocol is None:
         return None
     if isinstance(fields.get("graph"), dict):
         fields = {**fields, "graph": normalize_protocol_graph(fields["graph"])}
+    skill_change = ("experiment_id" in fields or (
+        isinstance(fields.get("graph"), dict)
+        and skill_projection(fields["graph"]) != skill_projection(protocol.graph)
+    ))
     for key, value in fields.items():
         setattr(protocol, key, value)
     await db.flush()
+    if skill_change:
+        await validate_references(db, protocol.owner_id, protocol_id=protocol.id)
     await db.refresh(protocol)
     return protocol
 

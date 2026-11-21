@@ -418,14 +418,13 @@ async def create_protocol_endpoint(body: CreateProtocolRequest, user: CurrentUse
     if await get_protocol_by_name(db, body.name, owner_id=user.id) is not None:
         raise HTTPException(status_code=409, detail="A protocol with this name already exists")
     experiment_id = await _validated_experiment_id(body.experiment_id, db, user)
-    protocol = await create_protocol(
-        db,
-        name=body.name,
-        owner_id=user.id,
-        description=body.description,
-        experiment_id=experiment_id,
-        graph=body.graph,
-    )
+    try:
+        protocol = await create_protocol(
+            db, name=body.name, owner_id=user.id, description=body.description,
+            experiment_id=experiment_id, graph=body.graph,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     return await _protocol_response(db, protocol)
 
 
@@ -459,7 +458,10 @@ async def update_protocol_endpoint(
             raise HTTPException(status_code=409, detail="A protocol with this name already exists")
     if "experiment_id" in fields:
         fields["experiment_id"] = await _validated_experiment_id(fields["experiment_id"], db, user)
-    protocol = await update_protocol(db, protocol_id, fields=fields)
+    try:
+        protocol = await update_protocol(db, protocol_id, fields=fields)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     assert protocol is not None  # existence already checked above
     return await _protocol_response(db, protocol)
 

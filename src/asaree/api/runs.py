@@ -28,6 +28,7 @@ from motoro.schemas.output import parse_envelope
 from pydantic import BaseModel
 
 from asaree.deps import CurrentUser
+from asaree.services.skill_references import SkillUnavailableError, protect_agent_run
 from asaree.worker.enqueue import enqueue_run
 
 router = APIRouter(prefix="/runs", tags=["runs"])
@@ -103,15 +104,15 @@ async def create_run_endpoint(body: CreateRunRequest, user: CurrentUser) -> RunR
     if agent is None or agent.owner_id != user.id:
         raise HTTPException(status_code=404, detail="No such agent")
 
-    run = await create_run(
-        agent_id=body.agent_id,
-        user_input=body.user_input,
-        pattern_overrides=body.pattern_overrides,
-        owner_id=user.id,
-        metadata=body.metadata,
-        model_config_overrides=body.model_config_override,
-    )
-    await enqueue_run(run.id)
+    try:
+        async with protect_agent_run(agent, user.id):
+            run = await create_run(
+                agent_id=body.agent_id, user_input=body.user_input, pattern_overrides=body.pattern_overrides,
+                owner_id=user.id, metadata=body.metadata, model_config_overrides=body.model_config_override,
+            )
+            await enqueue_run(run.id)
+    except SkillUnavailableError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     return _to_response(run)
 
 

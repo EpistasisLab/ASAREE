@@ -223,6 +223,11 @@ async def create_protocol_run(
     )
     db.add(run)
     await db.flush()
+    from asaree.services.skill_references import skill_projection, validate_references
+
+    retained_graph = publication.graph if publication else protocol.graph if protocol else {}
+    if skill_projection(retained_graph):
+        await validate_references(db, owner_id, run_id=run.id)
     retain_inputs(db, dataset_inputs, run_id=run.id)
     if row_slot is not None:
         row_slot.run_id = run.id

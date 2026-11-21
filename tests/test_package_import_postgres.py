@@ -463,6 +463,10 @@ async def test_export_import_independent_owner_and_reexport(
         value = await resource_db.get(Skill, uuid.UUID(str(identifier)))
         return value if value is not None and value.deleted_at is None else None
     monkeypatch.setattr('motoro.services.skill_service.get_skill', read_fixture_skill)
+    @asynccontextmanager
+    async def policy_resources(**kwargs):
+        yield resource_db
+    monkeypatch.setattr('asaree.services.skill_references.system_session', policy_resources)
     graph = {'nodes': [
         {'id': 'agent', 'type': 'agent', 'data': {'config': {
             'system_prompt': str(dataset.id), 'api_key': 'NEVER_IMPORT_CONNECTION_SECRET'},

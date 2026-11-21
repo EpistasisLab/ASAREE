@@ -19,6 +19,7 @@ from asaree.services.metrics import (
     design_metrics_from_measurement_plan,
     recommended_runtime_measurements,
 )
+from asaree.services.skill_references import validate_references
 
 # No "dataset_id" here any more -- an experiment's datasets are rows in
 # experiment_datasets, not a column, so they're written by
@@ -115,6 +116,8 @@ async def create_experiment(
     )
     db.add(experiment)
     await db.flush()
+    if (spec.get("factors") or []):
+        await validate_references(db, owner_id, experiment_id=experiment.id)
     if dataset_ids:
         await set_experiment_datasets(db, experiment.id, dataset_ids)
     await db.refresh(experiment)
@@ -221,6 +224,8 @@ async def update_experiment(
             value = normalize_measurement_plan(value)
         setattr(experiment, key, value)
     await db.flush()
+    if {"design_spec", "locked_design_spec"}.intersection(fields):
+        await validate_references(db, experiment.owner_id, experiment_id=experiment.id)
     await db.refresh(experiment)
     return experiment
 

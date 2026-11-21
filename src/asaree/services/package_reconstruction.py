@@ -459,6 +459,19 @@ class Reconstruction:
         return graph, settings
 
     async def activate(self, motoro: AsyncSession) -> uuid.UUID:
+        # Imported registrations are staged in Motoro until activation commits.
+        # The ledger still retains their IDs; readiness gates any execution.
+        previous = self.db.info.get('staging_skill_import')
+        self.db.info['staging_skill_import'] = True
+        try:
+            return await self._activate(motoro)
+        finally:
+            if previous is None:
+                self.db.info.pop('staging_skill_import', None)
+            else:
+                self.db.info['staging_skill_import'] = previous
+
+    async def _activate(self, motoro: AsyncSession) -> uuid.UUID:
         manifest = self.read('manifest.json')
         metadata = self.read('experiment-metadata.json')
         experiment_id = self.map('experiment', manifest['experiment_id'], source=metadata)

@@ -20,7 +20,6 @@ import pytest_asyncio
 from fastapi import HTTPException
 from motoro.models.mcp_server import MCPServerConfig, MCPTransport
 from motoro.models.skill import Skill, SkillFile
-from package_import_fixtures import TarImportFixtureWriter
 from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from test_result_reads import results_db as _results_db
@@ -41,6 +40,7 @@ from asaree.services import package_imports as imports
 from asaree.services.dataset_inputs import freeze_dataset_inputs
 from asaree.services.datasets import create_dataset, quick_split_dataset
 from asaree.services.design_generation import generate_design_cells
+from asaree.services.experiment_packages import PackageWriter
 from asaree.services.package_reconstruction import Reconstruction, require_configured
 from asaree.services.package_validation import Limits, inspect
 
@@ -280,7 +280,7 @@ async def test_persona_snapshots_and_subagents_survive_repeated_independent_impo
         root = imports.directory(job.id)
         stage = root / 'writer'
         stage.mkdir(parents=True)
-        writer = TarImportFixtureWriter(root / 'archive.tar.gz', stage)
+        writer = PackageWriter(root / 'archive.zip', stage)
         writer.json('publication/canvas.json', graph)
         writer.json('publication/settings.json', {'design_spec': design})
         writer.json('experiment-metadata.json', {'name': 'Portable'})
@@ -289,7 +289,7 @@ async def test_persona_snapshots_and_subagents_survive_repeated_independent_impo
         writer.finish({'format': 'asaree.experiment-package', 'schema_version': 2,
             'experiment_id': str(uuid.uuid4()), 'protocol_id': str(uuid.uuid4()),
             'publication': {'id': str(uuid.uuid4()), 'version': 1}, 'results_included': False})
-        job.preflight = inspect(root / 'archive.tar.gz', root / 'payload', Limits(), threading.Event())
+        job.preflight = inspect(root / 'archive.zip', root / 'payload', Limits(), threading.Event())
         importer = Reconstruction(db, job, root / 'payload', Limits())
         job.experiment_id = await importer.activate(resource_db)
         await db.flush()
@@ -360,7 +360,7 @@ async def test_destination_services_and_explicit_custom_mapping(
             'factor_bindings': {'config.server_id': 'Connection'}}}],
         'edges': [{'source': 'model', 'target': 'agent', 'targetHandle': 'model'}]}
     design_spec = {'factors': [{'name': 'Connection', 'levels': [str(source_custom.id)]}]}
-    writer = TarImportFixtureWriter(root / 'archive.tar.gz', stage)
+    writer = PackageWriter(root / 'archive.zip', stage)
     writer.json('publication/canvas.json', graph)
     writer.json('publication/settings.json', {'design_spec': design_spec})
     writer.json('experiment-metadata.json', {'name': 'Service portability'})
@@ -369,7 +369,7 @@ async def test_destination_services_and_explicit_custom_mapping(
     writer.finish({'format': 'asaree.experiment-package', 'schema_version': 2,
         'experiment_id': str(scope.experiment_id), 'protocol_id': str(scope.protocol_id),
         'publication': {'id': str(scope.protocol_revision_id), 'version': 1}, 'results_included': False})
-    job.preflight = inspect(root / 'archive.tar.gz', root / 'payload', Limits(), threading.Event())
+    job.preflight = inspect(root / 'archive.zip', root / 'payload', Limits(), threading.Event())
     requirements = ''.join(path.read_text() for path in (root / 'payload/requirements/mcp').glob('*.json'))
     assert 'SOURCE_SECRET' not in requirements
     destination_builtin = MCPServerConfig(id=uuid.uuid4(), name='Renamed built-in', is_system=True,
@@ -558,8 +558,8 @@ async def test_export_import_independent_owner_and_reexport(
     root.mkdir(parents=True)
     staging = root / 'writer'
     staging.mkdir()
-    archive = root / 'archive.tar.gz'
-    writer = TarImportFixtureWriter(archive, staging)
+    archive = root / 'archive.zip'
+    writer = PackageWriter(archive, staging)
     portable_graph, portable_settings = packages.portable_definition(graph, publication.experiment_snapshot)
     writer.json('publication/canvas.json', portable_graph)
     writer.json('publication/settings.json', portable_settings)
@@ -583,7 +583,7 @@ async def test_export_import_independent_owner_and_reexport(
     root = imports.directory(job.id)
     assert root != source_root
     root.mkdir(parents=True)
-    archive = root / 'archive.tar.gz'
+    archive = root / 'archive.zip'
     archive.write_bytes(archive_bytes)
     db, resource_db = destination_db, destination_resource_db
     assert await db.get(RegisteredDataset, dataset.id) is None
@@ -701,6 +701,7 @@ async def test_export_import_independent_owner_and_reexport(
         'experiment_id': str(experiment_id), 'protocol_id': str(protocol.id),
         'publication': {'id': str(local_publication.id), 'version': local_publication.revision},
         'design_revision_id': str(local_publication.design_revision_id), 'results_included': False})
+    inspect(root / 'second.zip', root / 'second-payload', Limits(), threading.Event())
     with zipfile.ZipFile(root / 'second.zip') as reexport:
         assert reexport.testzip() is None
         reexport_dependencies = [json.loads(line) for line in reexport.read('dependencies.jsonl').splitlines()]
@@ -713,7 +714,7 @@ async def test_export_import_independent_owner_and_reexport(
             dependency = next(entry for entry in reexport_dependencies if entry.get('kind') == 'skill_file'
                               and entry.get('file') == f'resources/skills/{local_skill.id}/{path}')
             assert (dependency['encoding'], dependency['position']) == (encoding, position)
-        assert not any(name.startswith('results/') or name.endswith('/source.tar.gz') for name in reexport.namelist())
+        assert not any(name.startswith('results/') or name.endswith('/source.zip') for name in reexport.namelist())
     assert manifest['schema_version'] == 2
     # Later draft setup changes do not revoke an immutable local publication.
     broken = copy.deepcopy(protocol.graph)
@@ -741,7 +742,7 @@ async def test_v1_skill_binary_content_is_restored_with_explicit_unknown_source_
     await db.flush()
     root = imports.directory(job.id)
     write_archive(job, root, version=1)
-    summary = inspect(root / 'archive.tar.gz', root / 'payload', Limits(), threading.Event())
+    summary = inspect(root / 'archive.zip', root / 'payload', Limits(), threading.Event())
     assert any('v1 omits' in warning for warning in summary['warnings'])
     importer = Reconstruction(db, job, root / 'payload', Limits())
     experiment = await importer.activate(resource_db)
@@ -780,7 +781,7 @@ async def test_missing_source_stays_unresolved_instead_of_using_an_existing_same
     root = imports.directory(job.id)
     stage = root / 'writer'
     stage.mkdir(parents=True)
-    writer = TarImportFixtureWriter(root / 'archive.tar.gz', stage)
+    writer = PackageWriter(root / 'archive.zip', stage)
     writer.json('publication/canvas.json', graph)
     writer.json('publication/settings.json', {'design_spec': {'factors': []}})
     writer.json('experiment-metadata.json', {'name': 'Missing original'})
@@ -790,7 +791,7 @@ async def test_missing_source_stays_unresolved_instead_of_using_an_existing_same
     writer.finish({'format': 'asaree.experiment-package', 'schema_version': 2,
         'experiment_id': str(scope.experiment_id), 'protocol_id': str(scope.protocol_id),
         'publication': {'id': str(scope.protocol_revision_id), 'version': 1}, 'results_included': False})
-    job.preflight = inspect(root / 'archive.tar.gz', root / 'payload', Limits(), threading.Event())
+    job.preflight = inspect(root / 'archive.zip', root / 'payload', Limits(), threading.Event())
     assert job.preflight['unresolved_count'] == 1
     importer = Reconstruction(db, job, root / 'payload', Limits())
     job.experiment_id = await importer.activate(resource_db)

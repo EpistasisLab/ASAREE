@@ -103,7 +103,7 @@ async def upload(identifier: uuid.UUID, request: Request, db: DbSession, user: C
                     raise HTTPException(413, 'Compressed package exceeds configured upload limit')
                 await asyncio.to_thread(output.write, block)
                 digest.update(block)
-        temporary.replace(root / 'archive.tar.gz')
+        temporary.replace(root / 'archive.zip')
         job = await owned(db, identifier, user.id, lock=True)
         if job.status == 'cancelled':
             raise HTTPException(409, 'Import cancelled')
@@ -129,7 +129,7 @@ async def retry(identifier: uuid.UUID, db: DbSession, user: CurrentUser) -> dict
     job = await owned(db, identifier, user.id, lock=True)
     if job.status != 'failed' or job.expires_at <= datetime.now(UTC):
         raise HTTPException(409, 'Only an unexpired failed import can be retried')
-    if not (imports.directory(identifier) / 'archive.tar.gz').is_file():
+    if not (imports.directory(identifier) / 'archive.zip').is_file():
         raise HTTPException(409, 'Upload archive bytes first')
     # Durable deterministic identities prevent duplicates after interruption.
     job.status, job.error = 'validating', None
@@ -171,12 +171,13 @@ def source_response(job: PackageImport, path: str | None) -> FileResponse:
         raise HTTPException(409, 'Source evidence unavailable')
     root = imports.directory(job.id)
     try:
-        target = root / 'payload' / member_path(path) if path else root / 'archive.tar.gz'
+        target = root / 'payload' / member_path(path) if path else root / 'archive.zip'
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
     if not target.is_file():
         raise HTTPException(404, 'Source file unavailable')
-    return FileResponse(target, media_type='application/octet-stream', filename=target.name,
+    return FileResponse(target, filename=target.name,
+                        media_type='application/octet-stream' if path else 'application/zip',
                         headers={'Cache-Control': 'private, no-store', 'X-Content-Type-Options': 'nosniff'})
 
 

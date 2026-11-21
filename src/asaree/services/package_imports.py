@@ -140,7 +140,7 @@ async def execute_package_import(_ctx: dict[str, Any], job_id: str) -> None:
             if job is None or job.status not in {'validating', 'queued', 'activating'}:
                 return
             root = directory(identifier)
-            archive, payload = root / 'archive.tar.gz', root / 'payload'
+            archive, payload = root / 'archive.zip', root / 'payload'
             if job.status == 'validating':
                 for path in (payload, root / 'payload-verified'):
                     await asyncio.to_thread(shutil.rmtree, path, ignore_errors=True)

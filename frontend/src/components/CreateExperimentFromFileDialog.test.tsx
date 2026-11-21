@@ -28,15 +28,17 @@ it('keeps legacy JSON definitions and creates their draft without restoring a pu
   expect(create.mock.calls[0][0]).not.toHaveProperty('published_graph')
 })
 
-it('uploads a package and opens its draft automatically without a confirmation or setup step', async () => {
+it.each(['experiment.zip', 'experiment.ZIP'])('uploads %s and opens its draft automatically', async (filename) => {
   const job = { id: 'import', status: 'completed', experiment_id: 'restored', progress: {}, preflight: {} } as PackageImport
   vi.spyOn(packageImportsApi, 'create').mockResolvedValue(job)
   const upload = vi.spyOn(packageImportsApi, 'upload').mockResolvedValue(job)
   vi.spyOn(packageImportsApi, 'get').mockResolvedValue(job)
   const command = vi.spyOn(packageImportsApi, 'command')
   const { imported } = show()
-  const file = new File(['archive bytes'], 'experiment.tar.gz', { type: 'application/gzip' })
-  fireEvent.change(screen.getByLabelText('Experiment definition'), { target: { files: [file] } })
+  const file = new File(['archive bytes'], filename, { type: 'application/zip' })
+  const input = screen.getByLabelText('Experiment definition')
+  expect(input).toHaveAttribute('accept', 'application/json,.json,application/zip,.zip')
+  fireEvent.change(input, { target: { files: [file] } })
   fireEvent.click(screen.getByRole('button', { name: 'Create experiment' }))
   await waitFor(() => expect(imported).toHaveBeenCalledWith('restored'))
   expect(upload).toHaveBeenCalledWith('import', file)
@@ -50,7 +52,7 @@ it('reports a failed package import without navigating to a partial experiment',
   vi.spyOn(packageImportsApi, 'upload').mockResolvedValue(job)
   vi.spyOn(packageImportsApi, 'get').mockResolvedValue(job)
   const { imported } = show()
-  fireEvent.change(screen.getByLabelText('Experiment definition'), { target: { files: [new File(['x'], 'bad.tar.gz')] } })
+  fireEvent.change(screen.getByLabelText('Experiment definition'), { target: { files: [new File(['x'], 'bad.zip')] } })
   fireEvent.click(screen.getByRole('button', { name: 'Create experiment' }))
   expect(await screen.findByText('Hash mismatch')).toBeInTheDocument()
   expect(imported).not.toHaveBeenCalled()

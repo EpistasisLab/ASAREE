@@ -408,6 +408,10 @@ async def test_package_fails_when_historical_inputs_are_unavailable(tmp_path, mo
 
 
 async def test_configuration_only_package_excludes_results_even_if_a_stale_job_requests_them(tmp_path, monkeypatch):
+    import threading
+
+    from asaree.services.package_validation import Limits, inspect
+
     publication = SimpleNamespace(id=uuid.uuid4(), graph={'nodes': [], 'edges': []},
         experiment_snapshot={'design_spec': {'factors': []}}, dataset_inputs={'schema_version': 1, 'inputs': []},
         design_revision_id=None, revision=1, published_at=datetime.now(UTC), name=None, note=None)
@@ -430,6 +434,8 @@ async def test_configuration_only_package_excludes_results_even_if_a_stale_job_r
     assert manifest['results_included'] is False
     assert not any(name.startswith('results/') for name in contents)
     assert manifest['completeness']['unresolved_count'] == 0
+    summary = inspect(tmp_path / 'package.zip', tmp_path / 'payload', Limits(), threading.Event())
+    assert summary['unresolved_count'] == 0
     assert (tmp_path / 'package.zip').stat().st_mode & 0o777 == 0o600
     update_values = status_db.execute.call_args.args[0].compile().params
     progress = update_values['progress']

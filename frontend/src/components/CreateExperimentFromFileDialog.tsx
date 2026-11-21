@@ -79,7 +79,7 @@ export function CreateExperimentFromFileDialog({
   const queryClient = useQueryClient()
 
   const [packageId, setPackageId] = useState<string>()
-  const isPackage = file?.name.toLowerCase().endsWith('.tar.gz') ?? false
+  const isPackage = file?.name.toLowerCase().endsWith('.zip') ?? false
   const packageJob = useQuery({ queryKey: ['package-import', packageId], enabled: !!packageId,
     queryFn: () => packageImportsApi.get(packageId!),
     refetchInterval: query => ['completed', 'failed', 'cancelled', 'expired'].includes(query.state.data?.status ?? '') ? false : 1000 })
@@ -138,7 +138,7 @@ export function CreateExperimentFromFileDialog({
     if (!file) return
     setPackageId(undefined)
     importMutation.reset()
-    if (file.name.toLowerCase().endsWith('.tar.gz')) {
+    if (file.name.toLowerCase().endsWith('.zip')) {
       setDefinition(null)
       setFile(file)
       setFileError(null)
@@ -176,11 +176,11 @@ export function CreateExperimentFromFileDialog({
             <Label htmlFor="experiment-definition-file">Experiment definition</Label>
             <FileDropInput
               id="experiment-definition-file"
-              accept="application/json,.json,application/gzip,.gz,.tar.gz"
+              accept="application/json,.json,application/zip,.zip"
               disabled={busy}
               file={file}
               onChange={(next) => void handleFileSelected(next)}
-              placeholder="Drop a JSON or .tar.gz file or click to browse"
+              placeholder="Drop a JSON or .zip file or click to browse"
             />
           </div>
           {definition && (

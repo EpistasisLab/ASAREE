@@ -1,10 +1,9 @@
 """Real cross-database crash/retry and cancel/cleanup boundaries; CI PostgreSQL."""
-import io
 import os
 import shutil
-import tarfile
 import threading
 import uuid
+import zipfile
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -18,7 +17,6 @@ from alembic.operations import Operations
 from alembic.script import ScriptDirectory
 from motoro.models.mcp_server import MCPServerConfig
 from motoro.models.skill import Skill, SkillFile
-from package_import_fixtures import TarImportFixtureWriter
 from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
@@ -29,6 +27,7 @@ from asaree.models.package_import import ImportedIdentity, PackageImport
 from asaree.models.user import User
 from asaree.services import import_visibility
 from asaree.services import package_imports as imports
+from asaree.services.experiment_packages import PackageWriter
 from asaree.services.experiments import get_experiment
 from asaree.services.package_reconstruction import Reconstruction, identity
 from asaree.services.package_validation import Limits, digest, inspect
@@ -74,7 +73,7 @@ def write_archive(job, root, *, version=2):
     stage = root / 'writer'
     stage.mkdir()
     skill_id = str(uuid.uuid4())
-    writer = TarImportFixtureWriter(root / 'archive.tar.gz', stage)
+    writer = PackageWriter(root / 'archive.zip', stage)
     writer.json('publication/canvas.json', {'nodes': [
         {'id': 'skill', 'type': 'skill', 'data': {'config': {'skill_id': skill_id}}}], 'edges': []})
     writer.json('publication/settings.json', {'design_spec': {'factors': []}})
@@ -175,8 +174,8 @@ async def test_durable_crash_retry_cancel_cleanup_and_ownership(import_databases
             status='validating', preflight={}, progress={}, expires_at=datetime.now(UTC) + timedelta(days=1))
         db.add(repeated)
     imports.directory(repeated.id).mkdir(parents=True)
-    shutil.copyfile(imports.directory(job.id) / 'archive.tar.gz',
-                    imports.directory(repeated.id) / 'archive.tar.gz')
+    shutil.copyfile(imports.directory(job.id) / 'archive.zip',
+                    imports.directory(repeated.id) / 'archive.zip')
     await imports.execute_package_import({}, str(repeated.id))
     kill_after_resource_commit = resource_commits + 2
     with pytest.raises(WorkerKilled):
@@ -255,11 +254,9 @@ async def test_expiry_isolates_malformed_upload_and_compensation_failure_from_pe
     bad, failing, staged, pending = jobs
     root = imports.directory(bad.id)
     root.mkdir(parents=True)
-    with tarfile.open(root / 'archive.tar.gz', 'w:gz') as output:
+    with zipfile.ZipFile(root / 'archive.zip', 'w') as output:
         for name, data in [('manifest.json', b'{}'), ('dependencies.jsonl', b'{not-json\n')]:
-            member = tarfile.TarInfo(name)
-            member.size = len(data)
-            output.addfile(member, io.BytesIO(data))
+            output.writestr(name, data)
     await imports.execute_package_import({}, str(bad.id))
     assert (root / 'payload/dependencies.jsonl').is_file()
     staged_ids = []
@@ -267,14 +264,14 @@ async def test_expiry_isolates_malformed_upload_and_compensation_failure_from_pe
     for job in (failing, staged):
         job_root = imports.directory(job.id)
         write_archive(job, job_root)
-        preflight = inspect(job_root / 'archive.tar.gz', job_root / 'payload', Limits(), threading.Event())
+        preflight = inspect(job_root / 'archive.zip', job_root / 'payload', Limits(), threading.Event())
         source_skill = next((job_root / 'payload/resources/skills').iterdir()).name
         local_id = identity(job, 'skill', source_skill)
         staged_ids.append(local_id)
         async with product.begin() as db:
             current = await db.get(PackageImport, job.id)
             current.preflight = preflight
-            current.sha256 = digest(job_root / 'archive.tar.gz')
+            current.sha256 = digest(job_root / 'archive.zip')
             async with resources.begin() as motoro:
                 reconstruction = Reconstruction(db, current, job_root / 'payload', Limits())
                 current.experiment_id = await reconstruction.activate(motoro)

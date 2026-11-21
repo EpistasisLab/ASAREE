@@ -194,7 +194,35 @@ def slugify(value: str, fallback: str = "bundle") -> str:
     return slug[:64].strip("-") or fallback
 
 
-def allocate_storage_dir(base: Path, slug: str) -> Path:
+def _discard_on_rollback(db: AsyncSession, directory: Path) -> None:
+    """Keep filesystem ownership aligned with the caller's transaction/savepoint."""
+    from sqlalchemy import event
+
+    session = db.sync_session
+    target = session.get_nested_transaction() or session.get_transaction() or session.begin()
+    committed, finished = False, False
+
+    def record_commit(current: Any) -> None:
+        nonlocal committed
+        if not finished and (current.get_nested_transaction() or current.get_transaction()) is target:
+            committed = True
+
+    def transaction_ended(_session: Any, ended: Any) -> None:
+        nonlocal target, committed, finished
+        if finished or ended is not target:
+            return
+        if committed and ended.parent is not None:
+            target, committed = ended.parent, False
+            return
+        if not committed:
+            shutil.rmtree(directory, ignore_errors=True)
+        finished = True
+
+    event.listen(session, 'after_commit', record_commit)
+    event.listen(session, 'after_transaction_end', transaction_ended)
+
+
+def allocate_storage_dir(base: Path, slug: str, *, db: AsyncSession | None = None) -> Path:
     """A fresh, empty directory under *base*, suffixing a taken *slug*.
 
     ``-2``, ``-3`` ... rather than reusing or replacing what's there: existing
@@ -210,6 +238,8 @@ def allocate_storage_dir(base: Path, slug: str) -> Path:
             continue
         except OSError as exc:
             raise OkfBundleError(f"Could not create storage at {candidate}: {exc}") from exc
+        if db is not None:
+            _discard_on_rollback(db, candidate)
         return candidate
     raise OkfBundleError(f"Too many folders already stored under the name {slug!r} -- delete some first.")
 
@@ -293,7 +323,7 @@ async def register_uploaded_bundle(
     """
     folder, relatives = validate_uploaded_bundle(files)
 
-    directory = allocate_storage_dir(owner_upload_root(owner_id), slugify(folder))
+    directory = allocate_storage_dir(owner_upload_root(owner_id), slugify(folder), db=db)
     try:
         ensure_command_safe(directory)
         for relative, (_name, text) in zip(relatives, files, strict=True):

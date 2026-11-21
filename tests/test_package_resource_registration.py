@@ -15,6 +15,7 @@ from motoro.models.mcp_server import MCPServerConfig
 from motoro.models.skill import Skill
 from motoro.services import mcp_service, skill_service
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session
 
 from asaree.config import AsareeSettings
 from asaree.models.dataset import RegisteredDataset
@@ -27,6 +28,7 @@ class RecordingSession:
     """Record writes; database constraints are covered by the PostgreSQL suite."""
     def __init__(self):
         self.added = []
+        self.sync_session = Session()
         self.refresh = AsyncMock()
         self.flush = AsyncMock(side_effect=self.defaults)
 
@@ -288,3 +290,32 @@ async def test_persona_uses_native_registration_validation(registration):
         'config': {'persona_text': 'x' * 1_000_001}})
     with pytest.raises(PackageError, match='Could not register persona "Source persona".*1 MB'):
         await importer.personas()
+
+
+@pytest.mark.parametrize('outcome', ['rollback', 'commit', 'savepoint-commit', 'savepoint-rollback'])
+def test_native_storage_follows_caller_transaction_outcome(tmp_path, outcome):
+    session = Session()
+    db = SimpleNamespace(sync_session=session)
+    outer = session.begin()
+    existing = okf_bundles.allocate_storage_dir(tmp_path, 'first', db=db)
+    if outcome.startswith('savepoint'):
+        nested = session.begin_nested()
+        additional = okf_bundles.allocate_storage_dir(tmp_path, 'second', db=db)
+        if outcome == 'savepoint-commit':
+            nested.commit()
+            assert additional.exists()
+            outer.rollback()
+            assert not existing.exists() and not additional.exists()
+        else:
+            nested.rollback()
+            assert existing.exists() and not additional.exists()
+            outer.commit()
+            assert existing.exists()
+    elif outcome == 'rollback':
+        outer.rollback()
+        assert not existing.exists()
+    else:
+        outer.commit()
+        session.begin().rollback()  # A later transaction must never remove committed assets.
+        assert existing.exists()
+    session.close()

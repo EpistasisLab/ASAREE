@@ -279,7 +279,7 @@ async def register_document(
     stem = frontmatter.get("title") or (Path(filename).stem if filename else "")
     slug = slugify(str(stem))
 
-    directory = allocate_storage_dir(owner_root(owner_id), slug)
+    directory = allocate_storage_dir(owner_root(owner_id), slug, db=db)
     try:
         ensure_command_safe(directory)
         (directory / f"{slug}.md").write_text(text, encoding="utf-8")

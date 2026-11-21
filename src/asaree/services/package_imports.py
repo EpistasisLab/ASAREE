@@ -26,7 +26,7 @@ from asaree.models.persona import Persona
 from asaree.models.protocol import Protocol
 from asaree.services import managed_storage, package_source
 from asaree.services.datasets import discard_registration_files
-from asaree.services.package_reconstruction import Reconstruction, identity, registration_error
+from asaree.services.package_reconstruction import Reconstruction, RegistrationBatchError, identity, registration_error
 from asaree.services.package_validation import Limits, PackageError, digest, inspect
 
 logger = logging.getLogger(__name__)
@@ -245,8 +245,11 @@ async def execute_package_import(_ctx: dict[str, Any], job_id: str) -> None:
                     job.progress = {'phase': 'compensation_required'}
                 if job.status not in {'cancelled', 'expired'}:
                     job.status = 'failed'
-                job.error = (str(exc)[:2000] if isinstance(exc, ValueError)
-                             else 'Import interrupted; retry this request.')
+                if isinstance(exc, RegistrationBatchError):
+                    job.error = str(exc)
+                else:
+                    job.error = (str(exc)[:2000] if isinstance(exc, ValueError)
+                                 else 'Import interrupted; retry this request.')
         if isinstance(exc, asyncio.CancelledError):
             raise
 

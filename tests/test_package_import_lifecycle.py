@@ -1,4 +1,5 @@
 """Real cross-database crash/retry and cancel/cleanup boundaries; CI PostgreSQL."""
+import hashlib
 import os
 import shutil
 import threading
@@ -22,6 +23,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from asaree.api import package_imports as api
 from asaree.config import AsareeSettings
+from asaree.models.dataset import RegisteredDataset
 from asaree.models.experiment import ResearchExperiment
 from asaree.models.package_import import ImportedIdentity, PackageImport
 from asaree.models.user import User
@@ -235,6 +237,112 @@ async def test_durable_crash_retry_cancel_cleanup_and_ownership(import_databases
     assert not imports.directory(cancelled.id).exists()
     async with resources.begin() as db:
         assert await db.scalar(select(func.count()).select_from(Skill)) == 2
+
+
+def registration_failures_package(tmp_path, names):
+    from test_package_import_validation import package
+
+    skills = [(str(uuid.uuid4()), name) for name in [*names, 'new-skill', 'new-skill']]
+    datasets = [(str(uuid.uuid4()), name, target) for name, target in (
+        ('Valid dataset', 'y'), ('Invalid dataset', 'missing'))]
+    knowledge = [(str(uuid.uuid4()), name, content) for name, content in (
+        ('Valid knowledge', '---\ntitle: Normal imported document\n---\nKnowledge'),
+        ('Invalid knowledge', 'Missing frontmatter'))]
+
+    def populate(writer):
+        raw = writer.staging / 'resource'
+        for source, name in skills:
+            writer.json(f'resources/skill-metadata/{source}.json', {'id': source, 'name': name})
+            raw.write_text(f'---\nname: {name}\ndescription: Import me\n---\nInstructions')
+            writer.add(raw, f'resources/skills/{source}/SKILL.md', identity=source, provenance='captured_at_download')
+            writer.dependency(source, 'skill', 'captured_at_download', directory=f'resources/skills/{source}')
+        pins = []
+        for source, name, target in datasets:
+            artifact = str(uuid.uuid4())
+            raw.write_bytes(b'x,y\n1,0\n2,1\n')
+            checksum = hashlib.sha256(raw.read_bytes()).hexdigest()
+            file = f'inputs/{artifact}.csv'
+            writer.add(raw, file, identity=artifact, provenance='publication_pinned')
+            writer.dependency(artifact, 'dataset_file', 'publication_pinned', file=file,
+                dataset_id=source, role='raw_artifact')
+            pins.append({'dataset_id': source, 'dataset_name': name, 'mode': 'whole_dataset',
+                'target_column': target, 'raw_sha256': checksum, 'split_id': None,
+                'raw_artifact': {'id': artifact, 'sha256': checksum}})
+        writer.json('inputs/bindings.json', {'schema_version': 1, 'inputs': pins, 'bindings': []})
+        for source, name, content in knowledge:
+            writer.json(f'requirements/mcp/{source}.json', {'id': source, 'name': name,
+                'transport': 'stdio', 'knowledge_kind': 'document'})
+            raw.write_text(content)
+            directory = f'resources/knowledge/{source}'
+            writer.add(raw, f'{directory}/concept.md', identity=source, provenance='captured_at_download')
+            writer.dependency(source, 'knowledge', 'captured_at_download', directory=directory, file_count=1)
+            writer.dependency(source, 'mcp', 'external_requirement')
+
+    build = tmp_path / 'build'
+    build.mkdir()
+    graph = {'nodes': [
+        *[{'id': source, 'type': 'skill', 'data': {'config': {'skill_id': source}}} for source, _ in skills],
+        *[{'id': source, 'type': 'dataset', 'data': {'config': {'dataset_id': source}}}
+          for source, _, _ in datasets],
+        *[{'id': source, 'type': 'okf_document', 'data': {'config': {'document_id': source}}}
+          for source, _, _ in knowledge],
+    ], 'edges': []}
+    return package(build, graph=graph, modify=populate)
+
+
+async def test_all_registration_failures_are_reported_and_successful_resources_are_rolled_back(
+    import_databases, tmp_path, monkeypatch,
+):
+    product, resources = import_databases
+    settings = AsareeSettings(_env_file=None, data_root=str(tmp_path / 'storage'))
+    for module in ('asaree.config', 'asaree.services.datasets', 'asaree.services.managed_storage',
+                   'asaree.services.okf_bundles', 'asaree.services.okf_documents'):
+        monkeypatch.setattr(f'{module}.get_settings', lambda: settings)
+
+    @asynccontextmanager
+    async def product_session():
+        async with product.begin() as db:
+            yield db
+
+    @asynccontextmanager
+    async def resource_session(**kwargs):
+        async with resources.begin() as db:
+            yield db
+
+    monkeypatch.setattr(imports, 'get_session', product_session)
+    monkeypatch.setattr(imports, 'system_session', resource_session)
+    async with product.begin() as db:
+        owner = User(email='batch@example.test', hashed_password='test', display_name='Importer')
+        db.add(owner)
+    names = [f'taken-{index:02}' for index in range(24)]
+    async with resources.begin() as db:
+        db.add_all([Skill(name=name, owner_id=owner.id, description='Existing', body='Keep me') for name in names])
+    async with product.begin() as db:
+        job = PackageImport(id=uuid.uuid4(), owner_id=owner.id, request_key='batch-errors',
+            status='validating', preflight={}, progress={}, expires_at=datetime.now(UTC) + timedelta(days=1))
+        db.add(job)
+    archive = registration_failures_package(tmp_path, names)
+    shutil.copyfile(archive, imports.archive_path(job.id))
+    await imports.execute_package_import({}, str(job.id))
+    async with product.begin() as db:
+        checked = await db.get(PackageImport, job.id)
+        assert checked.status == 'queued', checked.error
+    await imports.execute_package_import({}, str(job.id))
+    async with product.begin() as db:
+        failed = await db.get(PackageImport, job.id)
+        assert failed.status == 'failed'
+        assert failed.error.startswith('Could not import 27 resources:'), failed.error
+        assert len(failed.error) > 2000  # Every error survives persistence, beyond the old single-error limit.
+        assert all(f'"{name}"' in failed.error for name in [*names, 'new-skill',
+                                                          'Invalid dataset', 'Invalid knowledge'])
+        assert failed.experiment_id is None
+        for model in (ResearchExperiment, RegisteredDataset, ImportedIdentity):
+            assert await db.scalar(select(func.count()).select_from(model)) == 0
+    async with resources.begin() as db:
+        assert await db.scalar(select(func.count()).select_from(Skill)) == len(names)
+        assert await db.scalar(select(func.count()).select_from(MCPServerConfig)) == 0
+    for root in (settings.dataset_storage_dir, settings.okf_document_dir):
+        assert not any(path.is_file() for path in Path(root).rglob('*'))
 
 
 async def test_expiry_isolates_malformed_upload_and_compensation_failure_from_pending_import(

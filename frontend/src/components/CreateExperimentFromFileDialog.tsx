@@ -200,7 +200,7 @@ export function CreateExperimentFromFileDialog({
 
             </div>
           )}
-          {packageId && <p role="status" className="text-sm">{packageJob.data?.status === 'failed'
+          {packageId && <p role="status" className="max-h-60 overflow-y-auto whitespace-pre-wrap break-words text-sm">{packageJob.data?.status === 'failed'
             ? packageJob.data.error : `Creating experiment… ${packageJob.data?.progress.phase ?? 'Uploading'}`}</p>}
           {packageJob.error && <p role="alert">{packageJob.error.message}</p>}
           {packageJob.data?.status === 'failed' && <Button variant="outline" onClick={() => {

@@ -347,6 +347,7 @@ def test_split_identity_must_match_filename_and_pin(tmp_path, referenced, fault)
 
 @pytest.mark.parametrize('version', [1, 2])
 async def test_verified_knowledge_source_containment_is_rechecked_before_copy(tmp_path, version, monkeypatch):
+    from contextlib import nullcontext
     from types import SimpleNamespace
     from unittest.mock import AsyncMock
 
@@ -371,8 +372,9 @@ async def test_verified_knowledge_source_containment_is_rechecked_before_copy(tm
     (payload / folder / 'sentinel.txt').symlink_to(sibling / 'sentinel.txt')
     namespaces = {name: tmp_path / 'managed' / name for name in ('bundles', 'documents')}
     monkeypatch.setattr(managed_storage, 'roots', lambda: namespaces)
-    db = SimpleNamespace(add=lambda record: None)
-    motoro = SimpleNamespace(get=AsyncMock(return_value=None), add=lambda record: None, flush=AsyncMock())
+    db = SimpleNamespace(add=lambda record: None, begin_nested=nullcontext)
+    motoro = SimpleNamespace(get=AsyncMock(return_value=None), add=lambda record: None, flush=AsyncMock(),
+                             begin_nested=nullcontext)
     job = SimpleNamespace(id=uuid.uuid4(), owner_id=uuid.uuid4())
     with pytest.raises(PackageError, match='outside|containment'):
         await Reconstruction(db, job, payload, Limits()).servers(motoro)

@@ -14,13 +14,13 @@ import pytest
 from motoro.models.mcp_server import MCPServerConfig
 from motoro.models.skill import Skill
 from motoro.services import mcp_service, skill_service
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session
 
 from asaree.config import AsareeSettings
 from asaree.models.dataset import RegisteredDataset
 from asaree.services import datasets, okf_bundles, okf_documents
-from asaree.services.package_reconstruction import Reconstruction
+from asaree.services.package_reconstruction import Reconstruction, RegistrationBatchError
 from asaree.services.package_validation import Limits, PackageError
 
 
@@ -45,6 +45,12 @@ class RecordingSession:
             for file in getattr(value, 'files', []):
                 if file.id is None:
                     file.id = uuid.uuid4()
+
+    def reject_next_flush(self, error):
+        async def reject():
+            self.flush.side_effect = self.defaults
+            raise error
+        self.flush.side_effect = reject
 
     @asynccontextmanager
     async def begin_nested(self):
@@ -72,13 +78,13 @@ def write_json(path, value):
     path.write_text(json.dumps(value))
 
 
-def skill_payload(root, text=None, resources=()):
+def skill_payload(root, text=None, resources=(), name='source-skill'):
     source = str(uuid.uuid4())
     directory = f'resources/skills/{source}'
     entrypoint = root / directory / 'SKILL.md'
     entrypoint.parent.mkdir(parents=True)
-    entrypoint.write_text(text or '---\nname: source-skill\ndescription: Import me\n---\nInstructions')
-    write_json(root / f'resources/skill-metadata/{source}.json', {'id': source, 'name': 'source-skill'})
+    entrypoint.write_text(text or f'---\nname: {name}\ndescription: Import me\n---\nInstructions')
+    write_json(root / f'resources/skill-metadata/{source}.json', {'id': source, 'name': name})
     dependencies = [{'id': source, 'kind': 'skill', 'status': 'included', 'directory': directory}]
     records = []
     for name, content in resources:
@@ -113,7 +119,7 @@ async def test_invalid_skill_is_rejected_by_native_registration(registration, fa
 async def test_skill_conflict_fails_without_renaming(registration):
     importer, _, resources, _ = registration
     skill_payload(importer.root)
-    resources.flush.side_effect = IntegrityError('INSERT', {}, Exception('uq_skills_owner_name_active'))
+    resources.reject_next_flush(IntegrityError('INSERT', {}, Exception('uq_skills_owner_name_active')))
     with pytest.raises(PackageError, match='source-skill.*already registered'):
         await importer.skills(resources)
     assert resources.added[0].name == 'source-skill'
@@ -157,7 +163,7 @@ async def test_dataset_native_validation_reports_resource_name(registration, fau
     dataset_payload(importer.root, b'' if fault == 'csv' else b'x,y\n1,0\n2,1\n',
         'missing' if fault == 'target-column' else None)
     if fault == 'name-conflict':
-        product.flush.side_effect = IntegrityError('INSERT', {}, Exception('uq_registered_datasets_owner_name'))
+        product.reject_next_flush(IntegrityError('INSERT', {}, Exception('uq_registered_datasets_owner_name')))
     with pytest.raises(PackageError, match='Could not register dataset "Source dataset"'):
         await importer.datasets()
 
@@ -290,6 +296,50 @@ async def test_persona_uses_native_registration_validation(registration):
         'config': {'persona_text': 'x' * 1_000_001}})
     with pytest.raises(PackageError, match='Could not register persona "Source persona".*1 MB'):
         await importer.personas()
+
+
+async def test_collects_native_registration_errors_across_resource_types(registration):
+    importer, _, resources, _ = registration
+    inventories = []
+    dataset_payload(importer.root, b'x,y\n1,0\n', target='missing')
+    inventories.append((importer.root / 'dependencies.jsonl').read_text())
+    skill_payload(importer.root, text='Missing frontmatter')
+    inventories.append((importer.root / 'dependencies.jsonl').read_text())
+    knowledge_payload(importer.root, 'document', b'Missing frontmatter')
+    inventories.append((importer.root / 'dependencies.jsonl').read_text())
+    (importer.root / 'dependencies.jsonl').write_text(''.join(inventories))
+    write_json(importer.root / 'resources/personas/source.json', {'id': 'source', 'name': 'Source persona',
+        'config': {'persona_text': 'x' * 1_000_001}})
+    with pytest.raises(RegistrationBatchError) as failed:
+        await importer.register_resources(resources)
+    assert len(failed.value.errors) == 4
+    for name in ('Source dataset', 'Source persona', 'source-skill', 'Source knowledge'):
+        assert f'"{name}"' in str(failed.value)
+    assert not importer.maps
+
+
+async def test_skill_conflict_does_not_hide_later_skill_validation_errors(registration):
+    importer, _, resources, _ = registration
+    skill_payload(importer.root, name='conflicting-skill')
+    first = (importer.root / 'dependencies.jsonl').read_text()
+    skill_payload(importer.root, text='Missing frontmatter', name='invalid-skill')
+    second = (importer.root / 'dependencies.jsonl').read_text()
+    (importer.root / 'dependencies.jsonl').write_text(first + second)
+    resources.reject_next_flush(IntegrityError('INSERT', {}, Exception('uq_skills_owner_name_active')))
+    with pytest.raises(RegistrationBatchError) as failed:
+        await importer.skills(resources)
+    assert len(failed.value.errors) == 2
+    assert 'conflicting-skill' in failed.value.errors[0] and 'already registered' in failed.value.errors[0]
+    assert 'invalid-skill' in failed.value.errors[1]
+    assert not importer.maps
+
+
+async def test_database_outage_stops_registration_instead_of_collecting_errors(registration):
+    importer, _, resources, _ = registration
+    skill_payload(importer.root)
+    resources.reject_next_flush(OperationalError('INSERT', {}, Exception('database unavailable')))
+    with pytest.raises(OperationalError):
+        await importer.register_resources(resources)
 
 
 @pytest.mark.parametrize('outcome', ['rollback', 'commit', 'savepoint-commit', 'savepoint-rollback'])

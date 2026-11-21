@@ -46,15 +46,15 @@ it.each(['experiment.zip', 'experiment.ZIP'])('uploads %s and opens its draft au
   expect(screen.queryByText(/Confirm import/)).not.toBeInTheDocument()
 })
 
-it('reports a failed package import without navigating to a partial experiment', async () => {
-  const job = { id: 'import', status: 'failed', experiment_id: null, error: 'Hash mismatch', progress: {}, preflight: {} } as PackageImport
+it.each(['Hash mismatch', 'Could not import 2 resources:\n• Could not register skill "Taken skill": already registered\n• Could not register dataset "Invalid dataset": invalid target'])('reports all import errors without navigating to a partial experiment: %s', async (error) => {
+  const job = { id: 'import', status: 'failed', experiment_id: null, error, progress: {}, preflight: {} } as PackageImport
   vi.spyOn(packageImportsApi, 'create').mockResolvedValue(job)
   vi.spyOn(packageImportsApi, 'upload').mockResolvedValue(job)
   vi.spyOn(packageImportsApi, 'get').mockResolvedValue(job)
   const { imported } = show()
   fireEvent.change(screen.getByLabelText('Experiment definition'), { target: { files: [new File(['x'], 'bad.zip')] } })
   fireEvent.click(screen.getByRole('button', { name: 'Create experiment' }))
-  expect(await screen.findByText('Hash mismatch')).toBeInTheDocument()
+  await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent(error.replace(/\s+/g, ' ')))
   expect(imported).not.toHaveBeenCalled()
   expect(screen.getByRole('button', { name: 'Retry import' })).toBeInTheDocument()
 })

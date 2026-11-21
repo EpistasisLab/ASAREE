@@ -238,6 +238,9 @@ async def test_knowledge_uses_native_registration_and_upload_layout(registration
     monkeypatch.setattr(module, method, register)
     await importer.servers(resources)
     server = next(value for value in resources.added if isinstance(value, MCPServerConfig))
+    from asaree.api.mcp_servers import _readable
+
+    assert not _readable(server, SimpleNamespace(id=importer.job.owner_id))
     stored = okf_bundles.bundle_path_from_command(server.command)
     parent = okf_documents.owner_root(importer.job.owner_id) if kind == 'document' else (
         okf_bundles.owner_upload_root(importer.job.owner_id))

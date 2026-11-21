@@ -120,6 +120,12 @@ async def activate_resources(job: PackageImport) -> None:
                         Skill.owner_id == job.owner_id).values(deleted_at=None))
                 except IntegrityError as exc:
                     raise registration_error('skill', name or dep['id'], exc) from exc
+            elif dep.get('kind') == 'mcp':
+                await db.execute(update(MCPServerConfig).where(
+                    MCPServerConfig.id == identity(job, 'mcp', dep['id']),
+                    MCPServerConfig.owner_id == job.owner_id,
+                    MCPServerConfig.is_system.is_(False),
+                ).values(error_message=None))
 
 
 async def remove_staged_product(db: Any, job: PackageImport) -> None:

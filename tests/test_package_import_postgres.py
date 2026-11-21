@@ -674,7 +674,9 @@ async def test_export_import_independent_owner_and_reexport(
     assert Path(local_dataset.raw_path).read_bytes() == source
     assert bool(local_dataset.current_split_id) == (mode == 'whole_dataset')
     local_server = await resource_db.get(MCPServerConfig, uuid.UUID(importer.maps['mcp', str(server.id)]))
+    await resource_db.refresh(local_server)
     assert local_server.owner_id == destination_owner.id
+    assert local_server.error_message is None
     assert okf_documents.is_document_server(local_server) == document
     restored_knowledge = Path(okf_bundles.bundle_path_from_command(local_server.command))
     concept = okf_documents.concept_file_for(local_server) if document else restored_knowledge / 'concept.md'

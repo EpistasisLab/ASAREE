@@ -339,6 +339,9 @@ class Reconstruction:
                     server = await mcp_service.register_server(db=motoro, identifier=local, connect=False,
                         owner_id=self.job.owner_id, name=name, transport=source['transport'])
                 self.names['mcp', source_id] = server.name
+                # Hide the native row until the product identity ledger commits;
+                # activation removes this marker before completing the request.
+                server.error_message = 'Import staging: awaiting experiment activation.'
                 if included is not None:
                     stored = okf_bundles.bundle_path_from_command(server.command)
                     if stored is None:

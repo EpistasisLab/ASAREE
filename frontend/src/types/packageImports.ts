@@ -35,7 +35,6 @@ export interface PackageFile {
 
 export interface ImportReadiness {
   ready: boolean
-  issues: { node_id?: string; message: string }[]
+  issues: { node_id?: string; resource_id?: string; message: string }[]
   mcp: { source_id: string; name: string; selected_id: string | null; required_tools?: string[]; candidates: { id: string; name: string }[] }[]
-  providers: { provider: string; id: string; selected: boolean }[]
 }

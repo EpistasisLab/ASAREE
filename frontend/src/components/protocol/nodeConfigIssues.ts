@@ -6,6 +6,9 @@ import { isUnderIterated, raiseForTruncation, suggestedMaxIterations } from '@/l
 import type { LLMSettingModelsResponse, ModelCapabilities } from '@/types/llmSettings'
 import type { OkfBundle, OkfDocument } from '@/types/okf'
 import type { Skill } from '@/types/skills'
+import type { Dataset } from '@/types/datasets'
+import type { McpServer } from '@/types/mcpServers'
+import type { LLMSetting } from '@/types/llmSettings'
 import type {
   DatasetNodeData,
   ModelNodeData,
@@ -24,6 +27,52 @@ export interface NodeConfigIssue {
   nodeId: string
   label: string
   issues: string[]
+}
+
+// Registry checks are shared by canvas warnings and Run's preflight. They read
+// normal application caches and never connect to external providers or tools.
+export function nodeResourceIssues(node: Node, client: QueryClient): string[] {
+  const config = (node.data.config ?? {}) as Record<string, unknown>
+  if (config.enabled === false || node.data.active === false) return []
+  const issues: string[] = []
+  if (node.type === 'dataset' && config.dataset_id) {
+    const datasets = client.getQueryData<Dataset[]>(['datasets'])
+    const dataset = datasets?.find(item => item.id === config.dataset_id)
+    if (datasets && !dataset) issues.push('Dataset is no longer registered')
+    else if (dataset && !dataset.raw_path) issues.push('Dataset source file is unavailable')
+  }
+  if (node.type === 'skill' && config.skill_id) {
+    const skills = client.getQueryData<Skill[]>(['skills'])
+    if (skills && !skills.some(item => item.id === config.skill_id)) issues.push('Skill no longer exists')
+  }
+  if (node.type === 'okf_bundle' && config.bundle_id) {
+    const bundles = client.getQueryData<OkfBundle[]>(['okf-bundles'])
+    if (bundles && !bundles.some(item => item.id === config.bundle_id)) issues.push('OKF bundle is no longer registered')
+  }
+  if (node.type === 'okf_document' && config.document_id) {
+    const documents = client.getQueryData<OkfDocument[]>(['okf-documents'])
+    if (documents && !documents.some(item => item.id === config.document_id)) issues.push('OKF document is no longer stored')
+  }
+  if (['mcp_tool', 'mcp_client_tool', 'mcp_scikit_learn'].includes(node.type ?? '')) {
+    const servers = client.getQueryData<McpServer[]>(['mcp-servers'])
+    const server = servers?.find(item => item.id === config.server_id)
+    if (servers && !server) issues.push('MCP Server is unavailable; select a destination connection')
+    else if (server) {
+      if (!server.command && !server.url) issues.push('MCP Server connection is not configured')
+      if (server.error_message) issues.push(server.error_message)
+      const available = new Set(server.capabilities?.tools?.map(tool => tool.name) ?? [])
+      const required = Array.isArray(config.tool_names) ? config.tool_names : []
+      if (required.some(tool => !available.has(tool))) issues.push('MCP Server lacks required tools')
+    }
+  }
+  if (node.type?.startsWith('model_') || node.type?.startsWith('llm_')) {
+    const provider = config.provider || node.type.replace(/^(model_|llm_)/, '')
+    const settings = client.getQueryData<LLMSetting[]>(['llm-settings'])
+    if (settings && !settings.some(setting => setting.provider === provider)) {
+      issues.push(`Configure your ${provider} connection in Profile`)
+    }
+  }
+  return issues
 }
 
 // A pre-flight scan run right before a real Run fires, so an obviously
@@ -64,7 +113,7 @@ export function findNodeConfigIssues(
   for (const node of nodes) {
     const data = node.data as { label?: string } | undefined
     const label = data?.label || node.type || 'node'
-    const issues: string[] = []
+    const issues: string[] = nodeResourceIssues(node, queryClient)
 
     switch (node.type) {
       case 'agent':
@@ -145,15 +194,6 @@ export function findNodeConfigIssues(
         // Same wording as SkillNode's own badge.
         if (!config?.skill_id) {
           issues.push('No skill selected')
-        } else {
-          // A set id can still resolve to nothing -- a skill deleted from the
-          // library, or a graph imported from another account, both leave the
-          // id (and its cached skill_name) behind. Cache-only, same contract
-          // as the model check above: a miss means "can't tell," not an issue.
-          const cached = queryClient.getQueryData<Skill[]>(['skills'])
-          if (cached && !cached.some((s) => s.id === config.skill_id)) {
-            issues.push(`Skill no longer exists${config.skill_name ? ` ("${config.skill_name}")` : ''}`)
-          }
         }
         break
       }
@@ -169,14 +209,6 @@ export function findNodeConfigIssues(
           // always a server that failed to spawn. The agent would get nothing
           // from the bundle, silently, so it's worth flagging up front.
           issues.push('No tools discovered -- the bundle server may have failed to start')
-        } else {
-          // A set id can still resolve to nothing -- deregistered, or a graph
-          // imported from another account. Cache-only, same contract as the
-          // skill check above: a miss means "can't tell," not an issue.
-          const cached = queryClient.getQueryData<OkfBundle[]>(['okf-bundles'])
-          if (cached && !cached.some((b) => b.id === config.bundle_id)) {
-            issues.push(`OKF bundle is no longer registered${config.bundle_path ? ` ("${config.bundle_path}")` : ''}`)
-          }
         }
         break
       }
@@ -188,13 +220,6 @@ export function findNodeConfigIssues(
           issues.push('No document selected')
         } else if ((config.tool_names?.length ?? 0) === 0) {
           issues.push('No tools discovered -- the document server may have failed to start')
-        } else {
-          const cached = queryClient.getQueryData<OkfDocument[]>(['okf-documents'])
-          if (cached && !cached.some((d) => d.id === config.document_id)) {
-            issues.push(
-              `OKF document is no longer stored${config.document_title ? ` ("${config.document_title}")` : ''}`,
-            )
-          }
         }
         break
       }

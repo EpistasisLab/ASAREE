@@ -1,17 +1,19 @@
 """Bounded, non-executing package inspection. Extracted bytes stay private."""
 from __future__ import annotations
 
-import gzip
 import hashlib
 import importlib.metadata
 import json
-import tarfile
+import stat
+import struct
 import threading
 import uuid
+import zipfile
+import zlib
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Protocol, cast
+from typing import Any, BinaryIO
 
 from asaree.services.experiment_packages import BLOCK, credential_file, relative_path
 
@@ -69,11 +71,17 @@ def unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
 def document(path: Path, limits: Limits) -> Any:
     if path.stat().st_size > limits.document:
         raise PackageError(f'JSON document exceeds limit: {path.name}')
+    return document_bytes(path.read_bytes(), path.name, limits)
+
+
+def document_bytes(raw: bytes, name: str, limits: Limits) -> Any:
+    if len(raw) > limits.document:
+        raise PackageError(f'JSON document exceeds limit: {name}')
     try:
-        return json.loads(path.read_bytes(), object_pairs_hook=unique_object,
+        return json.loads(raw, object_pairs_hook=unique_object,
                           parse_constant=lambda value: invalid(f'Non-finite JSON: {value}'))
     except (ValueError, UnicodeError, RecursionError) as exc:
-        raise PackageError(f'Invalid JSON: {path.name}: {exc}') from exc
+        raise PackageError(f'Invalid JSON: {name}: {exc}') from exc
 
 
 def records(path: Path, limits: Limits) -> Iterator[dict[str, Any]]:
@@ -103,140 +111,114 @@ def verify(root: Path, record: dict[str, Any]) -> None:
         raise PackageError(f'Missing member or size/hash mismatch: {record["path"]}')
 
 
-class Readable(Protocol):
-    def read(self, size: int = -1, /) -> bytes: ...
+def check_zip_directory(source: BinaryIO, limits: Limits, stopping: threading.Event) -> int:
+    """Bound metadata before ZipFile buffers its central directory and entry objects.
 
-
-class ExpandedReader:
-    def __init__(self, stream: Readable, limit: int, stopping: threading.Event):
-        self.stream, self.limit, self.stopping, self.count = stream, limit, stopping, 0
-        self.tail = b''
-
-    def read(self, size: int = -1) -> bytes:
-        if self.stopping.is_set():
-            raise PackageError('Import cancelled')
-        value = self.stream.read(min(BLOCK, self.limit - self.count + 1, size if size >= 0 else BLOCK))
-        self.count += len(value)
-        self.tail = (self.tail + value[-1024:])[-1024:]
-        if self.count > self.limit:
-            raise PackageError('Expanded archive exceeds configured limit')
-        return value
-
-
-class PackageTarInfo(tarfile.TarInfo):
-    """Gate metadata before tarfile can allocate attacker-declared PAX buffers.
-
-    The exporter emits ordinary files and local PAX path/size extensions only.
-    GNU sparse maps, global headers and nested extensions are not this format.
+    Read fixed ZIP/ZIP64 end records, then scan directory headers without loading
+    variable fields. Packages are single-disk ZIPs without executable prefixes,
+    trailing data or ZIP64 extensible data. Directory bytes use the document limit.
     """
-    header_limit = 200002
-
-    @staticmethod
-    def padded(size: int) -> int:
-        return (size + 511) // 512 * 512
-
-    def _proc_member(self, archive: Any) -> Any:
-        headers = getattr(archive, '_package_headers', 0) + 1
-        archive._package_headers = headers
-        if headers > self.header_limit:
-            raise PackageError('Archive metadata exceeds configured member count')
-        if self.type == tarfile.XHDTYPE:
-            return self._proc_pax(archive)
-        if self.type not in {tarfile.REGTYPE, tarfile.AREGTYPE}:
-            raise PackageError('Only ordinary files and local path/size PAX metadata are supported')
-        return super()._proc_member(archive)  # type: ignore[misc]  # Private stdlib hook, covered on supported Pythons.
-
-    def _proc_pax(self, archive: Any) -> Any:
-        if self.size < 0 or self.size > 4096 or getattr(archive, '_package_pax_active', False):
-            raise PackageError('Oversized or nested archive metadata')
-        archive._package_pax_active = True
-        try:
-            raw = archive.fileobj.read(self.padded(self.size))[:self.size]
-            values: dict[str, str] = {}
-            offset = 0
-            while offset < len(raw):
-                space = raw.find(b' ', offset)
-                if space < 0 or not raw[offset:space].isdigit():
-                    raise PackageError('Invalid archive metadata length')
-                length = int(raw[offset:space])
-                if length <= space - offset + 1 or offset + length > len(raw):
-                    raise PackageError('Invalid archive metadata record')
-                record = raw[space + 1:offset + length]
-                if not record.endswith(b'\n') or b'=' not in record:
-                    raise PackageError('Invalid archive metadata field')
-                key, value = record[:-1].split(b'=', 1)
-                name = key.decode('ascii')
-                if name not in {'path', 'size'} or name in values:
-                    raise PackageError('Unsupported or duplicate archive metadata field')
-                values[name] = value.decode('utf-8')
-                offset += length
-            following = type(self).fromtarfile(archive)
-            if following is None:
-                raise PackageError('Archive metadata has no file header')
-            if 'path' in values:
-                following.name = member_path(values['path'])
-            if 'size' in values:
-                if not values['size'].isdigit():
-                    raise PackageError('Invalid extended member size')
-                following.size = int(values['size'])
-                archive.offset = following.offset_data + self.padded(following.size)
-            following.pax_headers = values
-            following.offset = self.offset
-            return following
-        finally:
-            archive._package_pax_active = False
+    source.seek(0, 2)
+    size = source.tell()
+    source.seek(max(0, size - 65557))  # 22-byte end record plus the maximum ZIP comment.
+    tail = source.read(65557)
+    offset = tail.rfind(b'PK\x05\x06')
+    if offset < 0 or len(tail) - offset < 22:
+        raise PackageError('Expected a ZIP experiment package')
+    _, disk, directory_disk, disk_count, count, directory_size, directory_offset, comment_size = struct.unpack(
+        '<4s4H2IH', tail[offset:offset + 22])
+    if offset + 22 + comment_size != len(tail):
+        raise PackageError('Truncated ZIP comment or unexpected trailing data')
+    directory_end = size - len(tail) + offset
+    if directory_end >= 20:
+        source.seek(directory_end - 20)
+        locator = source.read(20)
+        if locator.startswith(b'PK\x06\x07'):
+            _, locator_disk, zip64_offset, disks = struct.unpack('<4sIQI', locator)
+            if locator_disk or disks != 1 or zip64_offset + 56 != directory_end - 20:
+                raise PackageError('Unsupported ZIP64 directory layout')
+            source.seek(zip64_offset)
+            signature, record_size, _, _, disk, directory_disk, disk_count, count, directory_size, directory_offset = (
+                struct.unpack('<4sQ2H2I4Q', source.read(56)))
+            if signature != b'PK\x06\x06' or record_size != 44:
+                raise PackageError('Unsupported ZIP64 directory metadata')
+            directory_end = zip64_offset
+    if disk or directory_disk or disk_count != count:
+        raise PackageError('Multi-disk ZIP packages are unsupported')
+    if count > limits.members:
+        raise PackageError('Archive exceeds configured member count')
+    if directory_size > limits.document:
+        raise PackageError('ZIP directory metadata exceeds configured document limit')
+    if directory_offset + directory_size != directory_end:
+        raise PackageError('Invalid ZIP directory bounds')
+    source.seek(directory_offset)
+    actual_count = 0
+    while source.tell() < directory_end:
+        if stopping.is_set():
+            raise PackageError('Import cancelled')
+        header = struct.unpack('<4s6H3I5H2I', source.read(46))
+        actual_count += 1
+        if actual_count > limits.members:
+            raise PackageError('Archive exceeds configured member count')
+        if header[0] != b'PK\x01\x02' or header[10] > 1024:
+            raise PackageError('Invalid ZIP directory entry or member path length')
+        source.seek(sum(header[10:13]), 1)  # Filename, extra fields and entry comment.
+        if source.tell() > directory_end:
+            raise PackageError('Truncated ZIP directory entry')
+    if actual_count != count:
+        raise PackageError('ZIP directory member counts differ')
+    source.seek(0)
+    return actual_count
 
 
 def inspect(archive: Path, root: Path, limits: Limits, stopping: threading.Event) -> dict[str, Any]:
-    """Fresh root only. Never extractall, follow links, or trust tar metadata."""
+    """Fresh root only. Never extractall, follow links, or trust ZIP sizes."""
     if archive.stat().st_size > limits.compressed:
         raise PackageError('Compressed archive exceeds configured limit')
     root.mkdir(mode=0o700)
-    count = 0
     try:
-        with gzip.open(archive, 'rb') as compressed:
-            expanded = ExpandedReader(compressed, limits.expanded, stopping)
-            class BoundedTarInfo(PackageTarInfo):
-                header_limit = limits.members * 2 + 2
-            # Tar stream mode uses only read(), not the broader seekable IO API.
-            with tarfile.open(fileobj=cast(Any, expanded), mode='r|', tarinfo=BoundedTarInfo) as tar:
-                for member in tar:
-                    count += 1
-                    if count > limits.members:
-                        raise PackageError('Archive exceeds configured member count')
-                    name = member_path(member.name)
+        if stopping.is_set():
+            raise PackageError('Import cancelled')
+        with archive.open('rb') as stream:
+            count = check_zip_directory(stream, limits, stopping)
+            with zipfile.ZipFile(stream) as zipped:
+                expanded = 0
+                for member in zipped.infolist():
+                    if member.orig_filename != member.filename:
+                        raise PackageError('Invalid ZIP member filename')
+                    name = member_path(member.filename)
                     if credential_file(name):
                         raise PackageError('Package contains an excluded credential-file identity')
-                    if not member.isfile() or member.sparse is not None or member.size < 0:
+                    mode = stat.S_IFMT(member.external_attr >> 16)
+                    if member.is_dir() or member.external_attr & 0x10 or mode not in {0, stat.S_IFREG}:
                         raise PackageError(f'Only ordinary files are accepted: {name}')
-                    if member.size > limits.expanded:
+                    if member.flag_bits & 1:
+                        raise PackageError('Encrypted ZIP packages are unsupported')
+                    if member.compress_type not in {zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED}:
+                        raise PackageError('Unsupported ZIP compression method')
+                    if expanded + member.file_size > limits.expanded:
                         raise PackageError(f'Member exceeds expanded limit: {name}')
                     destination = root / name
                     destination.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-                    source = tar.extractfile(member)
-                    if source is None:
-                        raise PackageError(f'Missing member bytes: {name}')
-                    with destination.open('xb') as output:
+                    with zipped.open(member) as source, destination.open('xb') as output:
                         destination.chmod(0o600)
-                        remaining = member.size
-                        while remaining:
+                        written = 0
+                        while True:
                             if stopping.is_set():
                                 raise PackageError('Import cancelled')
-                            block = source.read(min(remaining, BLOCK))
+                            block = source.read(min(BLOCK, limits.expanded - expanded + 1))
                             if not block:
-                                raise PackageError(f'Truncated member: {name}')
+                                break
+                            written += len(block)
+                            expanded += len(block)
+                            if expanded > limits.expanded:
+                                raise PackageError('Expanded archive exceeds configured limit')
                             output.write(block)
-                            remaining -= len(block)
-                    tar.members.clear()  # type: ignore[attr-defined]  # Runtime cache, absent from typeshed.
-                if getattr(tar.fileobj, 'buf', b'').strip(b'\0'):
-                    raise PackageError('Unexpected buffered data after tar end')
-            while block := expanded.read(BLOCK):
-                if block.strip(b'\0'):
-                    raise PackageError('Unexpected data after tar end')
-            if expanded.count % 512 or expanded.tail != b'\0' * 1024:
-                raise PackageError('Missing complete tar end records')
+                        if written != member.file_size:
+                            raise PackageError(f'Truncated member: {name}')
         return validate(root, limits, count)
-    except (OSError, EOFError, tarfile.TarError, KeyError, TypeError, AttributeError, UnicodeError) as exc:
+    except (OSError, EOFError, zipfile.BadZipFile, zlib.error, struct.error,
+            NotImplementedError, KeyError, TypeError, AttributeError, UnicodeError) as exc:
         raise PackageError(f'Malformed experiment package: {exc}') from exc
 
 
@@ -245,8 +227,8 @@ def validate(root: Path, limits: Limits, count: int) -> dict[str, Any]:
     if (manifest.get('format') != 'asaree.experiment-package'
         or type(manifest.get('schema_version')) is not int or manifest['schema_version'] not in (1, 2)):
         raise PackageError('Unsupported experiment package format/version; supported: 1, 2')
-    if type(manifest.get('results_included')) is not bool:
-        raise PackageError('results_included must be a Boolean')
+    if manifest.get('results_included') is not False:
+        raise PackageError('Experiment packages contain configuration and input assets only; results are unsupported')
     for key, name in (('files', 'files.jsonl'), ('dependencies', 'dependencies.jsonl')):
         if manifest[key]['path'] != name:
             raise PackageError(f'Invalid {key} inventory locator')
@@ -262,12 +244,12 @@ def validate(root: Path, limits: Limits, count: int) -> dict[str, Any]:
         (markers / hashlib.sha256(name.encode()).hexdigest()).touch(exist_ok=False)
         verify(root, record)
         if name.split('/')[0] not in {'dependencies.jsonl', 'publication', 'experiment-metadata.json',
-                                      'design', 'inputs', 'resources', 'requirements', 'results', 'sources'}:
+                                      'design', 'inputs', 'resources', 'requirements', 'sources'}:
             raise PackageError(f'Unsupported payload category: {name}')
         schema_json = name in {'experiment-metadata.json', 'publication/canvas.json', 'publication/settings.json',
                                'inputs/bindings.json', 'design/revision.json'} or name.startswith((
             'inputs/datasets/', 'inputs/splits/', 'requirements/', 'resources/skill-metadata/',
-            'results/attempts/', 'results/rows/'))
+            'resources/personas/'))
         if schema_json and name.endswith('.json'):
             document(root / name, limits)
         elif name in {'dependencies.jsonl', 'design/cells.jsonl', 'design/replicates.jsonl'}:
@@ -292,6 +274,26 @@ def validate(root: Path, limits: Limits, count: int) -> dict[str, Any]:
     settings = document(root / 'publication/settings.json', limits)
     if not isinstance(graph, dict) or not isinstance(settings, dict):
         raise PackageError('Canvas and settings must be objects')
+    for path in (root / 'resources/personas').glob('*.json'):
+        from asaree.services.personas import MAX_PROMPT_BYTES, snapshot_identity
+
+        persona = document(path, limits)
+        source = snapshot_identity(persona['config'])
+        prompt = persona['config'].get('persona_text') or ''
+        if (persona['id'] != source or path.stem != source or not isinstance(prompt, str)
+            or len(prompt.encode()) > MAX_PROMPT_BYTES
+            or (path.with_suffix('.md')).read_bytes() != prompt.encode()):
+            raise PackageError('Persona snapshot identity or content mismatch')
+    from asaree.services.experiment_packages import node_variants
+    from asaree.services.personas import snapshot_identity
+
+    for node in graph.get('nodes', []):
+        if node.get('type') != 'persona':
+            continue
+        for variant in node_variants(node, settings.get('design_spec')):
+            source = snapshot_identity((variant.get('data') or {}).get('config') or {})
+            if not (root / f'resources/personas/{source}.json').is_file():
+                raise PackageError('Persona snapshot is missing from the package')
     node_ids = [node['id'] for node in graph.get('nodes', [])]
     if len(set(node_ids)) != len(node_ids):
         raise PackageError('Duplicate canvas node identity')
@@ -467,22 +469,3 @@ def validate_references(root: Path, limits: Limits, manifest: dict[str, Any], ma
                 if type(record['replicate_number']) is not int or record['replicate_number'] < 1:
                     raise PackageError('Invalid planned replicate number')
             remember(category, record['id'], record)
-    for path in (root / 'results/rows').glob('*.json'):
-        row = document(path, limits)
-        require('replicate', row['replicate_result_id'])
-        if row['protocol_revision_id'] != manifest['publication']['id']:
-            raise PackageError('Historical row belongs to a different publication')
-        remember('row', row['id'], row)
-    for path in (root / 'results/attempts').glob('*/attempt.json'):
-        attempt = document(path, limits)
-        if path.parent.name != str(uuid.UUID(attempt['id'])):
-            raise PackageError('Attempt path and identity disagree')
-        if not manifest.get('results_included'):
-            raise PackageError('Results present while manifest excludes results')
-        if attempt.get('replicate_result_id'):
-            require('replicate', attempt['replicate_result_id'])
-        if attempt.get('row_result_id') and manifest['schema_version'] >= 2:
-            require('row', attempt['row_result_id'])
-        remember('attempt', attempt['id'], attempt)
-    for file in (root / 'results/artifacts').glob('*'):
-        require('attempt', file.name)

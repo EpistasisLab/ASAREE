@@ -556,6 +556,9 @@ async def generate_design_cells(
         if current.design_spec != design_spec:
             current.design_spec = design_spec
             await db.flush()
+            from asaree.services.skill_references import validate_references
+
+            await validate_references(db, experiment.owner_id, design_id=current.id)
     else:
         revision = await supersede_and_create(db, experiment_id=experiment_id, design_spec=design_spec)
         revision_id = revision.id

@@ -70,6 +70,11 @@ def _dataset_dir(dataset_id: uuid.UUID) -> Path:
     return Path(get_settings().dataset_storage_dir).resolve() / str(dataset_id)
 
 
+def discard_registration_files(dataset_id: uuid.UUID) -> None:
+    """Remove files owned by a discarded registration; the caller checks ownership."""
+    shutil.rmtree(_dataset_dir(dataset_id), ignore_errors=True)
+
+
 def _artifact(dataset_id: uuid.UUID, path: Path, format: str) -> DatasetArtifact:
     return DatasetArtifact(
         id=uuid.uuid4(), dataset_id=dataset_id, namespace="datasets",
@@ -91,10 +96,22 @@ def _verify_source(dataset: RegisteredDataset) -> str:
     return raw_path
 
 
-async def _publish_split(
-    db: AsyncSession, dataset: RegisteredDataset, train: pd.DataFrame, test: pd.DataFrame, **provenance: object
+async def register_dataset_split(
+    db: AsyncSession, dataset: RegisteredDataset, train: pd.DataFrame | Path, test: pd.DataFrame | Path,
+    *, identifier: uuid.UUID | None = None, **provenance: object,
 ) -> RegisteredDataset:
-    split_id = uuid.uuid4()
+    """Store and register a partition pair in the ordinary dataset layout.
+
+    Uploaded/generated frames are serialized normally. Verified Parquet inputs
+    are validated and copied verbatim, preserving their immutable source bytes.
+    """
+    for role, source in (('train', train), ('test', test)):
+        if isinstance(source, Path):
+            try:
+                pd.read_parquet(source)
+            except (OSError, ValueError) as exc:
+                raise DatasetValidationError(f'Could not read the {role} partition: {exc}') from exc
+    split_id = identifier or uuid.uuid4()
     parent = _dataset_dir(dataset.id) / "splits"
     parent.mkdir(parents=True, exist_ok=True)
     staging = parent / f".{split_id}.preparing"
@@ -102,18 +119,19 @@ async def _publish_split(
     staging.mkdir()
     published = False
     try:
-        train.to_parquet(staging / "train.parquet", index=False)
-        test.to_parquet(staging / "test.parquet", index=False)
+        for role, source in (('train', train), ('test', test)):
+            if isinstance(source, Path):
+                shutil.copyfile(source, staging / f'{role}.parquet')
+            else:
+                source.to_parquet(staging / f'{role}.parquet', index=False)
         # The directory rename publishes the complete pair; no reader sees a half pair.
         os.rename(staging, dest)
         published = True
         train_artifact = _artifact(dataset.id, dest / "train.parquet", "parquet")
         test_artifact = _artifact(dataset.id, dest / "test.parquet", "parquet")
         async with db.begin_nested():
-            split = DatasetSplit(
-                id=split_id, dataset_id=dataset.id, source_sha256=dataset.raw_sha256,
-                train_artifact=train_artifact, test_artifact=test_artifact, **provenance,
-            )
+            split = DatasetSplit(id=split_id, dataset_id=dataset.id, source_sha256=dataset.raw_sha256,
+                train_artifact=train_artifact, test_artifact=test_artifact, **provenance)
             db.add(split)
             await db.flush()
             dataset.current_split = split
@@ -169,6 +187,7 @@ async def create_dataset(
     target_column: str | None = None,
     description: str | None = None,
     dictionary_json: str | None = None,
+    identifier: uuid.UUID | None = None,
 ) -> RegisteredDataset:
     try:
         df = pd.read_csv(io.BytesIO(csv_bytes))
@@ -177,14 +196,14 @@ async def create_dataset(
     if target_column and target_column not in df.columns:
         raise DatasetValidationError(f"target_column '{target_column}' is not a column in this CSV")
 
-    dataset_id = uuid.uuid4()
+    dataset_id = identifier or uuid.uuid4()
     dest = _dataset_dir(dataset_id)
     dest.mkdir(parents=True, exist_ok=True)
     raw_path = dest / "raw.csv"
     try:
         atomic_write(raw_path, csv_bytes)
     except Exception:
-        shutil.rmtree(dest, ignore_errors=True)
+        discard_registration_files(dataset_id)
         raise
 
     dataset = RegisteredDataset(
@@ -202,7 +221,7 @@ async def create_dataset(
         dataset.raw_artifact = _artifact(dataset_id, raw_path, "csv")
         await db.flush()
     except IntegrityError as exc:
-        shutil.rmtree(dest, ignore_errors=True)
+        discard_registration_files(dataset_id)
         raise DatasetNameConflictError(f"Dataset name '{name}' is already in use") from exc
     await db.refresh(dataset)
     return dataset
@@ -237,7 +256,7 @@ async def quick_split_dataset(
     except ValueError as exc:
         raise DatasetValidationError(str(exc)) from exc
 
-    return await _publish_split(
+    return await register_dataset_split(
         db, dataset, train_df, test_df, method="quick", target_column=effective_target,
         strategy="group_shuffle" if used_group_column else "stratified" if effective_target else "random",
         group_column=used_group_column, stratify_column=None if used_group_column else effective_target,
@@ -273,7 +292,8 @@ async def register_manual_split(
         raise DatasetValidationError(f"could not parse the test CSV: {exc}") from exc
 
     # Association records the supplied origin, without claiming source-row membership.
-    return await _publish_split(db, dataset, train_df, test_df, method="manual", target_column=dataset.target_column)
+    return await register_dataset_split(db, dataset, train_df, test_df,
+                                        method="manual", target_column=dataset.target_column)
 
 
 async def get_dataset(db: AsyncSession, dataset_id: uuid.UUID) -> RegisteredDataset | None:
@@ -340,5 +360,5 @@ async def delete_dataset(db: AsyncSession, dataset_id: uuid.UUID) -> bool:
         raise DatasetValidationError("Dataset is referenced by a retained workspace and cannot be deleted")
     await db.delete(dataset)
     await db.flush()
-    shutil.rmtree(Path(get_settings().dataset_storage_dir) / str(dataset_id), ignore_errors=True)
+    discard_registration_files(dataset_id)
     return True

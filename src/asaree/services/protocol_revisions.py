@@ -24,6 +24,7 @@ from asaree.services.experiment_versions import experiment_settings, publication
 from asaree.services.indexed_row_source import read_indexed_row_source
 from asaree.services.protocol_graph_schema import functional_protocol_graph_hash
 from asaree.services.sampling_snapshots import freeze_sampling, sampling_policy_is_current
+from asaree.services.skill_references import skill_projection, validate_references
 
 
 async def get_revision(db: AsyncSession, revision_id: uuid.UUID) -> ProtocolRevision | None:
@@ -155,6 +156,8 @@ async def publish_protocol(
         and published.dataset_inputs == dataset_inputs
     )
     if published is not None and unchanged:
+        if skill_projection(published.graph):
+            await validate_references(db, protocol.owner_id, publication_id=published.id)
         return published
     if experiment is not None and experiment.locked_at is not None:
         raise ValueError("Experiment is locked. Unlock it before publishing a changed experiment.")
@@ -203,6 +206,8 @@ async def publish_protocol(
     )
     db.add(revision)
     await db.flush()
+    if skill_projection(revision.graph):
+        await validate_references(db, protocol.owner_id, publication_id=revision.id)
     retain_inputs(db, dataset_inputs, publication_id=revision.id)
     protocol.published_revision_id = revision.id
     await db.flush()

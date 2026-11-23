@@ -122,6 +122,11 @@ async def _create_revision(
     )
     db.add(revision)
     await db.flush()
+    from asaree.services.skill_references import validate_references
+
+    experiment = await db.get(ResearchExperiment, experiment_id)
+    if experiment is not None and (design_spec or {}).get("factors"):
+        await validate_references(db, experiment.owner_id, design_id=revision.id)
     await db.refresh(revision)
     return revision
 

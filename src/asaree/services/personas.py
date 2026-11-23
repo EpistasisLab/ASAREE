@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import uuid
 from collections.abc import Sequence
 from pathlib import PurePosixPath
@@ -12,6 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from asaree.models.persona import Persona
+from asaree.services.import_visibility import active_identity
 
 MAX_PROMPT_BYTES = 1_000_000
 
@@ -22,6 +24,13 @@ class PersonaRevisionConflictError(ValueError):
 
 def prompt_sha256(prompt: str) -> str:
     return hashlib.sha256(prompt.encode("utf-8")).hexdigest()
+
+
+def snapshot_identity(config: dict[str, Any]) -> str:
+    """Identity of saved persona content, independent of source IDs and availability."""
+    snapshot = {field: config.get(field) for field in (
+        'persona_text', 'persona_label', 'persona_description', 'persona_file')}
+    return hashlib.sha256(json.dumps(snapshot, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
 
 
 def persona_name(name: str | None, source_filename: str | None, prompt: str) -> str:
@@ -47,21 +56,26 @@ def decode_persona_upload(filename: str | None, raw: bytes) -> tuple[str, str]:
 
 
 async def list_personas(db: AsyncSession, *, owner_id: uuid.UUID) -> Sequence[Persona]:
-    statement = select(Persona).where(Persona.owner_id == owner_id).order_by(Persona.name, Persona.id)
+    statement = select(Persona).where(Persona.owner_id == owner_id, active_identity(Persona.id)).order_by(
+        Persona.name, Persona.id)
     return (await db.scalars(statement)).all()
 
 
 async def get_persona(db: AsyncSession, persona_id: uuid.UUID, *, owner_id: uuid.UUID) -> Persona | None:
-    return await db.scalar(select(Persona).where(Persona.id == persona_id, Persona.owner_id == owner_id))
+    persona: Persona | None = await db.scalar(select(Persona).where(
+        Persona.id == persona_id, Persona.owner_id == owner_id, active_identity(Persona.id)))
+    return persona
 
 
 async def create_persona(
     db: AsyncSession, *, owner_id: uuid.UUID, prompt: str, name: str | None = None,
     description: str | None = None, source_filename: str | None = None, traits: dict[str, Any] | None = None,
+    identifier: uuid.UUID | None = None,
 ) -> Persona:
     if len(prompt.encode("utf-8")) > MAX_PROMPT_BYTES:
         raise ValueError("Persona text must be no larger than 1 MB.")
     persona = Persona(
+        **({'id': identifier} if identifier else {}),
         owner_id=owner_id, name=persona_name(name, source_filename, prompt), prompt=prompt,
         description=description, source_filename=source_filename, traits=traits or {}, revision=1,
     )
@@ -75,7 +89,7 @@ async def update_persona(
     db: AsyncSession, persona_id: uuid.UUID, *, owner_id: uuid.UUID, expected_revision: int, fields: dict[str, Any],
 ) -> Persona | None:
     persona = await db.scalar(
-        select(Persona).where(Persona.id == persona_id, Persona.owner_id == owner_id)
+        select(Persona).where(Persona.id == persona_id, Persona.owner_id == owner_id, active_identity(Persona.id))
         .with_for_update().execution_options(populate_existing=True)
     )
     if persona is None:

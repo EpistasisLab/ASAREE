@@ -12,7 +12,6 @@ vi.mock('./RunConfirmDialog', () => ({ RunConfirmDialog: ({ additionalContent, o
   additionalContent: React.ReactNode; onConfirm: () => void; onPublishAndRun: () => void; onCancel: () => void
   confirmDisabled: boolean; publishDisabled: boolean; publishLabel?: string; publishError?: string
 }) => <div>{additionalContent}{publishError && <p role="alert">{publishError}</p>}<button onClick={onCancel}>Cancel batch</button><button disabled={confirmDisabled} onClick={onConfirm}>Confirm batch</button><button disabled={publishDisabled} onClick={onPublishAndRun}>{publishLabel ?? 'Publish & Run all cells'}</button></div> }))
-vi.mock('./ExperimentDefinitionDownload', () => ({ ExperimentDefinitionDownload: () => null }))
 const row: ExecutionSlot = { slot_id: 'stable-slot', cell_id: 'cell', cell_label: 'model=a', factor_values: {},
   replicate_id: 'parent', replicate_label: 'ambiguous-label', replicate_number: 1, row_result_id: null, row_index: null,
   dataset_id: null, raw_sha256: null, run_id: 'attempt', status: 'completed', updated_at: null, error: null, result: {}, usage: null }

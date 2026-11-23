@@ -1,14 +1,10 @@
 """Package assembly against the existing disposable, isolated PostgreSQL fixture."""
-import json
-import tarfile
 import uuid
-from types import SimpleNamespace
-from unittest.mock import AsyncMock
+import zipfile
 
 from test_result_reads import results_db as _results_db
 
 from asaree.models.protocol_revision import ProtocolRevision
-from asaree.models.protocol_run import ProtocolRun
 from asaree.services import experiment_packages as packages
 from asaree.services.dataset_inputs import freeze_dataset_inputs
 from asaree.services.datasets import create_dataset, quick_split_dataset
@@ -16,7 +12,7 @@ from asaree.services.datasets import create_dataset, quick_split_dataset
 results_db = _results_db
 
 
-async def test_historical_package_pins_all_sources_splits_and_every_attempt(results_db, tmp_path, monkeypatch):
+async def test_historical_package_pins_all_sources_and_splits_without_results(results_db, tmp_path, monkeypatch):
     from asaree.config import AsareeSettings
 
     db, scope, cell, user = results_db
@@ -44,35 +40,18 @@ async def test_historical_package_pins_all_sources_splits_and_every_attempt(resu
         dataset = await db.get(RegisteredDataset, uuid.UUID(pin["dataset_id"]))
         await quick_split_dataset(db, dataset=dataset, seed=42)
         assert str(dataset.current_split_id) != pin["split_id"]
-    runs = []
-    for number in range(3):
-        run = ProtocolRun(protocol_id=scope.protocol_id, owner_id=user.id,
-                          protocol_revision_id=scope.protocol_revision_id if number < 2 else None,
-                          design_revision_id=scope.design_revision_id, status="completed",
-                          attempt_result={"measurement": {"observations": [{"value": "é" * 100000}]}},
-                          node_runs={}, factor_values={"attempt": number})
-        db.add(run)
-        await db.flush()
-        runs.append(run.id)
     staging = tmp_path / "stage"
     staging.mkdir()
-    writer = packages.PackageWriter(tmp_path / "package.tar.gz", staging)
+    writer = packages.PackageWriter(tmp_path / "package.zip", staging)
     await packages._datasets(db, writer, publication, user.id)
     await packages._design(db, writer, publication)
-    await packages._results(db, writer, SimpleNamespace(owner_id=user.id, experiment_id=scope.experiment_id,
-                           protocol_id=scope.protocol_id, protocol_revision_id=scope.protocol_revision_id,
-                           design_revision_id=scope.design_revision_id), AsyncMock())
     writer.finish({})
-    with tarfile.open(tmp_path / "package.tar.gz") as archive:
-        names = archive.getnames()
-        assert f"results/attempts/{runs[0]}/attempt_result.json" in names
-        assert f"results/attempts/{runs[1]}/attempt_result.json" in names
-        assert all(str(runs[2]) not in name for name in names)
+    with zipfile.ZipFile(tmp_path / "package.zip") as archive:
+        names = archive.namelist()
+        assert not any(name.startswith('results/') for name in names)
         for pin in publication.dataset_inputs["inputs"]:
-            assert archive.extractfile(f"inputs/files/{pin['raw_artifact']['id']}.csv").read() == originals[
+            assert archive.read(f"inputs/files/{pin['raw_artifact']['id']}.csv") == originals[
                 pin["dataset_id"]]
             assert f"inputs/splits/{pin['split_id']}.json" in names
         assert all(f"inputs/splits/{split}.json" in names for split in pinned_splits)
-        document = json.load(archive.extractfile(f"results/attempts/{runs[0]}/attempt_result.json"))
-        assert document["measurement"]["observations"][0]["value"] == "é" * 100000
         assert all("row-index" not in name and "scratch" not in name for name in names)

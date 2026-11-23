@@ -96,7 +96,7 @@ describe('CustomMetricFlow', () => {
     await user.click(screen.getByRole('checkbox', { name: /^Critic \(FS\)/ }))
     await user.click(screen.getByRole('checkbox', { name: /^Critic \(DC\)/ }))
     await user.click(screen.getByRole('combobox', { name: 'Runtime measure' }))
-    await user.click(screen.getByRole('option', { name: /^Turns/ }))
+    await user.click(await screen.findByRole('option', { name: /^Turns/ }))
 
     expect(screen.getByRole('textbox', { name: 'Metric name' })).toHaveValue('Turns · Critic (DC) + Critic (FS)')
     await user.click(screen.getByRole('button', { name: 'Add custom metric' }))
@@ -187,7 +187,7 @@ describe('CustomMetricFlow', () => {
     await user.click(option)
     await waitFor(() => expect(screen.getByRole('combobox', { name: 'MCP tool' })).toHaveTextContent('score'))
     await user.click(screen.getByRole('combobox', { name: 'MCP tool' }))
-    expect(screen.getByRole('option', { name: 'score' })).not.toHaveAttribute('aria-disabled', 'true')
+    expect(await screen.findByRole('option', { name: 'score' })).not.toHaveAttribute('aria-disabled', 'true')
   })
 
   it('allows multiple metrics to capture the same Python Script result', async () => {

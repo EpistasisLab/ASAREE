@@ -12,6 +12,7 @@ import pytest
 
 from asaree_client._multipart import multipart_directory
 from asaree_client._transport import RetryPolicy, RetryTransport
+from asaree_client.exceptions import AsareeConflictError
 from asaree_client.models import Agent
 from asaree_client.resources.skills import Skills
 from asaree_client.resources.tools import Tools
@@ -43,6 +44,20 @@ class RecordingClient:
     def _patch(self, path: str, **kwargs: Any) -> Any:
         self.calls.append(("PATCH", path, kwargs))
         return self.response
+
+
+@pytest.mark.parametrize("operation", ["fields", "markdown", "folder"])
+def test_skills_cannot_be_modified_or_read_replacement_files(operation):
+    client = RecordingClient({})
+    skills = Skills(client)
+    with pytest.raises(AsareeConflictError, match="immutable"):
+        if operation == "fields":
+            skills.update(uuid.uuid4(), body="Changed")
+        elif operation == "markdown":
+            skills.replace_markdown(uuid.uuid4(), "/does/not/exist/SKILL.md")
+        else:
+            skills.replace_folder(uuid.uuid4(), "/does/not/exist")
+    assert client.calls == []
 
 
 def _skill_response() -> dict[str, Any]:

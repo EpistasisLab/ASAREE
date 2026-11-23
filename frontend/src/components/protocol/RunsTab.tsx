@@ -17,7 +17,6 @@ import type { ExecutionSlot } from '@/types/executionResults'
 import { ExecutionBrowser, ExecutionRows } from './ExecutionBrowser'
 import { runsAgainOnlyOnRequest } from '@/lib/protocolRun'
 import { newRequestKey } from '@/lib/requestKey'
-import { ExperimentDefinitionDownload } from './ExperimentDefinitionDownload'
 import { RunConfirmDialog } from './RunConfirmDialog'
 import { ReplicateRunAction } from './CellPresentation'
 import type { ResultsSelection } from './ResultsTab'
@@ -86,7 +85,6 @@ export function RunAllCellsButton({ protocol, experimentId, regenerationRequired
         {summary.error && <p role="alert" className="text-xs text-destructive">{summary.error.message}</p>}
         {summary.data?.unit === 'row' && <p className="font-mono text-xs">{summary.data.expected ?? '?'} expected rows across {summary.data.replicate_count ?? 0} replicates.</p>}
         {!experiment.data?.locked_at && <label className="flex items-center gap-2 text-xs"><Checkbox checked={lock} onCheckedChange={checked => setLock(checked === true)} />Lock experiment before running</label>}
-        <ExperimentDefinitionDownload experimentId={experimentId} protocol={protocol} />
         <p className="text-xs text-muted-foreground">Completed {summary.data?.unit === 'row' ? 'rows' : 'replicates'}, including ones that hit their iteration limit, are skipped unless selected to run again.</p>
         <label className="flex items-center gap-2 text-xs"><Checkbox checked={rerunAll} onCheckedChange={checked => setRerunAll(checked === true)} />Run all completed {summary.data?.unit === 'row' ? 'rows' : 'replicates'} again (including iteration-limited)</label>
         <ExecutionRows key={`${summary.data?.scope_key}:${summary.data?.source_row_count}`} experimentId={experimentId} scope={scope} cellId={cellId} summary={summary.data} onSelect={() => {}} actions={row => runsAgainOnlyOnRequest(row.status) && <Checkbox aria-label={`Run replicate ${row.replicate_number} again`} checked={reruns.has(row.slot_id)} disabled={rerunAll || !reruns.has(row.slot_id) && reruns.size >= 100} onCheckedChange={checked => setReruns(current => { const next = new Set(current); if (checked) next.add(row.slot_id); else next.delete(row.slot_id); return next })} />} />

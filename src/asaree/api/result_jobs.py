@@ -3,7 +3,7 @@
 import uuid
 from dataclasses import replace
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
@@ -12,9 +12,11 @@ from sqlalchemy import select, text
 
 from asaree.api.result_reads import Scope
 from asaree.deps import CurrentUser, DbSession
+from asaree.models.protocol import Protocol
 from asaree.models.protocol_revision import ProtocolRevision
 from asaree.models.result_job import ResultJob
 from asaree.services import result_exports, result_jobs
+from asaree.services.experiments import get_experiment
 
 router = APIRouter(prefix="/experiments/{experiment_id}/execution-results/jobs", tags=["execution-results"])
 
@@ -28,7 +30,7 @@ class Command(BaseModel):
     rerun_slot_ids: list[uuid.UUID] = Field(default_factory=list, max_length=100)
     rerun_completed: bool = False
     format: str = Field(default="analysis_csv", pattern="^(analysis_csv|experiment_package)$")
-    include_results: bool = False
+    include_results: Literal[False] = False
 
 
 def payload(job: ResultJob) -> dict[str, Any]:
@@ -182,11 +184,24 @@ async def download(
         or not path.is_file()
     ):
         raise HTTPException(status_code=410, detail="Export expired or unavailable; request a new export.")
+    if package:
+        experiment = await get_experiment(db, job.experiment_id)
+        if experiment is None or experiment.owner_id != owner:
+            raise HTTPException(status_code=404, detail="Experiment not found")
+        version = await db.scalar(select(ProtocolRevision.revision).join(
+            Protocol, ProtocolRevision.protocol_id == Protocol.id,
+        ).where(
+            ProtocolRevision.id == job.protocol_revision_id, Protocol.id == job.protocol_id,
+            Protocol.experiment_id == experiment_id, Protocol.owner_id == owner,
+        ))
+        if version is None:
+            raise HTTPException(status_code=404, detail="Published experiment version not found")
+        filename = result_exports.package_filename(experiment.name, version=version, metadata=metadata)
+    else:
+        filename = f"results-{job_id}.{'schema.json' if metadata else 'csv'}"
     return FileResponse(
         path,
-        media_type="application/json" if metadata else "application/gzip" if package else "text/csv",
-        filename=(f"experiment-{job.experiment_id}-version-{job.protocol_revision_id}."
-                  f"{'manifest.json' if metadata else 'tar.gz'}" if package else
-                  f"results-{job_id}.{'schema.json' if metadata else 'csv'}"),
+        media_type="application/json" if metadata else "application/zip" if package else "text/csv",
+        filename=filename,
         headers={"Cache-Control": "private, no-store"},
     )

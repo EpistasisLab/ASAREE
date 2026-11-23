@@ -24,6 +24,36 @@ integration. Motoro ships no HTTP layer, no auth, and no UI; ASAREE adds those,
 plus the experiment/protocol/dataset model, and depends on Motoro as a pinned
 library — in-process, not a service call.
 
+## Registered skills
+
+ASAREE treats registered skills as immutable. Instructions, discovery metadata,
+and bundled files live in Motoro's existing `skills` and `skill_files` tables;
+canvases keep skill IDs. Register changed content under a new name. ASAREE's
+update and Markdown/folder replacement routes return HTTP 409, including for
+older SDKs. Motoro v0.15.1 and progressive disclosure remain unchanged.
+
+ASAREE's `skill_references` table retains IDs for draft canvases, experiment
+factor choices, design revisions, published experiment versions, and runs.
+Deleting a referenced skill returns HTTP 409 with its retained usages. Removing
+a draft node does not release published versions or historical runs. Deletion
+also checks Motoro's retained agent configurations and agent-run snapshots;
+deleting an experiment alone does not erase those runtime records. Reference
+rows disappear with their owning records; no skill content is copied or garbage
+collected. Position and unrelated configuration saves do not resolve skill
+bundles or update reference rows.
+
+Apply ASAREE's migrations before running the application. The migration backfills
+references without changing historical definitions. After migration, run:
+
+```sh
+uv run python -m asaree.services.skill_references
+```
+
+The audit prints unavailable references and exits nonzero if any are found.
+Missing/deleted sources need explicit repair in the draft and a new publication;
+their historical content cannot be inferred. The policy governs ASAREE's own
+writes. Direct Motoro calls and database administration remain outside it.
+
 ## Releases and development
 
 For installation, reproducible research, and production deployments, use a

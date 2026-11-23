@@ -5,12 +5,15 @@ import asyncio
 import hashlib
 import itertools
 import uuid
+import zipfile
 from datetime import UTC, datetime, timedelta
+from pathlib import PurePosixPath
 from typing import Any
+from urllib.parse import quote
 
 import jwt
 from fastapi import APIRouter, HTTPException, Query, Request
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert
@@ -19,8 +22,8 @@ from asaree.config import get_settings
 from asaree.deps import CurrentUser, DbSession
 from asaree.models.package_import import ImportedIdentity, PackageImport
 from asaree.services import package_imports as imports
-from asaree.services.package_reconstruction import validate_local_dependencies
-from asaree.services.package_validation import member_path, records
+from asaree.services import package_source
+from asaree.services.package_validation import member_path
 
 router = APIRouter(prefix='/experiment-package-imports', tags=['experiment-packages'])
 
@@ -33,7 +36,7 @@ def payload(job: PackageImport) -> dict[str, Any]:
     result = {key: getattr(job, key) for key in (
         'id', 'status', 'sha256', 'preflight', 'progress', 'error', 'experiment_id',
         'expires_at', 'configured_at', 'created_at')}
-    if job.preflight and job.status in {'awaiting_confirmation', 'completed'}:
+    if job.preflight and job.status == 'completed':
         token = jwt.encode({'type': 'package_import_source', 'job': str(job.id), 'sub': str(job.owner_id),
                             'exp': datetime.now(UTC) + timedelta(minutes=5)},
                            get_settings().auth_secret_key, algorithm='HS256')
@@ -91,9 +94,9 @@ async def upload(identifier: uuid.UUID, request: Request, db: DbSession, user: C
         raise HTTPException(409, 'An upload or import is already processing this request')
     if job.status not in {'uploading', 'failed'} or job.preflight:
         raise HTTPException(409, 'Use retry for an inspected upload or create a distinct import request')
-    root = imports.directory(identifier)
-    root.mkdir(parents=True, exist_ok=True, mode=0o700)
-    temporary = root / 'archive.part'
+    archive = imports.archive_path(identifier)
+    archive.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    temporary = archive.with_suffix('.part')
     size, digest = 0, hashlib.sha256()
     try:
         with temporary.open('wb') as output:
@@ -104,7 +107,7 @@ async def upload(identifier: uuid.UUID, request: Request, db: DbSession, user: C
                     raise HTTPException(413, 'Compressed package exceeds configured upload limit')
                 await asyncio.to_thread(output.write, block)
                 digest.update(block)
-        temporary.replace(root / 'archive.tar.gz')
+        temporary.replace(archive)
         job = await owned(db, identifier, user.id, lock=True)
         if job.status == 'cancelled':
             raise HTTPException(409, 'Import cancelled')
@@ -114,18 +117,6 @@ async def upload(identifier: uuid.UUID, request: Request, db: DbSession, user: C
         return payload(job)
     finally:
         temporary.unlink(missing_ok=True)
-
-
-@router.post('/{identifier}/confirm', status_code=202)
-async def confirm(identifier: uuid.UUID, db: DbSession, user: CurrentUser) -> dict[str, Any]:
-    job = await owned(db, identifier, user.id, lock=True)
-    if job.status == 'awaiting_confirmation':
-        job.status = 'queued'
-        job.progress = {'phase': 'confirmed'}
-    elif job.status not in {'queued', 'activating', 'completed'}:
-        raise HTTPException(409, 'Inspect a valid preflight before confirmation')
-    await db.commit()
-    return payload(job)
 
 
 @router.post('/{identifier}/cancel')
@@ -142,10 +133,9 @@ async def retry(identifier: uuid.UUID, db: DbSession, user: CurrentUser) -> dict
     job = await owned(db, identifier, user.id, lock=True)
     if job.status != 'failed' or job.expires_at <= datetime.now(UTC):
         raise HTTPException(409, 'Only an unexpired failed import can be retried')
-    if not (imports.directory(identifier) / 'archive.tar.gz').is_file():
+    if not imports.archive_path(identifier).is_file():
         raise HTTPException(409, 'Upload archive bytes first')
-    # A confirmed failure returns to preflight: user sees the same requirements
-    # again. Durable deterministic IDs prevent duplicates after interruption.
+    # Durable deterministic identities prevent duplicates after interruption.
     job.status, job.error = 'validating', None
     job.generation += 1
     await db.commit()
@@ -158,8 +148,8 @@ async def files(identifier: uuid.UUID, db: DbSession, user: CurrentUser,
     job = await owned(db, identifier, user.id)
     if not job.preflight or job.status in {'expired', 'cancelled'}:
         raise HTTPException(409, 'Source evidence unavailable')
-    index = imports.directory(identifier) / 'payload/files.jsonl'
-    items = list(itertools.islice(records(index, imports.limits()), offset, offset + limit + 1))
+    items = list(itertools.islice(package_source.records(identifier, 'files.jsonl', imports.limits()),
+                                offset, offset + limit + 1))
     return {'items': items[:limit], 'next_offset': offset + limit if len(items) > limit else None}
 
 
@@ -174,28 +164,37 @@ async def identities(identifier: uuid.UUID, db: DbSession, user: CurrentUser,
              'provenance': row.provenance} for row in rows]
 
 
-@router.get('/{identifier}/source', response_class=FileResponse)
-async def source(identifier: uuid.UUID, db: DbSession, user: CurrentUser, path: str | None = None) -> FileResponse:
+@router.get('/{identifier}/source', response_class=FileResponse, response_model=None)
+async def source(identifier: uuid.UUID, db: DbSession, user: CurrentUser,
+                 path: str | None = None) -> FileResponse | StreamingResponse:
     job = await owned(db, identifier, user.id)
     return source_response(job, path)
 
 
-def source_response(job: PackageImport, path: str | None) -> FileResponse:
+def source_response(job: PackageImport, path: str | None) -> FileResponse | StreamingResponse:
     if not job.preflight or job.status in {'expired', 'cancelled'}:
         raise HTTPException(409, 'Source evidence unavailable')
-    root = imports.directory(job.id)
-    try:
-        target = root / 'payload' / member_path(path) if path else root / 'archive.tar.gz'
-    except ValueError as exc:
-        raise HTTPException(422, str(exc)) from exc
+    target = imports.archive_path(job.id)
     if not target.is_file():
         raise HTTPException(404, 'Source file unavailable')
-    return FileResponse(target, media_type='application/octet-stream', filename=target.name,
-                        headers={'Cache-Control': 'private, no-store', 'X-Content-Type-Options': 'nosniff'})
+    headers = {'Cache-Control': 'private, no-store', 'X-Content-Type-Options': 'nosniff'}
+    try:
+        if path:
+            name = member_path(path)
+            with zipfile.ZipFile(target) as archive:
+                if name not in archive.namelist():
+                    raise HTTPException(404, 'Source file unavailable')
+            headers['Content-Disposition'] = "attachment; filename*=utf-8''" + quote(PurePosixPath(name).name, safe='')
+            return StreamingResponse(package_source.chunks(job.id, name),
+                media_type='application/octet-stream', headers=headers)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    return FileResponse(target, filename='experiment-package.zip', media_type='application/zip', headers=headers)
 
 
-@router.get('/{identifier}/download', response_class=FileResponse)
-async def download(identifier: uuid.UUID, token: str, db: DbSession, path: str | None = None) -> FileResponse:
+@router.get('/{identifier}/download', response_class=FileResponse, response_model=None)
+async def download(identifier: uuid.UUID, token: str, db: DbSession,
+                   path: str | None = None) -> FileResponse | StreamingResponse:
     try:
         claims = jwt.decode(token, get_settings().auth_secret_key, algorithms=['HS256'])
         if claims.get('type') != 'package_import_source' or claims.get('job') != str(identifier):
@@ -204,11 +203,6 @@ async def download(identifier: uuid.UUID, token: str, db: DbSession, path: str |
     except (jwt.InvalidTokenError, ValueError, KeyError) as exc:
         raise HTTPException(403, 'Source download link expired or invalid') from exc
     return source_response(await owned(db, identifier, owner_id), path)
-
-
-class Configuration(BaseModel):
-    connections_configured: bool
-    dependencies_resolved: bool
 
 
 @router.get('/{identifier}/readiness')
@@ -241,19 +235,3 @@ async def select_destination(identifier: uuid.UUID, command: ConnectionSelection
         raise HTTPException(422, 'Choose an authorized compatible destination connection.') from exc
     await db.commit()
     return await setup_options(db, job)
-
-
-@router.post('/{identifier}/configuration')
-async def configuration(
-    identifier: uuid.UUID, command: Configuration, db: DbSession, user: CurrentUser,
-) -> dict[str, Any]:
-    job = await owned(db, identifier, user.id, lock=True)
-    if job.status != 'completed' or not command.connections_configured or not command.dependencies_resolved:
-        raise HTTPException(409, 'Configure the editable draft and resolve dependencies before acknowledging')
-    try:
-        await validate_local_dependencies(db, job)
-    except ValueError as exc:
-        raise HTTPException(422, str(exc)) from exc
-    job.configured_at = datetime.now(UTC)
-    await db.commit()
-    return payload(job)

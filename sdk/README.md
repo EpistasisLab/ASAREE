@@ -12,6 +12,19 @@ background worker (`POST /runs` returns while the run is pending), so
 data now belongs on a `FactorialReplicateResult` row, written via
 `client.experiments.upsert_replicate(...)`.
 
+## Registered skills
+
+Registered skills are immutable in ASAREE. `skills.update`, `replace_markdown`,
+and `replace_folder` raise `AsareeConflictError` without sending a request or
+reading local replacement files. Register changed content as a new skill with a
+different name. The server also rejects these operations from older SDKs.
+
+`skills.delete(id)` succeeds only when no retained ASAREE references remain.
+A conflict describes the draft canvases, factors, design revisions, published
+versions, or runs that retain it. Removing a draft node alone does not remove
+published or historical references. Retained Motoro agent configurations and
+agent-run snapshots also protect their skills. Motoro itself is unchanged.
+
 ## Auth bootstrap
 
 ASAREE has no static server-wide API key; each user is provisioned once and
